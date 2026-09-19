@@ -1,0 +1,9 @@
+[package]
+name = "open-band"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = "0.20.0-rc.1"
+cpal = "0.18.2"
+midir = "0.11.0"
