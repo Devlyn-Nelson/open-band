@@ -39,6 +39,17 @@ Then run:
 cargo run
 ```
 
+To feed a WAV recording through the bass detector instead of a hardware input, set
+`BAND_HERO_RECORDING` to a recording path:
+
+```bash
+BAND_HERO_RECORDING=recordings/open-gdeab.wav BAND_HERO_BASS_STRINGS=5 cargo run
+```
+
+The recording input uses the same onset and pitch detector as CPAL input. The supplied
+filename convention is covered by an ignored diagnostic test while detector accuracy is
+being tuned; run it with `cargo test supplied_bass_recordings_detect_expected_open_strings -- --ignored`.
+
 The application opens on Home. Choose `Live Session` to start playing immediately with saved settings, or choose `Set Up` to configure devices and calibration. Input Setup can still be revisited at any time.
 
 ## Controls
