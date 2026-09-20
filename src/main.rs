@@ -905,6 +905,9 @@ struct AudioOnsetDetector {
     noise_floor: f32,
     processed_samples: usize,
     last_event_sample: Option<usize>,
+    last_pitch_hz: Option<f32>,
+    pending_pitch_hz: Option<f32>,
+    pending_pitch_count: usize,
     sample_rate: f32,
     samples: Vec<f32>,
 }
@@ -919,20 +922,49 @@ impl AudioOnsetDetector {
             return None;
         }
 
-        let window = self.samples.drain(..2048).collect::<Vec<_>>();
-        self.processed_samples += window.len();
+        let window = self.samples[..4096].to_vec();
+        self.samples.drain(..2048);
+        self.processed_samples += 2048;
         let level =
             (window.iter().map(|sample| sample * sample).sum::<f32>() / window.len() as f32).sqrt();
         // Track the background slowly so quiet playing can sit close to the noise floor.
         self.noise_floor = self.noise_floor * 0.995 + level * 0.005;
         self.average = self.average * 0.96 + level * 0.04;
+        let pitch_hz = estimate_pitch(&window, self.sample_rate);
         let ready = self.last_event_sample.map_or(true, |event| {
             self.processed_samples.saturating_sub(event) > (self.sample_rate * 0.12) as usize
         });
         let minimum_level = (self.noise_floor * 3.0).max(0.015);
-        if level > minimum_level && level > self.average * 1.6 && ready {
+        let pitch_changed = self
+            .last_pitch_hz
+            .zip(pitch_hz)
+            .is_some_and(|(last, current)| (current / last).log2().abs() > 150.0 / 1200.0);
+        let confirmed_pitch_change = if pitch_changed {
+            let Some(current_pitch) = pitch_hz else {
+                return None;
+            };
+            if self
+                .pending_pitch_hz
+                .is_some_and(|pending| (current_pitch / pending).log2().abs() <= 80.0 / 1200.0)
+            {
+                self.pending_pitch_count += 1;
+            } else {
+                self.pending_pitch_hz = Some(current_pitch);
+                self.pending_pitch_count = 1;
+            }
+            self.pending_pitch_count >= 2
+        } else {
+            self.pending_pitch_hz = None;
+            self.pending_pitch_count = 0;
+            false
+        };
+        if level > minimum_level && (level > self.average * 1.6 || confirmed_pitch_change) && ready
+        {
             self.last_event_sample = Some(self.processed_samples);
-            if let Some(pitch_hz) = estimate_pitch(&window, self.sample_rate) {
+            if let Some(pitch_hz) = pitch_hz {
+                self.last_pitch_hz = Some(pitch_hz);
+                self.pending_pitch_hz = None;
+                self.pending_pitch_count = 0;
                 Some(((level * 4.0).clamp(0.15, 1.0), pitch_hz, self.noise_floor))
             } else {
                 None
@@ -1808,11 +1840,13 @@ mod tests {
                 ..Default::default()
             };
             let mut detected_lanes = Vec::new();
+            let mut detected_pitches = Vec::new();
             for sample in reader.samples::<i32>() {
                 if let Some((_, pitch_hz, _)) = detector.detect(std::iter::once(
                     sample.expect("recording samples should decode") as f32 / 8_388_608.0,
                 )) {
                     detected_lanes.push(pitch_to_lane(Instrument::Bass5, pitch_hz));
+                    detected_pitches.push(pitch_hz);
                 }
             }
             let expected_lanes = expected_strings
@@ -1833,13 +1867,13 @@ mod tests {
                 );
                 assert!(
                     detected_lanes.iter().all(|lane| *lane == expected_lanes[0]),
-                    "{file_name} changed lanes during a single-string recording: {detected_lanes:?}"
+                    "{file_name} changed lanes during a single-string recording: lanes={detected_lanes:?}, pitches={detected_pitches:?}"
                 );
             } else {
                 detected_lanes.dedup();
                 assert_eq!(
                     detected_lanes, expected_lanes,
-                    "unexpected string order for {file_name}"
+                    "unexpected string order for {file_name}; pitches={detected_pitches:?}"
                 );
             }
         }
