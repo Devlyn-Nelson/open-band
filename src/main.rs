@@ -1778,21 +1778,26 @@ mod tests {
 
     #[test]
     #[ignore = "the supplied recordings currently expose pitch-detector false positives; run explicitly while tuning DSP"]
-    /// Checks every supplied open-string recording and preserves multi-string order.
+    /// Checks stable single-string detection and ordered multi-string detection.
     fn supplied_bass_recordings_detect_expected_open_strings() {
-        let cases = [
-            ("open-a.wav", "a"),
-            ("open-b.wav", "b"),
-            ("open-d.wav", "d"),
-            ("open-e.wav", "e"),
-            ("open-g.wav", "g"),
-            ("open-beadg.wav", "beadg"),
-            ("open-beadg-2.wav", "beadg"),
-            ("open-beadg-no-mute.wav", "beadg"),
-            ("open-gdeab.wav", "gdeab"),
-            ("open-gdeab-no-mute.wav", "gdeab"),
-        ];
-        for (file_name, expected_strings) in cases {
+        let recording_directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("recordings");
+        let mut paths = std::fs::read_dir(&recording_directory)
+            .expect("recordings directory should exist")
+            .map(|entry| entry.expect("recording entry should be readable").path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "wav"))
+            .collect::<Vec<_>>();
+        paths.sort();
+
+        for path in paths {
+            let file_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("recording filename should be valid UTF-8");
+            let expected_strings = file_name
+                .strip_prefix("open-")
+                .and_then(|name| name.strip_suffix(".wav"))
+                .and_then(|name| name.split('-').next())
+                .expect("recording should use the open-<strings>-<suffix>.wav format");
             let path = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("recordings")
                 .join(file_name);
@@ -1821,11 +1826,22 @@ mod tests {
                     _ => unreachable!(),
                 })
                 .collect::<Vec<_>>();
-            detected_lanes.dedup();
-            assert_eq!(
-                detected_lanes, expected_lanes,
-                "unexpected lane sequence for {file_name}"
-            );
+            if expected_lanes.len() == 1 {
+                assert!(
+                    detected_lanes.len() >= 2,
+                    "{file_name} should contain multiple plucks"
+                );
+                assert!(
+                    detected_lanes.iter().all(|lane| *lane == expected_lanes[0]),
+                    "{file_name} changed lanes during a single-string recording: {detected_lanes:?}"
+                );
+            } else {
+                detected_lanes.dedup();
+                assert_eq!(
+                    detected_lanes, expected_lanes,
+                    "unexpected string order for {file_name}"
+                );
+            }
         }
     }
 }
