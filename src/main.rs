@@ -1808,6 +1808,37 @@ mod tests {
         );
     }
 
+    fn detect_recording_pitches(path: &Path) -> Result<Vec<f32>, String> {
+        let mut reader = hound::WavReader::open(path)
+            .map_err(|error| format!("recording should open: {error}"))?;
+        let spec = reader.spec();
+        let mut detector = AudioOnsetDetector {
+            sample_rate: spec.sample_rate as f32,
+            ..Default::default()
+        };
+        let mut pitches = Vec::new();
+        for sample in reader.samples::<i32>() {
+            let sample =
+                sample.map_err(|error| format!("recording samples should decode: {error}"))?;
+            if let Some((_, pitch_hz, _)) =
+                detector.detect(std::iter::once(sample as f32 / 8_388_608.0))
+            {
+                pitches.push(pitch_hz);
+            }
+        }
+        Ok(pitches)
+    }
+
+    fn report_recording_errors(test_name: &str, errors: Vec<String>) {
+        if !errors.is_empty() {
+            panic!(
+                "{test_name} found {} recording error(s):\n{}",
+                errors.len(),
+                errors.join("\n")
+            );
+        }
+    }
+
     #[test]
     #[ignore = "the supplied recordings currently expose pitch-detector false positives; run explicitly while tuning DSP"]
     /// Checks stable single-string detection and ordered multi-string detection.
@@ -1820,62 +1851,155 @@ mod tests {
             .collect::<Vec<_>>();
         paths.sort();
 
+        let mut errors = Vec::new();
         for path in paths {
-            let file_name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .expect("recording filename should be valid UTF-8");
-            let expected_strings = file_name
-                .strip_prefix("open-")
-                .and_then(|name| name.strip_suffix(".wav"))
-                .and_then(|name| name.split('-').next())
-                .expect("recording should use the open-<strings>-<suffix>.wav format");
-            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("recordings")
-                .join(file_name);
-            let mut reader = hound::WavReader::open(&path).expect("recording should open");
-            let spec = reader.spec();
-            let mut detector = AudioOnsetDetector {
-                sample_rate: spec.sample_rate as f32,
-                ..Default::default()
-            };
-            let mut detected_lanes = Vec::new();
-            let mut detected_pitches = Vec::new();
-            for sample in reader.samples::<i32>() {
-                if let Some((_, pitch_hz, _)) = detector.detect(std::iter::once(
-                    sample.expect("recording samples should decode") as f32 / 8_388_608.0,
-                )) {
-                    detected_lanes.push(pitch_to_lane(Instrument::Bass5, pitch_hz));
-                    detected_pitches.push(pitch_hz);
+            let file_name = match path.file_name().and_then(|name| name.to_str()) {
+                Some(file_name) => file_name,
+                None => {
+                    errors.push(format!(
+                        "{}: recording filename should be valid UTF-8",
+                        path.display()
+                    ));
+                    continue;
                 }
-            }
-            let expected_lanes = expected_strings
-                .chars()
-                .map(|string| match string {
-                    'b' => 0,
-                    'e' => 1,
-                    'a' => 2,
-                    'd' => 3,
-                    'g' => 4,
-                    _ => unreachable!(),
-                })
-                .collect::<Vec<_>>();
-            if expected_lanes.len() == 1 {
-                assert!(
-                    detected_lanes.len() >= 2,
-                    "{file_name} should contain multiple plucks"
-                );
-                assert!(
-                    detected_lanes.iter().all(|lane| *lane == expected_lanes[0]),
-                    "{file_name} changed lanes during a single-string recording: lanes={detected_lanes:?}, pitches={detected_pitches:?}"
-                );
-            } else {
-                detected_lanes.dedup();
-                assert_eq!(
-                    detected_lanes, expected_lanes,
-                    "unexpected string order for {file_name}; pitches={detected_pitches:?}"
-                );
+            };
+            let result = (|| -> Result<(), String> {
+                let expected_strings = file_name
+                    .strip_prefix("open-")
+                    .and_then(|name| name.strip_suffix(".wav"))
+                    .and_then(|name| name.split('-').next())
+                    .ok_or_else(|| {
+                        "recording should use the open-<strings>-<suffix>.wav format".to_string()
+                    })?;
+                let detected_pitches = detect_recording_pitches(&path)?;
+                let mut detected_lanes = detected_pitches
+                    .iter()
+                    .map(|pitch| pitch_to_lane(Instrument::Bass5, *pitch))
+                    .collect::<Vec<_>>();
+                let expected_lanes = expected_strings
+                    .chars()
+                    .map(|string| match string {
+                        'b' => Ok(0),
+                        'e' => Ok(1),
+                        'a' => Ok(2),
+                        'd' => Ok(3),
+                        'g' => Ok(4),
+                        _ => Err(format!("unknown bass string '{string}'")),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                if expected_lanes.len() == 1 {
+                    if detected_lanes.len() < 2 {
+                        return Err(format!(
+                            "should contain multiple plucks; detected lanes={detected_lanes:?}"
+                        ));
+                    }
+                    if !detected_lanes.iter().all(|lane| *lane == expected_lanes[0]) {
+                        return Err(format!(
+                            "changed lanes during a single-string recording: lanes={detected_lanes:?}, pitches={detected_pitches:?}"
+                        ));
+                    }
+                } else {
+                    detected_lanes.dedup();
+                    if detected_lanes != expected_lanes {
+                        return Err(format!(
+                            "unexpected string order; expected={expected_lanes:?}, detected={detected_lanes:?}, pitches={detected_pitches:?}"
+                        ));
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                errors.push(format!("{file_name}: {error}"));
             }
         }
+        report_recording_errors(
+            "supplied_bass_recordings_detect_expected_open_strings",
+            errors,
+        );
+    }
+
+    #[test]
+    #[ignore = "run explicitly as fret recordings are added and the detector is tuned"]
+    /// Checks fret recordings for open string through fret 24 in order.
+    fn supplied_bass_fret_recordings_detect_open_through_fret_24() {
+        let recording_directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("recordings");
+        let mut paths = std::fs::read_dir(&recording_directory)
+            .expect("recordings directory should exist")
+            .map(|entry| entry.expect("recording entry should be readable").path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("fret-") && name.ends_with(".wav"))
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
+        let mut errors = Vec::new();
+        if paths.is_empty() {
+            errors.push("expected at least one fret-<string>.wav recording".to_string());
+        }
+
+        for path in paths {
+            let file_name = match path.file_name().and_then(|name| name.to_str()) {
+                Some(file_name) => file_name,
+                None => {
+                    errors.push(format!(
+                        "{}: recording filename should be valid UTF-8",
+                        path.display()
+                    ));
+                    continue;
+                }
+            };
+            let result = (|| -> Result<(), String> {
+                let string = file_name
+                    .strip_prefix("fret-")
+                    .and_then(|name| name.strip_suffix(".wav"))
+                    .and_then(|name| name.split('-').next())
+                    .ok_or_else(|| {
+                        "fret recording should use fret-<string>-<suffix>.wav format".to_string()
+                    })?;
+                let open_pitch = match string {
+                    "b" => 30.87,
+                    "e" => 41.20,
+                    "a" => 55.00,
+                    "d" => 73.42,
+                    "g" => 98.00,
+                    _ => return Err(format!("unknown bass string '{string}'")),
+                };
+                let expected_pitches = (0..=24)
+                    .map(|fret| open_pitch * 2.0_f32.powf(fret as f32 / 12.0))
+                    .collect::<Vec<_>>();
+                let mut detected_frets = detect_recording_pitches(&path)?
+                    .into_iter()
+                    .map(|pitch| {
+                        expected_pitches
+                            .iter()
+                            .enumerate()
+                            .min_by(|(_, left), (_, right)| {
+                                (pitch / *left)
+                                    .ln()
+                                    .abs()
+                                    .total_cmp(&(pitch / *right).ln().abs())
+                            })
+                            .map(|(fret, _)| fret)
+                            .ok_or_else(|| "expected fret list should not be empty".to_string())
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                detected_frets.dedup();
+                let expected_frets = (0..=24).collect::<Vec<_>>();
+                if detected_frets != expected_frets {
+                    return Err(format!(
+                        "unexpected fret sequence; expected={expected_frets:?}, detected={detected_frets:?}"
+                    ));
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                errors.push(format!("{file_name}: {error}"));
+            }
+        }
+        report_recording_errors(
+            "supplied_bass_fret_recordings_detect_open_through_fret_24",
+            errors,
+        );
     }
 }

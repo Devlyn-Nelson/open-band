@@ -50,6 +50,13 @@ The recording input uses the same onset and pitch detector as CPAL input. The su
 filename convention is covered by an ignored diagnostic test while detector accuracy is
 being tuned; run it with `cargo test supplied_bass_recordings_detect_expected_open_strings -- --ignored`.
 
+Recording test filenames use these conventions:
+
+- `open-<strings>-<suffix>.wav`: open strings, in the order named. A suffix may be a version number or `no-mute`.
+- `fret-<string>-<suffix>.wav`: the open string followed by one pluck at each fret from 1 through 24. The suffix is optional.
+
+The fret corpus test can be run with `cargo test supplied_bass_fret_recordings_detect_open_through_fret_24 -- --ignored`.
+
 The application opens on Home. Choose `Live Session` to start playing immediately with saved settings, or choose `Set Up` to configure devices and calibration. Input Setup can still be revisited at any time.
 
 ## Controls
