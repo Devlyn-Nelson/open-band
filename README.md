@@ -2,7 +2,7 @@
 
 Open band is an experimental Rust rhythm game built with Bevy. The goal is Rocksmith-style gameplay for real guitar and bass, with MIDI drums and microphone vocals.
 
-The current project is an early input and gameplay prototype. It is designed to prove the real-time instrument pipeline before adding songs, charts, scoring rules, and polished presentation.
+The current project is an input and gameplay prototype. It proves the real-time instrument pipeline before adding songs, charts, richer scoring rules, and polished presentation.
 
 ## Current Features
 
@@ -15,7 +15,7 @@ The current project is an early input and gameplay prototype. It is designed to 
 - Configurable four-string or five-string bass mode.
 - MIDI input for electronic drums.
 - Audio onset detection with normalized YIN-style pitch estimation.
-- Pitch-to-lane mapping for guitar, bass, and vocals.
+- Pitch-to-lane mapping for guitar and vocals, plus physical-string mapping for bass.
 - MIDI drum note mapping to gameplay lanes.
 - Bass tuner with string, frequency, and cents-offset feedback.
 - Timing calibration screen with a moving beat target before bass gameplay.
@@ -38,7 +38,7 @@ Then run:
 cargo run
 ```
 
-The application opens with an input device dialog. Select an instrument row with `1`-`4`, choose its device with Left/Right, and press `B` to switch between four- and five-string bass. Press Enter to continue. Bass calibration opens a tuner first; after accepting it, a timing screen measures tap offset before entering the gameplay prototype.
+The application opens on Home. Choose `Live Session` to start playing immediately with saved settings, or choose `Set Up` to configure devices and calibration. Input Setup can still be revisited at any time.
 
 ## Controls
 
@@ -70,7 +70,7 @@ The application opens with an input device dialog. Select an instrument row with
 | Key | Action |
 | --- | --- |
 | `Space` | Tap with the moving beat line to measure timing offset |
-| `Enter` | Accept the latency result and open the live session |
+| `Enter` | Accept the latency result and return to Set Up |
 
 ### Home and Setup Navigation
 
@@ -97,7 +97,7 @@ Press `F3` during the live session to show or hide the input debug window. For b
 
 ## Input Device Configuration
 
-Inputs can be selected in the startup dialog. Environment variables are still supported as optional defaults:
+Inputs can be selected from `Set Up` -> `Input Setup`. Environment variables are still supported as optional first-run defaults:
 
 ```bash
 BAND_HERO_GUITAR_DEVICE="USB Audio" \
@@ -116,7 +116,7 @@ Available variables:
 - `BAND_HERO_VOCAL_DEVICE`: audio input for vocals.
 - `BAND_HERO_MIDI_DEVICE`: MIDI input for drums.
 
-When a device variable is set, the matching device is preselected in the dialog. Without one, the first available device of that type is preselected. MIDI requires an available MIDI input port. The worker thread reports unavailable devices in the terminal and continues with whichever inputs opened successfully.
+Saved device names are preferred on later launches. When no saved device is available, a matching environment variable is tried, followed by the first available device. MIDI requires an available MIDI input port. The worker thread reports unavailable devices in the terminal and continues with whichever inputs opened successfully.
 
 ## Architecture
 
@@ -134,7 +134,11 @@ CPAL audio callbacks       MIDI callback
        calibration, notes, scoring, rendering
 ```
 
-Audio callbacks stay small and perform only basic level and pitch analysis. They send normalized `InstrumentEvent` values to Bevy through a channel. Bevy owns the UI, state transitions, falling notes, and gameplay timing.
+Audio callbacks stay small and perform level, onset, and pitch analysis. They send normalized `InstrumentEvent` values to Bevy through a channel. Bevy owns the UI, state transitions, falling notes, scoring, diagnostics, and gameplay timing. The input worker is started from saved settings at launch and is safely stopped and replaced when Input Setup is confirmed.
+
+## Source Documentation
+
+`src/main.rs` uses Rustdoc comments for application states, resources, components, and functions. Short inline comments identify the larger blocks inside systems, such as device enumeration, worker startup, pitch estimation, event consumption, and screen cleanup.
 
 ## Current Limitations
 
@@ -145,21 +149,20 @@ Audio callbacks stay small and perform only basic level and pitch analysis. They
 - Strum direction is not detected.
 - MIDI drum mapping is a small General MIDI-style mapping and is not configurable yet.
 - Vocal gameplay does not yet compare pitch against lyric or melody targets.
-- The calibration screen displays signal activity but does not yet save gain, noise-floor, latency, or pitch calibration values.
+- The calibration screen displays signal activity and persists the selected devices, bass mode, and accepted latency result, but it does not yet save gain, noise-floor, or pitch calibration values.
 - The gameplay highway is still a visual and keyboard-test prototype.
 
 ## Likely Next Steps
 
-### 1. Make calibration real
+### 1. Make calibration richer
 
 - Measure and store each input's noise floor and gain.
 - Add input latency measurement and compensation.
 - Add a calibration profile for guitar, four-string bass, five-string bass, drums, and vocals.
-- Persist profiles to a configuration file.
+- Persist gain, noise-floor, and pitch calibration profiles alongside the existing settings file.
 
 ### 2. Improve audio analysis
 
-- Replace zero-crossing pitch estimation with YIN or autocorrelation.
 - Add confidence scores and reject uncertain pitch estimates.
 - Add separate tuning ranges for guitar, four-string bass, and five-string bass.
 - Detect pick attacks and sustain separately.
@@ -184,7 +187,7 @@ Audio callbacks stay small and perform only basic level and pitch analysis. They
 
 ### 5. Improve the player experience
 
-- Persist device selections and calibration profiles to a configuration file.
+- Add profile management around the existing persistent settings file.
 - Add audio playback, song loading, pause, restart, and practice mode.
 - Add visual feedback for hit quality, combo, multiplier, and per-instrument score.
 - Add an audio monitor toggle with feedback protection.
@@ -192,7 +195,7 @@ Audio callbacks stay small and perform only basic level and pitch analysis. They
 
 ### 6. Test the real-time path
 
-- Add unit tests for pitch-to-lane mapping and MIDI drum mapping.
+- Add more unit tests for pitch-to-lane mapping and MIDI drum mapping.
 - Add deterministic tests for onset detection using recorded sample buffers.
 - Record and replay audio input for regression testing.
 - Test multiple sample formats, sample rates, buffer sizes, and disconnected devices.
@@ -205,4 +208,4 @@ cargo check
 cargo run
 ```
 
-This repository currently has no automated gameplay test suite. Hardware validation requires connected audio and MIDI devices.
+The repository has focused unit tests for pitch estimation and bass string lanes, but no automated gameplay test suite. Hardware validation requires connected audio and MIDI devices.
