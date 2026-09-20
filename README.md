@@ -20,6 +20,7 @@ The current project is an early input and gameplay prototype. It is designed to 
 - Bass tuner with string, frequency, and cents-offset feedback.
 - Timing calibration screen with a moving beat target before bass gameplay.
 - Home screen with direct access to the live session and setup tools.
+- Persistent setup settings stored in `open-band-settings/settings.json`.
 - Toggleable live-session input debug window with pitch, bass string, note, lane, and signal data.
 - Basic falling-note highway and keyboard fallback controls.
 
@@ -86,6 +87,10 @@ Set Up contains the following options:
 
 Each setup tool returns to Set Up when accepted or exited. Returning to Input Setup stops the current input worker before reconnecting the newly selected devices. Press `Esc` from Set Up to return Home, and press `Esc` from the live session to return Home.
 
+## Saved Settings
+
+When Input Setup is accepted, Open Band saves the selected device names and bass string mode. Accepting latency calibration saves the best measured offset. The settings file is created in the working directory at `open-band-settings/settings.json` and is loaded on the next launch. Environment variables remain supported as fallback defaults when no saved device matches.
+
 The gameplay prototype also supports `A S D F G` as lane controls.
 
 Press `F3` during the live session to show or hide the input debug window. For bass, it reports the estimated frequency, nearest string, note, and cents offset.
@@ -135,7 +140,8 @@ Audio callbacks stay small and perform only basic level and pitch analysis. They
 
 - Audio events are generated from detected playing onsets, not from a song chart.
 - Pitch detection uses a normalized period search and is more stable across signal levels, but it can still produce errors with heavy noise, distortion, chords, harmonics, and vocals.
-- Guitar and bass events currently use pitch bands rather than string and fret recognition.
+- Bass lanes now choose the nearest physical string by pitch (`B-E-A-D-G` for five-string and `E-A-D-G` for four-string), but pitch alone cannot distinguish the same note played on different frets and strings.
+- Guitar events still use pitch bands rather than string and fret recognition.
 - Strum direction is not detected.
 - MIDI drum mapping is a small General MIDI-style mapping and is not configurable yet.
 - Vocal gameplay does not yet compare pitch against lyric or melody targets.

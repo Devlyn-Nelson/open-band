@@ -4527,6 +4527,8 @@ dependencies = [
  "bevy",
  "cpal 0.18.2",
  "midir",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

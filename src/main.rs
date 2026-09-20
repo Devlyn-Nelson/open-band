@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use midir::{Ignore, MidiInput};
+use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Mutex;
 use std::thread;
@@ -9,6 +10,8 @@ use std::time::{Duration, Instant};
 const LANES: usize = 5;
 const HIT_LINE_Y: f32 = -250.0;
 const NOTE_SPEED: f32 = 260.0;
+const SETTINGS_DIRECTORY: &str = "open-band-settings";
+const SETTINGS_FILE: &str = "open-band-settings/settings.json";
 
 #[derive(States, Default, Clone, Eq, PartialEq, Debug, Hash)]
 enum AppState {
@@ -66,6 +69,16 @@ struct DeviceSelection {
     selected: [usize; 4],
     focus: usize,
     bass_strings: u8,
+}
+
+#[derive(Resource, Serialize, Deserialize, Default, Debug)]
+struct PersistentSettings {
+    guitar_device: Option<String>,
+    bass_device: Option<String>,
+    midi_device: Option<String>,
+    vocal_device: Option<String>,
+    bass_strings: Option<u8>,
+    latency_ms: Option<f32>,
 }
 
 #[derive(Component)]
@@ -141,17 +154,21 @@ struct DebugText;
 
 fn main() {
     let (sender, receiver) = mpsc::channel();
-    let device_selection = scan_devices();
+    let settings = load_settings();
+    let device_selection = scan_devices(&settings);
+    let (stop_sender, stop_receiver) = mpsc::channel();
+    let input_thread = spawn_instrument_thread(sender.clone(), input_config_from_settings(&settings), stop_receiver);
 
     App::new()
         .insert_resource(ClearColor(Color::srgb(0.025, 0.035, 0.06)))
         .insert_resource(device_selection)
+        .insert_resource(settings)
         .insert_resource(InstrumentStream {
             sender,
             events: Mutex::new(receiver),
-            _thread: None,
-            stop_sender: None,
-            started: false,
+            _thread: Some(input_thread),
+            stop_sender: Some(stop_sender),
+            started: true,
         })
         .init_resource::<MenuSelection>()
         .insert_resource(Calibration {
@@ -208,7 +225,19 @@ struct InputConfig {
     bass_strings: u8,
 }
 
-fn scan_devices() -> DeviceSelection {
+fn input_config_from_settings(settings: &PersistentSettings) -> InputConfig {
+    InputConfig {
+        audio_devices: [
+            settings.guitar_device.clone(),
+            settings.bass_device.clone(),
+            settings.vocal_device.clone(),
+        ],
+        midi_device: settings.midi_device.clone(),
+        bass_strings: settings.bass_strings.unwrap_or(4),
+    }
+}
+
+fn scan_devices(settings: &PersistentSettings) -> DeviceSelection {
     let host = cpal::default_host();
     let audio_devices = host
         .input_devices()
@@ -226,15 +255,36 @@ fn scan_devices() -> DeviceSelection {
 
     DeviceSelection {
         selected: [
-            selected_device_index(&audio_devices, "BAND_HERO_GUITAR_DEVICE"),
-            selected_device_index(&audio_devices, "BAND_HERO_BASS_DEVICE"),
-            selected_device_index(&midi_devices, "BAND_HERO_MIDI_DEVICE"),
-            selected_device_index(&audio_devices, "BAND_HERO_VOCAL_DEVICE"),
+            selected_device_index(&audio_devices, settings.guitar_device.as_deref(), "BAND_HERO_GUITAR_DEVICE"),
+            selected_device_index(&audio_devices, settings.bass_device.as_deref(), "BAND_HERO_BASS_DEVICE"),
+            selected_device_index(&midi_devices, settings.midi_device.as_deref(), "BAND_HERO_MIDI_DEVICE"),
+            selected_device_index(&audio_devices, settings.vocal_device.as_deref(), "BAND_HERO_VOCAL_DEVICE"),
         ],
         focus: 0,
-        bass_strings: if std::env::var("BAND_HERO_BASS_STRINGS").as_deref() == Ok("5") { 5 } else { 4 },
+        bass_strings: settings.bass_strings.unwrap_or_else(|| {
+            if std::env::var("BAND_HERO_BASS_STRINGS").as_deref() == Ok("5") { 5 } else { 4 }
+        }),
         audio_devices,
         midi_devices,
+    }
+}
+
+fn load_settings() -> PersistentSettings {
+    std::fs::read_to_string(SETTINGS_FILE)
+        .ok()
+        .and_then(|contents| serde_json::from_str(&contents).ok())
+        .unwrap_or_default()
+}
+
+fn save_settings(settings: &PersistentSettings) {
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        std::fs::create_dir_all(SETTINGS_DIRECTORY)?;
+        let contents = serde_json::to_string_pretty(settings)?;
+        std::fs::write(SETTINGS_FILE, contents)?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        eprintln!("Could not save settings to {SETTINGS_FILE}: {error}");
     }
 }
 
@@ -258,6 +308,7 @@ fn device_selection_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut selection: ResMut<DeviceSelection>,
     mut stream: ResMut<InstrumentStream>,
+    mut settings: ResMut<PersistentSettings>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
     let focus_keys = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4];
@@ -294,6 +345,12 @@ fn device_selection_input(
             midi_device: midi_name,
             bass_strings: selection.bass_strings,
         };
+        settings.guitar_device = config.audio_devices[0].clone();
+        settings.bass_device = config.audio_devices[1].clone();
+        settings.vocal_device = config.audio_devices[2].clone();
+        settings.midi_device = config.midi_device.clone();
+        settings.bass_strings = Some(config.bass_strings);
+        save_settings(&settings);
         if let Some(stop_sender) = stream.stop_sender.take() {
             let _ = stop_sender.send(());
             if let Some(thread) = stream._thread.take() {
@@ -474,10 +531,11 @@ fn cleanup_menu(
     }
 }
 
-fn selected_device_index(devices: &[String], variable: &str) -> usize {
-    std::env::var(variable)
-        .ok()
-        .and_then(|wanted| devices.iter().position(|device| device.contains(&wanted)))
+fn selected_device_index(devices: &[String], saved: Option<&str>, variable: &str) -> usize {
+    saved
+        .map(str::to_owned)
+        .or_else(|| std::env::var(variable).ok())
+        .and_then(|wanted| devices.iter().position(|device| device == &wanted || device.contains(&wanted)))
         .unwrap_or(0)
 }
 
@@ -675,13 +733,27 @@ fn estimate_pitch(samples: &[f32], sample_rate: f32) -> Option<f32> {
 fn pitch_to_lane(instrument: Instrument, pitch_hz: f32) -> usize {
     let (low, high, lane_count) = match instrument {
         Instrument::Guitar => (82.0, 988.0, LANES),
-        Instrument::Bass4 => (41.0, 392.0, 4),
-        Instrument::Bass5 => (31.0, 392.0, LANES),
         Instrument::Vocals => (80.0, 1200.0, LANES),
         Instrument::Drums => return 0,
+        Instrument::Bass4 | Instrument::Bass5 => return bass_string_lane(instrument, pitch_hz),
     };
     let normalized = ((pitch_hz / low).ln() / (high / low).ln()).clamp(0.0, 0.999);
     (normalized * lane_count as f32) as usize
+}
+
+fn bass_string_lane(instrument: Instrument, pitch_hz: f32) -> usize {
+    let strings = match instrument {
+        Instrument::Bass5 => [30.87, 41.20, 55.00, 73.42, 98.00],
+        Instrument::Bass4 => [41.20, 55.00, 73.42, 98.00, 98.00],
+        _ => return 0,
+    };
+    strings
+        .into_iter()
+        .enumerate()
+        .min_by(|(_, left), (_, right)| {
+            (pitch_hz / left).ln().abs().total_cmp(&(pitch_hz / right).ln().abs())
+        })
+        .map_or(0, |(lane, _)| lane.min(if matches!(instrument, Instrument::Bass5) { 4 } else { 3 }))
 }
 
 fn find_input_device(host: &cpal::Host, requested: Option<&str>) -> Result<cpal::Device, String> {
@@ -755,10 +827,14 @@ fn setup_calibration(mut commands: Commands) {
     ));
 }
 
-fn setup_latency_calibration(mut commands: Commands, time: Res<Time>) {
+fn setup_latency_calibration(
+    mut commands: Commands,
+    time: Res<Time>,
+    settings: Res<PersistentSettings>,
+) {
     commands.insert_resource(LatencyCalibration {
         started_at: time.elapsed_secs(),
-        best_ms: None,
+        best_ms: settings.latency_ms,
         attempts: 0,
     });
     commands.spawn((Camera2d, LatencyCamera));
@@ -799,6 +875,7 @@ fn setup_latency_calibration(mut commands: Commands, time: Res<Time>) {
 fn latency_calibration_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut latency: ResMut<LatencyCalibration>,
+    mut settings: ResMut<PersistentSettings>,
     mut next_state: ResMut<NextState<AppState>>,
     time: Res<Time>,
 ) {
@@ -814,6 +891,8 @@ fn latency_calibration_input(
         latency.attempts += 1;
     }
     if latency.attempts > 0 && keyboard.just_pressed(KeyCode::Enter) {
+        settings.latency_ms = latency.best_ms;
+        save_settings(&settings);
         next_state.set(AppState::Setup);
     }
 }
@@ -1194,7 +1273,7 @@ fn instrument_color(instrument: Instrument, lane: usize) -> Color {
 
 #[cfg(test)]
 mod tests {
-    use super::estimate_pitch;
+    use super::{bass_string_lane, estimate_pitch, Instrument};
     use std::f32::consts::TAU;
 
     #[test]
@@ -1221,5 +1300,18 @@ mod tests {
 
         let pitch = estimate_pitch(&samples, sample_rate).expect("low B should be detected");
         assert!((pitch - 30.87).abs() < 0.75, "detected pitch: {pitch}");
+    }
+
+    #[test]
+    fn bass_open_strings_map_to_their_string_lanes() {
+        let five_string_open_notes = [30.87, 41.20, 55.00, 73.42, 98.00];
+        for (lane, pitch) in five_string_open_notes.into_iter().enumerate() {
+            assert_eq!(bass_string_lane(Instrument::Bass5, pitch), lane);
+        }
+
+        let four_string_open_notes = [41.20, 55.00, 73.42, 98.00];
+        for (lane, pitch) in four_string_open_notes.into_iter().enumerate() {
+            assert_eq!(bass_string_lane(Instrument::Bass4, pitch), lane);
+        }
     }
 }
