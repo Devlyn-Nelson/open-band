@@ -13,8 +13,9 @@ const NOTE_SPEED: f32 = 260.0;
 #[derive(States, Default, Clone, Eq, PartialEq, Debug, Hash)]
 enum AppState {
     #[default]
+    Home,
+    Setup,
     DeviceSelection,
-    Menu,
     Calibration,
     LatencyCalibration,
     Gameplay,
@@ -48,8 +49,8 @@ struct InstrumentStream {
 
 #[derive(Resource, Default)]
 struct MenuSelection {
-    selected: usize,
-    return_state: AppState,
+    home_selected: usize,
+    setup_selected: usize,
 }
 
 #[derive(Component)]
@@ -171,14 +172,18 @@ fn main() {
             ..default()
         }))
         .init_state::<AppState>()
+        .add_systems(OnEnter(AppState::Home), setup_home)
+        .add_systems(Update, home_input.run_if(in_state(AppState::Home)))
+        .add_systems(Update, home_display.run_if(in_state(AppState::Home)))
+        .add_systems(OnExit(AppState::Home), cleanup_menu)
+        .add_systems(OnEnter(AppState::Setup), setup_setup)
+        .add_systems(Update, setup_input.run_if(in_state(AppState::Setup)))
+        .add_systems(Update, setup_display.run_if(in_state(AppState::Setup)))
+        .add_systems(OnExit(AppState::Setup), cleanup_menu)
         .add_systems(OnEnter(AppState::DeviceSelection), setup_device_selection)
         .add_systems(Update, device_selection_input.run_if(in_state(AppState::DeviceSelection)))
         .add_systems(Update, device_selection_display.run_if(in_state(AppState::DeviceSelection)))
         .add_systems(OnExit(AppState::DeviceSelection), cleanup_device_selection)
-        .add_systems(OnEnter(AppState::Menu), setup_menu)
-        .add_systems(Update, menu_input.run_if(in_state(AppState::Menu)))
-        .add_systems(Update, menu_display.run_if(in_state(AppState::Menu)))
-        .add_systems(OnExit(AppState::Menu), cleanup_menu)
         .add_systems(OnEnter(AppState::Calibration), setup_calibration)
         .add_systems(Update, calibration_input.run_if(in_state(AppState::Calibration)))
         .add_systems(Update, calibration_display.run_if(in_state(AppState::Calibration)))
@@ -299,7 +304,7 @@ fn device_selection_input(
         stream._thread = Some(spawn_instrument_thread(stream.sender.clone(), config, stop_receiver));
         stream.stop_sender = Some(stop_sender);
         stream.started = true;
-        next_state.set(AppState::Calibration);
+        next_state.set(AppState::Setup);
     }
 }
 
@@ -336,7 +341,7 @@ fn cleanup_device_selection(
     }
 }
 
-fn setup_menu(mut commands: Commands) {
+fn setup_home(mut commands: Commands) {
     commands.spawn((Camera2d, MenuCamera));
     commands.spawn((
         Text::new(""),
@@ -352,52 +357,110 @@ fn setup_menu(mut commands: Commands) {
     ));
 }
 
-fn menu_input(
+fn setup_setup(mut commands: Commands) {
+    commands.spawn((Camera2d, MenuCamera));
+    commands.spawn((
+        Text::new(""),
+        TextFont { font_size: FontSize::Px(30.0), ..default() },
+        TextColor(Color::srgb(0.9, 0.95, 1.0)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(60.0),
+            left: Val::Px(90.0),
+            ..default()
+        },
+        MenuText,
+    ));
+}
+
+fn home_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut menu: ResMut<MenuSelection>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    if keyboard.just_pressed(KeyCode::ArrowUp) {
+        menu.home_selected = menu.home_selected.checked_sub(1).unwrap_or(1);
+    }
+    if keyboard.just_pressed(KeyCode::ArrowDown) {
+        menu.home_selected = (menu.home_selected + 1) % 2;
+    }
+    for (index, key) in [KeyCode::Digit1, KeyCode::Digit2]
+        .into_iter()
+        .enumerate()
+    {
+        if keyboard.just_pressed(key) {
+            menu.home_selected = index;
+        }
+    }
+    if keyboard.just_pressed(KeyCode::Enter) {
+        next_state.set(match menu.home_selected {
+            0 => AppState::Gameplay,
+            _ => AppState::Setup,
+        });
+    }
+}
+
+fn home_display(
+    menu: Res<MenuSelection>,
+    mut text: Query<&mut Text, With<MenuText>>,
+) {
+    let Ok(mut text) = text.single_mut() else { return };
+    let marker = |index: usize| if menu.home_selected == index { ">" } else { " " };
+    *text = Text::new(format!(
+        "OPEN BAND  //  HOME\n\n\
+        {} [1] LIVE SESSION\n\
+        {} [2] SET UP\n\n\
+        Up/Down: navigate     Enter: open",
+        marker(0), marker(1),
+    ));
+}
+
+fn setup_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut menu: ResMut<MenuSelection>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
     if keyboard.just_pressed(KeyCode::Escape) {
-        next_state.set(menu.return_state.clone());
+        next_state.set(AppState::Home);
         return;
     }
     if keyboard.just_pressed(KeyCode::ArrowUp) {
-        menu.selected = menu.selected.checked_sub(1).unwrap_or(3);
+        menu.setup_selected = menu.setup_selected.checked_sub(1).unwrap_or(3);
     }
     if keyboard.just_pressed(KeyCode::ArrowDown) {
-        menu.selected = (menu.selected + 1) % 4;
+        menu.setup_selected = (menu.setup_selected + 1) % 4;
     }
     for (index, key) in [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4]
         .into_iter()
         .enumerate()
     {
         if keyboard.just_pressed(key) {
-            menu.selected = index;
+            menu.setup_selected = index;
         }
     }
     if keyboard.just_pressed(KeyCode::Enter) {
-        next_state.set(match menu.selected {
+        next_state.set(match menu.setup_selected {
             0 => AppState::DeviceSelection,
             1 => AppState::Calibration,
             2 => AppState::LatencyCalibration,
-            _ => AppState::Gameplay,
+            _ => AppState::Home,
         });
     }
 }
 
-fn menu_display(
+fn setup_display(
     menu: Res<MenuSelection>,
     mut text: Query<&mut Text, With<MenuText>>,
 ) {
     let Ok(mut text) = text.single_mut() else { return };
-    let marker = |index: usize| if menu.selected == index { ">" } else { " " };
+    let marker = |index: usize| if menu.setup_selected == index { ">" } else { " " };
     *text = Text::new(format!(
-        "OPEN BAND  //  SESSION MENU\n\n\
-        {} [1] INPUT DEVICES\n\
-        {} [2] BASS TUNER / CALIBRATION\n\
+        "OPEN BAND  //  SET UP\n\n\
+        {} [1] INPUT SETUP\n\
+        {} [2] TUNER\n\
         {} [3] LATENCY CALIBRATION\n\
-        {} [4] LIVE SESSION\n\n\
-        Up/Down: navigate     Enter: open     Esc: close",
+        {} [4] BACK\n\n\
+        Up/Down: navigate     Enter: open     Esc: home",
         marker(0), marker(1), marker(2), marker(3),
     ));
 }
@@ -736,13 +799,11 @@ fn setup_latency_calibration(mut commands: Commands, time: Res<Time>) {
 fn latency_calibration_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut latency: ResMut<LatencyCalibration>,
-    mut menu: ResMut<MenuSelection>,
     mut next_state: ResMut<NextState<AppState>>,
     time: Res<Time>,
 ) {
     if keyboard.just_pressed(KeyCode::Escape) {
-        menu.return_state = AppState::LatencyCalibration;
-        next_state.set(AppState::Menu);
+        next_state.set(AppState::Setup);
         return;
     }
     if keyboard.just_pressed(KeyCode::Space) {
@@ -753,7 +814,7 @@ fn latency_calibration_input(
         latency.attempts += 1;
     }
     if latency.attempts > 0 && keyboard.just_pressed(KeyCode::Enter) {
-        next_state.set(AppState::Gameplay);
+        next_state.set(AppState::Setup);
     }
 }
 
@@ -775,7 +836,7 @@ fn latency_calibration_display(
         LIVE SESSION CHECK\n\n\
         Tap SPACE as the yellow beat line crosses the center marker.\n\
         Attempts: {}\n{}\n\n\
-        Press ENTER to accept and open the live session.",
+        Press ENTER to accept and return to Set Up.",
         latency.attempts, result,
     ));
 }
@@ -793,13 +854,11 @@ fn calibration_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut next_state: ResMut<NextState<AppState>>,
     mut calibration: ResMut<Calibration>,
-    mut menu: ResMut<MenuSelection>,
     stream: Res<InstrumentStream>,
     time: Res<Time>,
 ) {
     if keyboard.just_pressed(KeyCode::Escape) {
-        menu.return_state = AppState::Calibration;
-        next_state.set(AppState::Menu);
+        next_state.set(AppState::Setup);
         return;
     }
     let choices = [
@@ -819,11 +878,7 @@ fn calibration_input(
         }
     }
     if keyboard.just_pressed(KeyCode::Enter) {
-        if matches!(calibration.selected, Instrument::Bass4 | Instrument::Bass5) {
-            next_state.set(AppState::LatencyCalibration);
-        } else {
-            next_state.set(AppState::Gameplay);
-        }
+        next_state.set(AppState::Setup);
     }
 
     calibration.level = (calibration.level - time.delta_secs() * 0.7).max(0.0);
@@ -994,12 +1049,10 @@ fn cleanup_gameplay(mut commands: Commands, entities: Query<Entity, With<Gamepla
 
 fn gameplay_menu_input(
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut menu: ResMut<MenuSelection>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
     if keyboard.just_pressed(KeyCode::Escape) {
-        menu.return_state = AppState::Gameplay;
-        next_state.set(AppState::Menu);
+        next_state.set(AppState::Home);
     }
 }
 

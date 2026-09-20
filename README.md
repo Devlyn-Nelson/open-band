@@ -19,7 +19,7 @@ The current project is an early input and gameplay prototype. It is designed to 
 - MIDI drum note mapping to gameplay lanes.
 - Bass tuner with string, frequency, and cents-offset feedback.
 - Timing calibration screen with a moving beat target before bass gameplay.
-- Session menu for returning to input devices, calibration, latency calibration, or gameplay.
+- Home screen with direct access to the live session and setup tools.
 - Toggleable live-session input debug window with pitch, bass string, note, lane, and signal data.
 - Basic falling-note highway and keyboard fallback controls.
 
@@ -71,18 +71,20 @@ The application opens with an input device dialog. Select an instrument row with
 | `Space` | Tap with the moving beat line to measure timing offset |
 | `Enter` | Accept the latency result and open the live session |
 
-### Session Menu
+### Home and Setup Navigation
 
-Press `Esc` from calibration, latency calibration, or the live session to open the session menu. Choose a destination with `Up` / `Down` or `1`-`4`, then press `Enter`:
+The Home screen has two options: `Live Session` and `Set Up`. Choose with `Up` / `Down` or `1` / `2`, then press `Enter`.
+
+Set Up contains the following options:
 
 | Key | Destination |
 | --- | --- |
-| `1` | Input devices |
-| `2` | Bass tuner / calibration |
+| `1` | Input setup |
+| `2` | Tuner |
 | `3` | Latency calibration |
-| `4` | Live session |
+| `4` | Back to Home |
 
-Returning to Input Devices stops the current input worker before reconnecting the newly selected devices.
+Each setup tool returns to Set Up when accepted or exited. Returning to Input Setup stops the current input worker before reconnecting the newly selected devices. Press `Esc` from Set Up to return Home, and press `Esc` from the live session to return Home.
 
 The gameplay prototype also supports `A S D F G` as lane controls.
 
