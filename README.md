@@ -15,6 +15,7 @@ The current project is an input and gameplay prototype. It proves the real-time 
 - Configurable four-string or five-string bass mode.
 - MIDI input for electronic drums.
 - Audio onset detection with normalized YIN-style pitch estimation.
+- Adaptive low-level onset gating for quieter plucks.
 - Pitch-to-lane mapping for guitar and vocals, plus physical-string mapping for bass.
 - MIDI drum note mapping to gameplay lanes.
 - Bass tuner with string, frequency, and cents-offset feedback.
@@ -94,6 +95,7 @@ When Input Setup is accepted, Open Band saves the selected device names and bass
 The gameplay prototype also supports `A S D F G` as lane controls.
 
 Press `F3` during the live session to show or hide the input debug window. For bass, it reports the estimated frequency, nearest string, note, and cents offset.
+The panel also reports signal level, adaptive noise floor, lane, and event count. The noise-floor value is the detector's current estimate of the background input level.
 
 ## Input Device Configuration
 
@@ -117,6 +119,8 @@ Available variables:
 - `BAND_HERO_MIDI_DEVICE`: MIDI input for drums.
 
 Saved device names are preferred on later launches. When no saved device is available, a matching environment variable is tried, followed by the first available device. MIDI requires an available MIDI input port. The worker thread reports unavailable devices in the terminal and continues with whichever inputs opened successfully.
+
+The detector accepts quieter bass plucks than the original fixed-level gate. The bass should still be connected through an audio interface or preamp that presents a clean, non-clipped input signal; an inline amp is only needed if the hardware signal is still too weak or noisy at the interface input.
 
 ## Architecture
 

@@ -42,6 +42,7 @@ struct InstrumentEvent {
     lane: usize,
     strength: f32,
     pitch_hz: Option<f32>,
+    noise_floor: f32,
 }
 
 #[derive(Resource)]
@@ -166,6 +167,7 @@ struct DebugInputData {
     pitch_hz: Option<f32>,
     lane: Option<usize>,
     strength: f32,
+    noise_floor: f32,
     event_count: u64,
 }
 
@@ -833,13 +835,14 @@ where
                     .sum::<f32>()
                     / frame.len().max(1) as f32
             });
-            if let Some((strength, pitch_hz)) = detector.detect(mono) {
+            if let Some((strength, pitch_hz, noise_floor)) = detector.detect(mono) {
                 let lane = pitch_to_lane(instrument, pitch_hz);
                 let _ = sender.send(InstrumentEvent {
                     instrument,
                     lane,
                     strength,
                     pitch_hz: Some(pitch_hz),
+                    noise_floor,
                 });
             }
         },
@@ -852,15 +855,16 @@ where
 /// Stateful onset detector and audio sample buffer.
 struct AudioOnsetDetector {
     average: f32,
+    noise_floor: f32,
     last_event: Option<Instant>,
     sample_rate: f32,
     samples: Vec<f32>,
 }
 
 impl AudioOnsetDetector {
-    /// Analyze a buffered window and return signal strength plus estimated frequency.
+    /// Analyze a buffered window and return strength, frequency, and noise floor.
     /// Detect a strong onset and estimate its fundamental frequency.
-    fn detect(&mut self, samples: impl Iterator<Item = f32>) -> Option<(f32, f32)> {
+    fn detect(&mut self, samples: impl Iterator<Item = f32>) -> Option<(f32, f32, f32)> {
         // Wait for a low-frequency-friendly window before analyzing the signal.
         self.samples.extend(samples);
         if self.samples.len() < 4096 {
@@ -870,15 +874,18 @@ impl AudioOnsetDetector {
         let window = self.samples.drain(..2048).collect::<Vec<_>>();
         let level =
             (window.iter().map(|sample| sample * sample).sum::<f32>() / window.len() as f32).sqrt();
+        // Track the background slowly so quiet playing can sit close to the noise floor.
+        self.noise_floor = self.noise_floor * 0.995 + level * 0.005;
         self.average = self.average * 0.96 + level * 0.04;
         let now = Instant::now();
         let ready = self.last_event.map_or(true, |event| {
             now.duration_since(event) > Duration::from_millis(120)
         });
-        if level > 0.08 && level > self.average * 2.2 && ready {
+        let minimum_level = (self.noise_floor * 3.0).max(0.015);
+        if level > minimum_level && level > self.average * 1.6 && ready {
             self.last_event = Some(now);
             if let Some(pitch_hz) = estimate_pitch(&window, self.sample_rate) {
-                Some(((level * 4.0).clamp(0.15, 1.0), pitch_hz))
+                Some(((level * 4.0).clamp(0.15, 1.0), pitch_hz, self.noise_floor))
             } else {
                 None
             }
@@ -1042,6 +1049,7 @@ fn open_midi_input(
                         lane,
                         strength: message[2] as f32 / 127.0,
                         pitch_hz: None,
+                        noise_floor: 0.0,
                     });
                 }
             },
@@ -1504,6 +1512,7 @@ fn receive_instrument_events(
         debug.pitch_hz = event.pitch_hz;
         debug.lane = Some(event.lane);
         debug.strength = event.strength;
+        debug.noise_floor = event.noise_floor;
         debug.event_count += 1;
         let x = -360.0 + event.lane as f32 * 180.0;
         commands.spawn((
@@ -1541,8 +1550,9 @@ fn debug_text(debug: &DebugInputData) -> String {
         |(instrument, pitch)| bass_debug_details(instrument, pitch),
     );
     format!(
-        "DEBUG INPUT  [F3]\n\nINSTRUMENT  {instrument}\nEST PITCH   {pitch}\n{bass}\nLANE        {lane}\nSIGNAL      {:>5.1}%\nEVENTS      {}",
+        "DEBUG INPUT  [F3]\n\nINSTRUMENT  {instrument}\nEST PITCH   {pitch}\n{bass}\nLANE        {lane}\nSIGNAL      {:>5.1}%\nNOISE FLOOR {:>5.2}%\nEVENTS      {}",
         debug.strength * 100.0,
+        debug.noise_floor * 100.0,
         debug.event_count,
     )
 }
@@ -1641,7 +1651,7 @@ fn instrument_color(instrument: Instrument, lane: usize) -> Color {
 
 #[cfg(test)]
 mod tests {
-    use super::{Instrument, bass_string_lane, estimate_pitch};
+    use super::{AudioOnsetDetector, Instrument, bass_string_lane, estimate_pitch};
     use std::f32::consts::TAU;
 
     #[test]
@@ -1695,5 +1705,25 @@ mod tests {
         for (lane, pitch) in four_string_open_notes.into_iter().enumerate() {
             assert_eq!(bass_string_lane(Instrument::Bass4, pitch), lane);
         }
+    }
+
+    #[test]
+    /// Allows a quiet but clean bass pluck through the onset gate.
+    fn quiet_bass_pluck_is_detected() {
+        let sample_rate = 44_100.0;
+        let samples = (0..4096)
+            .map(|index| 0.03 * (TAU * 55.0 * index as f32 / sample_rate).sin())
+            .collect::<Vec<_>>();
+        let mut detector = AudioOnsetDetector {
+            sample_rate,
+            ..Default::default()
+        };
+
+        let result = detector.detect(samples.into_iter());
+
+        assert!(
+            result.is_some(),
+            "quiet bass pluck should pass the onset gate"
+        );
     }
 }
