@@ -14,10 +14,13 @@ The current project is an early input and gameplay prototype. It is designed to 
   - Vocal microphones.
 - Configurable four-string or five-string bass mode.
 - MIDI input for electronic drums.
-- Audio onset detection with lightweight zero-crossing pitch estimation.
+- Audio onset detection with normalized YIN-style pitch estimation.
 - Pitch-to-lane mapping for guitar, bass, and vocals.
 - MIDI drum note mapping to gameplay lanes.
-- Calibration screen before gameplay.
+- Bass tuner with string, frequency, and cents-offset feedback.
+- Timing calibration screen with a moving beat target before bass gameplay.
+- Session menu for returning to input devices, calibration, latency calibration, or gameplay.
+- Toggleable live-session input debug window with pitch, bass string, note, lane, and signal data.
 - Basic falling-note highway and keyboard fallback controls.
 
 ## Running
@@ -34,9 +37,23 @@ Then run:
 cargo run
 ```
 
-The application opens on the calibration screen. Select an instrument with a number key, play or trigger the device, and press Enter to enter the gameplay prototype.
+The application opens with an input device dialog. Select an instrument row with `1`-`4`, choose its device with Left/Right, and press `B` to switch between four- and five-string bass. Press Enter to continue. Bass calibration opens a tuner first; after accepting it, a timing screen measures tap offset before entering the gameplay prototype.
 
-## Calibration Controls
+## Controls
+
+### Device Selection
+
+| Key | Action |
+| --- | --- |
+| `1` | Select guitar device |
+| `2` | Select bass device |
+| `3` | Select MIDI drum device |
+| `4` | Select vocal device |
+| `Left` / `Right` | Cycle through available devices |
+| `B` | Toggle four- or five-string bass |
+| `Enter` | Continue to calibration |
+
+### Calibration
 
 | Key | Instrument |
 | --- | --- |
@@ -45,13 +62,35 @@ The application opens on the calibration screen. Select an instrument with a num
 | `3` | Five-string bass |
 | `4` | MIDI drums |
 | `5` | Vocals |
-| `Enter` | Continue to gameplay |
+| `Enter` | Accept calibration; bass continues to latency calibration |
+
+### Bass Latency Calibration
+
+| Key | Action |
+| --- | --- |
+| `Space` | Tap with the moving beat line to measure timing offset |
+| `Enter` | Accept the latency result and open the live session |
+
+### Session Menu
+
+Press `Esc` from calibration, latency calibration, or the live session to open the session menu. Choose a destination with `Up` / `Down` or `1`-`4`, then press `Enter`:
+
+| Key | Destination |
+| --- | --- |
+| `1` | Input devices |
+| `2` | Bass tuner / calibration |
+| `3` | Latency calibration |
+| `4` | Live session |
+
+Returning to Input Devices stops the current input worker before reconnecting the newly selected devices.
 
 The gameplay prototype also supports `A S D F G` as lane controls.
 
+Press `F3` during the live session to show or hide the input debug window. For bass, it reports the estimated frequency, nearest string, note, and cents offset.
+
 ## Input Device Configuration
 
-Inputs can be selected by setting environment variables to a substring of the device name:
+Inputs can be selected in the startup dialog. Environment variables are still supported as optional defaults:
 
 ```bash
 BAND_HERO_GUITAR_DEVICE="USB Audio" \
@@ -70,7 +109,7 @@ Available variables:
 - `BAND_HERO_VOCAL_DEVICE`: audio input for vocals.
 - `BAND_HERO_MIDI_DEVICE`: MIDI input for drums.
 
-If a device variable is not set, the first matching input device is selected. MIDI requires a matching MIDI input port. The worker thread reports unavailable devices in the terminal and continues with whichever inputs opened successfully.
+When a device variable is set, the matching device is preselected in the dialog. Without one, the first available device of that type is preselected. MIDI requires an available MIDI input port. The worker thread reports unavailable devices in the terminal and continues with whichever inputs opened successfully.
 
 ## Architecture
 
@@ -93,7 +132,7 @@ Audio callbacks stay small and perform only basic level and pitch analysis. They
 ## Current Limitations
 
 - Audio events are generated from detected playing onsets, not from a song chart.
-- Pitch detection currently uses zero crossings. It is useful for a prototype but will produce errors with noisy signals, distortion, chords, harmonics, and vocals.
+- Pitch detection uses a normalized period search and is more stable across signal levels, but it can still produce errors with heavy noise, distortion, chords, harmonics, and vocals.
 - Guitar and bass events currently use pitch bands rather than string and fret recognition.
 - Strum direction is not detected.
 - MIDI drum mapping is a small General MIDI-style mapping and is not configurable yet.
@@ -105,7 +144,6 @@ Audio callbacks stay small and perform only basic level and pitch analysis. They
 
 ### 1. Make calibration real
 
-- Add device enumeration instead of relying only on environment variables.
 - Measure and store each input's noise floor and gain.
 - Add input latency measurement and compensation.
 - Add a calibration profile for guitar, four-string bass, five-string bass, drums, and vocals.
@@ -138,7 +176,7 @@ Audio callbacks stay small and perform only basic level and pitch analysis. They
 
 ### 5. Improve the player experience
 
-- Add menus for device selection and calibration profiles.
+- Persist device selections and calibration profiles to a configuration file.
 - Add audio playback, song loading, pause, restart, and practice mode.
 - Add visual feedback for hit quality, combo, multiplier, and per-instrument score.
 - Add an audio monitor toggle with feedback protection.
