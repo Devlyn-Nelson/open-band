@@ -1840,7 +1840,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "the supplied recordings currently expose pitch-detector false positives; run explicitly while tuning DSP"]
+    // #[ignore = "the supplied recordings currently expose pitch-detector false positives; run explicitly while tuning DSP"]
     /// Checks stable single-string detection and ordered multi-string detection.
     fn supplied_bass_recordings_detect_expected_open_strings() {
         let recording_directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("recordings");
