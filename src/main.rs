@@ -1871,10 +1871,7 @@ fn run_recording_input(
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
         let mut reader = hound::WavReader::open(path)?;
         let spec = reader.spec();
-        let mut detector = AudioDetector::Mono(AudioOnsetDetector {
-            sample_rate: spec.sample_rate as f32,
-            ..Default::default()
-        });
+        let mut detector = AudioDetector::new(instrument, spec.sample_rate as f32);
         for sample in reader.samples::<i32>() {
             if stop_receiver.try_recv().is_ok() {
                 return Ok(());
@@ -1924,6 +1921,7 @@ struct DetectedNote {
 enum AudioDetector {
     Mono(AudioOnsetDetector),
     Poly(PolyphonicAudioDetector),
+    Bass(BassDetector),
 }
 
 impl AudioDetector {
@@ -1936,12 +1934,11 @@ impl AudioDetector {
                 ..Default::default()
             }),
             Instrument::Guitar => Self::Poly(PolyphonicAudioDetector::new(sample_rate, 1400.0)),
-            Instrument::Bass4 | Instrument::Bass5 => Self::Mono(AudioOnsetDetector {
+            Instrument::Bass4 | Instrument::Bass5 => Self::Bass(BassDetector::new(
+                instrument,
                 sample_rate,
-                min_pitch_hz: 30.0,
-                max_pitch_hz: 500.0,
-                ..Default::default()
-            }),
+                bass_open_string_targets(instrument),
+            )),
         }
     }
 
@@ -1949,9 +1946,203 @@ impl AudioDetector {
         match self {
             Self::Mono(detector) => detector.detect_with_duration(samples),
             Self::Poly(detector) => detector.detect(samples),
+            Self::Bass(detector) => detector.detect(samples),
         }
     }
 }
+
+/// Open-string frequencies used for bass navigation and the built-in open-strings chart.
+fn bass_open_string_targets(instrument: Instrument) -> Vec<f32> {
+    match instrument {
+        Instrument::Bass5 => vec![30.87, 41.20, 55.00, 73.42, 98.00],
+        _ => vec![41.20, 55.00, 73.42, 98.00],
+    }
+}
+
+/// Pairs the general-purpose YIN detector (fretted notes, chart gameplay) with a
+/// per-string open-note tracker so a fresh pluck registers even while another
+/// bass string is still ringing and dominating the mono pitch estimate.
+struct BassDetector {
+    instrument: Instrument,
+    mono: AudioOnsetDetector,
+    strings: BassStringDetector,
+}
+
+impl BassDetector {
+    fn new(instrument: Instrument, sample_rate: f32, targets: Vec<f32>) -> Self {
+        Self {
+            instrument,
+            mono: AudioOnsetDetector {
+                sample_rate,
+                min_pitch_hz: 30.0,
+                max_pitch_hz: 500.0,
+                ..Default::default()
+            },
+            strings: BassStringDetector::new(sample_rate, targets),
+        }
+    }
+
+    fn detect(&mut self, samples: impl Iterator<Item = f32>) -> Vec<DetectedNote> {
+        let samples = samples.collect::<Vec<_>>();
+        let mut events = self.mono.detect_with_duration(samples.iter().copied());
+        let mono_lanes = events
+            .iter()
+            .filter(|event| event.phase == NotePhase::Started)
+            .map(|event| bass_string_lane(self.instrument, event.pitch_hz))
+            .collect::<Vec<_>>();
+        for note in self.strings.detect(samples.into_iter()) {
+            // Skip a string-tracker hit already covered by the mono detector this window.
+            if !mono_lanes.contains(&bass_string_lane(self.instrument, note.pitch_hz)) {
+                events.push(note);
+            }
+        }
+        events
+    }
+}
+
+/// Tracks per-string energy at each known open-string frequency independently, so a
+/// new pluck is judged against its own string's background rather than a single
+/// mixed-signal pitch estimate that a lingering, louder string can dominate.
+struct BassStringDetector {
+    sample_rate: f32,
+    targets: Vec<f32>,
+    samples: Vec<f32>,
+    processed_samples: usize,
+    baseline: Vec<f32>,
+    active_lane: Option<usize>,
+    pending_lane: Option<usize>,
+    pending_count: usize,
+    last_event_sample: Option<usize>,
+}
+
+impl BassStringDetector {
+    fn new(sample_rate: f32, targets: Vec<f32>) -> Self {
+        let count = targets.len();
+        Self {
+            sample_rate,
+            targets,
+            samples: Vec::new(),
+            processed_samples: 0,
+            baseline: vec![0.0; count],
+            active_lane: None,
+            pending_lane: None,
+            pending_count: 0,
+            last_event_sample: None,
+        }
+    }
+
+    fn detect(&mut self, samples: impl Iterator<Item = f32>) -> Vec<DetectedNote> {
+        self.samples.extend(samples);
+        if self.samples.len() < 4096 {
+            return Vec::new();
+        }
+        let window = self.samples[..4096].to_vec();
+        self.samples.drain(..2048);
+        self.processed_samples += 2048;
+
+        let level =
+            (window.iter().map(|sample| sample * sample).sum::<f32>() / window.len() as f32).sqrt();
+        let energies = self
+            .targets
+            .iter()
+            .map(|frequency| harmonic_energy(&window, self.sample_rate, *frequency) / window.len() as f32)
+            .collect::<Vec<_>>();
+        // Each lane's own background: fall fast toward quiet, rise only slowly so a
+        // sustained note doesn't get treated as that lane's new normal level.
+        for (baseline, energy) in self.baseline.iter_mut().zip(&energies) {
+            if *energy < *baseline {
+                *baseline = *baseline * 0.9 + *energy * 0.1;
+            } else {
+                *baseline = *baseline * 0.999 + *energy * 0.001;
+            }
+        }
+
+        if level < 0.005 {
+            self.active_lane = None;
+            self.pending_lane = None;
+            self.pending_count = 0;
+            return Vec::new();
+        }
+
+        let winner = energies
+            .iter()
+            .zip(&self.baseline)
+            .enumerate()
+            .filter(|(_, (energy, baseline))| **energy / baseline.max(1e-6) > 4.5 && **energy > 0.012)
+            // Among lanes clearly above their own background, the loudest raw energy
+            // wins; comparing ratios alone lets a quieter lane's noisier baseline
+            // make it look more "elevated" than the string that's actually ringing.
+            .max_by(|(_, (left, _)), (_, (right, _))| left.total_cmp(right))
+            .map(|(lane, _)| lane);
+
+        let mut events = Vec::new();
+        let Some(lane) = winner else {
+            // No string is clearly dominant; a genuinely quiet window lets the next
+            // pluck (even on the same string) be recognized as a fresh onset.
+            if level < 0.01 {
+                self.active_lane = None;
+            }
+            self.pending_lane = None;
+            self.pending_count = 0;
+            return events;
+        };
+        if self.active_lane == Some(lane) {
+            // Still the same held/ringing string, not a new pluck.
+            self.pending_lane = None;
+            self.pending_count = 0;
+            return events;
+        }
+        if self.pending_lane == Some(lane) {
+            self.pending_count += 1;
+        } else {
+            self.pending_lane = Some(lane);
+            self.pending_count = 1;
+        }
+        let ready = self.last_event_sample.map_or(true, |event| {
+            self.processed_samples.saturating_sub(event) > (self.sample_rate * 0.2) as usize
+        });
+        // Require the same lane to win two windows running before firing, to reject
+        // single-window noise blips while still reacting to a fresh pluck quickly.
+        if ready && self.pending_count >= 2 {
+            self.active_lane = Some(lane);
+            self.last_event_sample = Some(self.processed_samples);
+            events.push(DetectedNote {
+                pitch_hz: self.targets[lane],
+                strength: (level * 4.0).clamp(0.15, 1.0),
+                noise_floor: 0.0,
+                phase: NotePhase::Started,
+                duration_secs: 0.0,
+            });
+        }
+        events
+    }
+}
+
+/// Magnitude of a single frequency's component in a window, via a windowed DFT term.
+/// A Hann taper keeps spectral leakage from swamping neighboring bass-string bins.
+fn target_frequency_energy(samples: &[f32], sample_rate: f32, frequency: f32) -> f32 {
+    let last = (samples.len() - 1).max(1) as f32;
+    let (real, imaginary) = samples.iter().enumerate().fold(
+        (0.0, 0.0),
+        |(real, imaginary), (index, sample)| {
+            let taper = 0.5 * (1.0 - (std::f32::consts::TAU * index as f32 / last).cos());
+            let sample = sample * taper;
+            let phase = std::f32::consts::TAU * frequency * index as f32 / sample_rate;
+            (real + sample * phase.cos(), imaginary + sample * phase.sin())
+        },
+    );
+    real.hypot(imaginary)
+}
+
+/// Sums energy across a fundamental and its first few harmonics (a harmonic product
+/// spectrum), since a plucked bass string's fundamental is often weaker than its
+/// overtones and comparing bare fundamentals alone confuses one string for another.
+fn harmonic_energy(samples: &[f32], sample_rate: f32, fundamental_hz: f32) -> f32 {
+    (1..=4)
+        .map(|harmonic| target_frequency_energy(samples, sample_rate, fundamental_hz * harmonic as f32))
+        .sum()
+}
+
 
 #[derive(Default)]
 /// Stateful onset detector and audio sample buffer.
@@ -1989,10 +2180,16 @@ impl AudioOnsetDetector {
         let level =
             (window.iter().map(|sample| sample * sample).sum::<f32>() / window.len() as f32).sqrt();
         self.last_level = level;
-        // Track the background slowly so quiet playing can sit close to the noise floor.
-        self.noise_floor = self.noise_floor * 0.995 + level * 0.005;
+        // Track the background asymmetrically: fall quickly toward true quiet, but
+        // rise only very slowly so a loud note's long decay tail doesn't get treated
+        // as the new "noise floor" and mask the next, quieter string pluck.
+        if level < self.noise_floor {
+            self.noise_floor = self.noise_floor * 0.9 + level * 0.1;
+        } else {
+            self.noise_floor = self.noise_floor * 0.999 + level * 0.001;
+        }
         self.average = self.average * 0.96 + level * 0.04;
-        let pitch_hz = estimate_pitch_in_range(
+        let (pitch_hz, confidence) = estimate_pitch_with_confidence(
             &window,
             self.sample_rate,
             if self.min_pitch_hz > 0.0 {
@@ -2005,7 +2202,15 @@ impl AudioOnsetDetector {
             } else {
                 1400.0
             },
-        );
+        )
+        .map_or((None, 0.0), |(pitch, confidence)| (Some(pitch), confidence));
+        // Reject ambiguous pitch reads outright so a "hit" reflects a confident
+        // period estimate rather than any periodicity the difference function found.
+        let pitch_hz = if confidence >= CONFIDENT_PITCH_THRESHOLD {
+            pitch_hz
+        } else {
+            None
+        };
         let ready = self.last_event_sample.map_or(true, |event| {
             self.processed_samples.saturating_sub(event) > (self.sample_rate * 0.12) as usize
         });
@@ -2108,6 +2313,10 @@ impl AudioOnsetDetector {
     }
 }
 
+/// Confidence at or above this level (0..1, 1.0 is a perfectly periodic window)
+/// is treated as a "confident hit" that can register without a loud attack transient.
+const CONFIDENT_PITCH_THRESHOLD: f32 = 0.75;
+
 /// Estimate a fundamental frequency with a normalized YIN-style period search.
 fn estimate_pitch(samples: &[f32], sample_rate: f32) -> Option<f32> {
     estimate_pitch_in_range(samples, sample_rate, 30.0, 1400.0)
@@ -2119,6 +2328,18 @@ fn estimate_pitch_in_range(
     min_pitch_hz: f32,
     max_pitch_hz: f32,
 ) -> Option<f32> {
+    estimate_pitch_with_confidence(samples, sample_rate, min_pitch_hz, max_pitch_hz)
+        .map(|(pitch_hz, _)| pitch_hz)
+}
+
+/// Estimate a fundamental frequency along with a 0..1 confidence score, where
+/// 1.0 means the window was nearly perfectly periodic at the chosen lag.
+fn estimate_pitch_with_confidence(
+    samples: &[f32],
+    sample_rate: f32,
+    min_pitch_hz: f32,
+    max_pitch_hz: f32,
+) -> Option<(f32, f32)> {
     // Estimate the fundamental period with a normalized difference function.
     if samples.len() < 256 || sample_rate <= 0.0 {
         return None;
@@ -2149,24 +2370,26 @@ fn estimate_pitch_in_range(
             .sum();
     }
 
+    // Normalize every lag up front so both the early-exit search and the
+    // low-confidence fallback compare on the same (scale-invariant) footing.
     let mut running_sum = 0.0;
-    let mut best_lag = None;
+    let mut normalized = vec![1.0; max_lag + 1];
     for lag in min_lag..=max_lag {
         running_sum += difference[lag];
-        let normalized = difference[lag] * lag as f32 / running_sum.max(f32::EPSILON);
-        if normalized < 0.18
-            && (lag == max_lag
-                || normalized
-                    <= difference[lag + 1] * (lag + 1) as f32
-                        / (running_sum + difference[lag + 1]).max(f32::EPSILON))
-        {
+        normalized[lag] = difference[lag] * lag as f32 / running_sum.max(f32::EPSILON);
+    }
+
+    let mut best_lag = None;
+    for lag in min_lag..=max_lag {
+        if normalized[lag] < 0.18 && (lag == max_lag || normalized[lag] <= normalized[lag + 1]) {
             best_lag = Some(lag);
             break;
         }
     }
     let lag = best_lag.or_else(|| {
-        (min_lag..=max_lag).min_by(|left, right| difference[*left].total_cmp(&difference[*right]))
+        (min_lag..=max_lag).min_by(|left, right| normalized[*left].total_cmp(&normalized[*right]))
     })?;
+    let confidence = (1.0 - normalized[lag]).clamp(0.0, 1.0);
 
     let refined_lag = if lag > min_lag && lag < max_lag {
         let previous = difference[lag - 1];
@@ -2184,7 +2407,7 @@ fn estimate_pitch_in_range(
     let pitch_hz = sample_rate / refined_lag;
     (min_pitch_hz..=max_pitch_hz)
         .contains(&pitch_hz)
-        .then_some(pitch_hz)
+        .then_some((pitch_hz, confidence))
 }
 
 /// Convert an instrument pitch into its gameplay lane.
@@ -2926,8 +3149,9 @@ fn instrument_color(instrument: Instrument, lane: usize) -> Color {
 #[cfg(test)]
 mod tests {
     use super::{
-        AudioOnsetDetector, Chart, DeviceChoice, Instrument, NotePhase, PolyphonicAudioDetector,
-        bass_string_lane, cents_error, estimate_pitch, pitch_to_lane, selected_device_index,
+        AudioDetector, AudioOnsetDetector, Chart, DeviceChoice, Instrument, NotePhase,
+        PolyphonicAudioDetector, bass_string_lane, cents_error, estimate_pitch, pitch_to_lane,
+        selected_device_index,
     };
     use std::f32::consts::TAU;
     use std::path::Path;
@@ -3175,18 +3399,15 @@ mod tests {
         let mut reader = hound::WavReader::open(path)
             .map_err(|error| format!("recording should open: {error}"))?;
         let spec = reader.spec();
-        let mut detector = AudioOnsetDetector {
-            sample_rate: spec.sample_rate as f32,
-            ..Default::default()
-        };
+        let mut detector = AudioDetector::new(Instrument::Bass5, spec.sample_rate as f32);
         let mut pitches = Vec::new();
         for sample in reader.samples::<i32>() {
             let sample =
                 sample.map_err(|error| format!("recording samples should decode: {error}"))?;
-            if let Some((_, pitch_hz, _)) =
-                detector.detect(std::iter::once(sample as f32 / 8_388_608.0))
-            {
-                pitches.push(pitch_hz);
+            for note in detector.detect(std::iter::once(sample as f32 / 8_388_608.0)) {
+                if note.phase == NotePhase::Started {
+                    pitches.push(note.pitch_hz);
+                }
             }
         }
         Ok(pitches)
