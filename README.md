@@ -96,7 +96,9 @@ The application opens on Home. Choose `Live Session` to start playing immediatel
 
 ### Home and Setup Navigation
 
-The Home screen has two options: `Live Session` and `Set Up`. Choose with `Up` / `Down` or `1` / `2`, then press `Enter`.
+The Home screen has three options: `Live Session`, `Songs`, and `Set Up`. Choose with `Up` / `Down` or `1`, `2`, or `3`, then press `Enter`.
+
+Songs opens the chart browser. Select a chart with `Up` / `Down` and press `Enter`; a five-second count-in starts the chart-driven string highway. Press `Esc` to return to the Songs menu.
 
 Set Up contains the following options:
 
@@ -114,6 +116,33 @@ Each setup tool returns to Set Up when accepted or exited. Returning to Input Se
 When Input Setup is accepted, Open Band saves stable device identifiers and bass string mode. Audio settings use CPAL device IDs such as `alsa:...`; MIDI settings use a deterministic `midi:<index>` port key. The setup screen shows both the friendly device name and concrete identifier. The settings file is created in the working directory at `open-band-settings/settings.json` and is loaded on the next launch. Existing name-based settings and environment variables remain supported as fallback defaults when no saved identifier matches.
 
 The gameplay prototype also supports `A S D F G` as lane controls.
+
+## Chart Format
+
+Charts are JSON files with song metadata and timed notes. The included starter chart is
+`charts/open-strings.json`:
+
+```json
+{
+  "title": "Open Strings Study",
+  "bpm": 90.0,
+  "instrument": "bass5",
+  "notes": [
+    {
+      "start": 1.0,
+      "duration": 0.5,
+      "string": 0,
+      "fret": 0,
+      "note": "B0",
+      "pitch_hz": 30.87
+    }
+  ]
+}
+```
+
+`start` and `duration` are seconds from the chart clock. Bass strings are ordered
+`0=B`, `1=E`, `2=A`, `3=D`, `4=G`. The current label mode is configured by
+`CHART_NOTE_DISPLAY` in `src/main.rs` and supports `Fret`, `Note`, or `Both`.
 
 Press `F3` during the live session to show or hide the input debug window. For bass, it reports the estimated frequency, nearest string, note, and cents offset.
 The panel also reports signal level, adaptive noise floor, lane, and event count. The noise-floor value is the detector's current estimate of the background input level.

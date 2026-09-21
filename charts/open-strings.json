@@ -1,0 +1,17 @@
+{
+  "title": "Open Strings Study",
+  "bpm": 90.0,
+  "instrument": "bass5",
+  "notes": [
+    { "start": 1.0, "duration": 0.5, "string": 0, "fret": 0, "note": "B0", "pitch_hz": 30.87 },
+    { "start": 2.0, "duration": 0.5, "string": 1, "fret": 0, "note": "E1", "pitch_hz": 41.20 },
+    { "start": 3.0, "duration": 0.5, "string": 2, "fret": 0, "note": "A1", "pitch_hz": 55.00 },
+    { "start": 4.0, "duration": 0.5, "string": 3, "fret": 0, "note": "D2", "pitch_hz": 73.42 },
+    { "start": 5.0, "duration": 0.5, "string": 4, "fret": 0, "note": "G2", "pitch_hz": 98.00 },
+    { "start": 6.0, "duration": 1.0, "string": 0, "fret": 3, "note": "D1", "pitch_hz": 36.71 },
+    { "start": 7.5, "duration": 1.0, "string": 1, "fret": 5, "note": "A1", "pitch_hz": 55.00 },
+    { "start": 9.0, "duration": 1.0, "string": 2, "fret": 7, "note": "E2", "pitch_hz": 82.41 },
+    { "start": 10.5, "duration": 1.0, "string": 3, "fret": 5, "note": "G2", "pitch_hz": 98.00 },
+    { "start": 12.0, "duration": 1.0, "string": 4, "fret": 3, "note": "A2", "pitch_hz": 110.00 }
+  ]
+}
