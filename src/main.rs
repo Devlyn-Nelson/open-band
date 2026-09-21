@@ -340,7 +340,9 @@ struct LatencyCamera;
 /// A falling gameplay note and the lane it belongs to.
 struct FallingNote {
     lane: usize,
+    instrument: Instrument,
     spawned_at: f32,
+    duration_secs: f32,
 }
 
 #[derive(Component)]
@@ -1265,14 +1267,14 @@ impl AudioOnsetDetector {
                 self.pending_pitch_hz = Some(current_pitch);
                 self.pending_pitch_count = 1;
             }
-            self.pending_pitch_count >= 2
+            self.pending_pitch_count >= 3
         } else {
             self.pending_pitch_hz = None;
             self.pending_pitch_count = 0;
             false
         };
-        if level > minimum_level && (level > self.average * 1.15 || confirmed_pitch_change) && ready
-        {
+        let initial_attack = self.active_pitch_hz.is_none() && level > self.average * 1.15;
+        if level > minimum_level && ready && (initial_attack || confirmed_pitch_change) {
             self.last_event_sample = Some(self.processed_samples);
             if let Some(pitch_hz) = pitch_hz {
                 self.last_pitch_hz = Some(pitch_hz);
@@ -1979,6 +1981,7 @@ fn receive_instrument_events(
     stream: Res<InstrumentStream>,
     mut debug: ResMut<DebugInputData>,
     mut text: Query<&mut Text, With<DebugText>>,
+    mut notes: Query<(&mut FallingNote, &mut Sprite)>,
     time: Res<Time>,
 ) {
     // Consume each event once, update diagnostics, and spawn its falling bar.
@@ -1998,16 +2001,33 @@ fn receive_instrument_events(
             commands.spawn((
                 Sprite {
                     color: instrument_color(event.instrument, event.lane),
-                    custom_size: Some(Vec2::new(108.0, 24.0)),
+                    custom_size: Some(Vec2::new(108.0, 8.0)),
                     ..default()
                 },
                 Transform::from_xyz(x, 300.0 + event.strength * 10.0, 1.0),
                 FallingNote {
                     lane: event.lane,
+                    instrument: event.instrument,
                     spawned_at: time.elapsed_secs(),
+                    duration_secs: 0.0,
                 },
                 GameplayEntity,
             ));
+        } else if event.phase == NotePhase::Updated {
+            let mut latest_spawn = f32::NEG_INFINITY;
+            for (mut note, mut sprite) in &mut notes {
+                if note.instrument == event.instrument
+                    && note.lane == event.lane
+                    && note.spawned_at > latest_spawn
+                {
+                    latest_spawn = note.spawned_at;
+                    note.duration_secs = event.duration_secs;
+                    sprite.custom_size = Some(Vec2::new(
+                        108.0,
+                        (8.0 + event.duration_secs * NOTE_SPEED).clamp(8.0, 420.0),
+                    ));
+                }
+            }
         }
     }
     let Ok(mut text) = text.single_mut() else {
@@ -2070,10 +2090,12 @@ fn bass_debug_details(instrument: Instrument, pitch_hz: f32) -> String {
 }
 
 /// Move falling bars toward the hit line.
-fn move_notes(mut notes: Query<(&FallingNote, &mut Transform)>, time: Res<Time>) {
+fn move_notes(mut notes: Query<(&FallingNote, &Sprite, &mut Transform)>, time: Res<Time>) {
     // Advance every falling bar at a fixed visual speed.
-    for (note, mut transform) in &mut notes {
-        transform.translation.y = 300.0 - (time.elapsed_secs() - note.spawned_at) * NOTE_SPEED;
+    for (note, sprite, mut transform) in &mut notes {
+        let head_y = 300.0 - (time.elapsed_secs() - note.spawned_at) * NOTE_SPEED;
+        let height = sprite.custom_size.map_or(8.0, |size| size.y);
+        transform.translation.y = head_y + height * 0.5;
     }
 }
 
@@ -2081,7 +2103,7 @@ fn move_notes(mut notes: Query<(&FallingNote, &mut Transform)>, time: Res<Time>)
 fn hit_notes(
     mut commands: Commands,
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut notes: Query<(Entity, &FallingNote, &Transform)>,
+    mut notes: Query<(Entity, &FallingNote, &Sprite, &Transform)>,
     mut score: ResMut<Score>,
 ) {
     // Match keyboard lane presses against bars near the hit line.
@@ -2092,16 +2114,16 @@ fn hit_notes(
         KeyCode::KeyF,
         KeyCode::KeyG,
     ];
-    for (entity, note, transform) in &mut notes {
-        if keyboard.just_pressed(keys[note.lane])
-            && (transform.translation.y - HIT_LINE_Y).abs() < 55.0
-        {
+    for (entity, note, sprite, transform) in &mut notes {
+        let height = sprite.custom_size.map_or(8.0, |size| size.y);
+        let head_y = transform.translation.y - height * 0.5;
+        if keyboard.just_pressed(keys[note.lane]) && (head_y - HIT_LINE_Y).abs() < 55.0 {
             commands.entity(entity).despawn();
             score.hits += 1;
             score.combo += 1;
             score.accuracy = (score.accuracy * (score.hits - 1) as f32 + 1.0) / score.hits as f32;
         }
-        if transform.translation.y < -330.0 {
+        if head_y < -330.0 {
             commands.entity(entity).despawn();
             score.combo = 0;
         }
@@ -2227,6 +2249,35 @@ mod tests {
         assert!(
             detector.detect(samples.into_iter()).is_some(),
             "moderate bass pluck should pass the input gate"
+        );
+    }
+
+    #[test]
+    /// Does not retrigger a sustained mono bass note on later analysis windows.
+    fn sustained_bass_note_produces_one_start() {
+        let sample_rate = 44_100.0;
+        let tone = |count: usize| {
+            (0..count).map(move |index| 0.08 * (TAU * 55.0 * index as f32 / sample_rate).sin())
+        };
+        let mut detector = AudioOnsetDetector {
+            sample_rate,
+            ..Default::default()
+        };
+        let first = detector.detect_with_duration(tone(4096));
+        let second = detector.detect_with_duration(tone(4096));
+        assert_eq!(
+            first
+                .iter()
+                .filter(|event| event.phase == NotePhase::Started)
+                .count(),
+            1
+        );
+        assert_eq!(
+            second
+                .iter()
+                .filter(|event| event.phase == NotePhase::Started)
+                .count(),
+            0
         );
     }
 
