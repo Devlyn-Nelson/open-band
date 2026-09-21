@@ -19,6 +19,8 @@ The current project is an input and gameplay prototype. It proves the real-time 
 - Monophonic YIN-style tracking retained for vocals, with note start, sustain, and release events.
 - Note-duration events report elapsed playing time in seconds for tracked guitar and bass notes.
 - Adaptive low-level onset gating for quieter plucks.
+- Confidence-gated pitch estimation: low-confidence YIN reads are rejected instead of reported as notes.
+- A dedicated per-string energy tracker for bass open-string navigation (menu/song selection), independent from the general pitch detector, so a fresh pluck registers even while another string is still ringing. This tracker is menu-navigation only; chart gameplay and fretted notes still use the general YIN detector.
 - Pitch-to-lane mapping for guitar and vocals, plus physical-string mapping for bass.
 - MIDI drum note mapping to gameplay lanes.
 - Bass tuner with string, frequency, and cents-offset feedback.
@@ -199,6 +201,7 @@ Audio callbacks stay real-time safe: they downmix samples and enqueue bounded au
 - Audio events are generated from detected playing onsets, not from a song chart.
 - Pitch detection uses a normalized period search and is more stable across signal levels, but it can still produce errors with heavy noise, distortion, chords, harmonics, and vocals.
 - Bass lanes now choose the nearest physical string by pitch (`B-E-A-D-G` for five-string and `E-A-D-G` for four-string), but pitch alone cannot distinguish the same note played on different frets and strings.
+- The per-string open-note detector that improves bass menu navigation has not been implemented for chart gameplay; fretted notes during gameplay still rely on the general YIN pitch detector.
 - Guitar events still use pitch bands rather than string and fret recognition.
 - Strum direction is not detected.
 - MIDI drum mapping is a small General MIDI-style mapping and is not configurable yet.
@@ -217,7 +220,8 @@ Audio callbacks stay real-time safe: they downmix samples and enqueue bounded au
 
 ### 2. Improve audio analysis
 
-- Add confidence scores and reject uncertain pitch estimates.
+- Extend confidence-gated pitch estimation (already used for bass) to guitar and vocals.
+- Extend the per-string energy tracker used for bass open-string navigation to fretted notes and chart gameplay.
 - Add separate tuning ranges for guitar, four-string bass, and five-string bass.
 - Detect pick attacks and sustain separately.
 - Add an optional noise gate and input gain controls.
