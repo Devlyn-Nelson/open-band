@@ -965,12 +965,18 @@ fn spawn_instrument_thread(
         let midi_connection = open_midi_input(sender.clone(), config.midi_device.as_deref());
         loop {
             let mut stopping = false;
+            let mut processed_frame = false;
             for input in &mut streams {
                 if stop_receiver.try_recv().is_ok() {
                     stopping = true;
                     break;
                 }
-                if let Some(frame) = input.frames.try_iter().last() {
+                if let Ok(frame) = input.frames.try_recv() {
+                    processed_frame = true;
+                    if stop_receiver.try_recv().is_ok() {
+                        stopping = true;
+                        break;
+                    }
                     send_detected_events(
                         &mut input.detector,
                         frame.into_iter(),
@@ -978,15 +984,20 @@ fn spawn_instrument_thread(
                         &sender,
                     );
                 }
+                if stopping {
+                    break;
+                }
             }
             if stopping {
                 break;
             }
-            if stop_receiver
-                .recv_timeout(Duration::from_millis(10))
-                .is_ok()
-            {
-                break;
+            if !processed_frame {
+                if stop_receiver
+                    .recv_timeout(Duration::from_millis(10))
+                    .is_ok()
+                {
+                    break;
+                }
             }
             if streams.is_empty() && midi_connection.is_none() {
                 eprintln!(
@@ -1158,11 +1169,15 @@ impl AudioDetector {
         match instrument {
             Instrument::Vocals | Instrument::Drums => Self::Mono(AudioOnsetDetector {
                 sample_rate,
+                min_pitch_hz: 60.0,
+                max_pitch_hz: 1400.0,
                 ..Default::default()
             }),
             Instrument::Guitar => Self::Poly(PolyphonicAudioDetector::new(sample_rate, 1400.0)),
             Instrument::Bass4 | Instrument::Bass5 => Self::Mono(AudioOnsetDetector {
                 sample_rate,
+                min_pitch_hz: 30.0,
+                max_pitch_hz: 500.0,
                 ..Default::default()
             }),
         }
@@ -1192,6 +1207,8 @@ struct AudioOnsetDetector {
     active_pitch_hz: Option<f32>,
     active_started_sample: usize,
     silent_windows: usize,
+    min_pitch_hz: f32,
+    max_pitch_hz: f32,
 }
 
 impl AudioOnsetDetector {
@@ -1213,7 +1230,20 @@ impl AudioOnsetDetector {
         // Track the background slowly so quiet playing can sit close to the noise floor.
         self.noise_floor = self.noise_floor * 0.995 + level * 0.005;
         self.average = self.average * 0.96 + level * 0.04;
-        let pitch_hz = estimate_pitch(&window, self.sample_rate);
+        let pitch_hz = estimate_pitch_in_range(
+            &window,
+            self.sample_rate,
+            if self.min_pitch_hz > 0.0 {
+                self.min_pitch_hz
+            } else {
+                30.0
+            },
+            if self.max_pitch_hz > 0.0 {
+                self.max_pitch_hz
+            } else {
+                1400.0
+            },
+        );
         let ready = self.last_event_sample.map_or(true, |event| {
             self.processed_samples.saturating_sub(event) > (self.sample_rate * 0.12) as usize
         });
@@ -1318,6 +1348,15 @@ impl AudioOnsetDetector {
 
 /// Estimate a fundamental frequency with a normalized YIN-style period search.
 fn estimate_pitch(samples: &[f32], sample_rate: f32) -> Option<f32> {
+    estimate_pitch_in_range(samples, sample_rate, 30.0, 1400.0)
+}
+
+fn estimate_pitch_in_range(
+    samples: &[f32],
+    sample_rate: f32,
+    min_pitch_hz: f32,
+    max_pitch_hz: f32,
+) -> Option<f32> {
     // Estimate the fundamental period with a normalized difference function.
     if samples.len() < 256 || sample_rate <= 0.0 {
         return None;
@@ -1328,8 +1367,8 @@ fn estimate_pitch(samples: &[f32], sample_rate: f32) -> Option<f32> {
         .iter()
         .map(|sample| sample - mean)
         .collect::<Vec<_>>();
-    let min_lag = (sample_rate / 1400.0).floor().max(2.0) as usize;
-    let max_lag = (sample_rate / 30.0).ceil() as usize;
+    let min_lag = (sample_rate / max_pitch_hz).floor().max(2.0) as usize;
+    let max_lag = (sample_rate / min_pitch_hz).ceil() as usize;
     if max_lag >= centered.len() {
         return None;
     }
@@ -1381,7 +1420,9 @@ fn estimate_pitch(samples: &[f32], sample_rate: f32) -> Option<f32> {
         lag as f32
     };
     let pitch_hz = sample_rate / refined_lag;
-    (30.0..=1400.0).contains(&pitch_hz).then_some(pitch_hz)
+    (min_pitch_hz..=max_pitch_hz)
+        .contains(&pitch_hz)
+        .then_some(pitch_hz)
 }
 
 /// Convert an instrument pitch into its gameplay lane.
