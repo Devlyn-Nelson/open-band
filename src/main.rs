@@ -1271,7 +1271,7 @@ impl AudioOnsetDetector {
             self.pending_pitch_count = 0;
             false
         };
-        if level > minimum_level && (level > self.average * 1.6 || confirmed_pitch_change) && ready
+        if level > minimum_level && (level > self.average * 1.15 || confirmed_pitch_change) && ready
         {
             self.last_event_sample = Some(self.processed_samples);
             if let Some(pitch_hz) = pitch_hz {
@@ -2210,6 +2210,23 @@ mod tests {
         assert!(
             detector.detect(samples.into_iter()).is_some(),
             "quiet five-string low B should pass the input gate"
+        );
+    }
+
+    #[test]
+    /// Accepts a moderate bass pluck without requiring a hard attack transient.
+    fn moderate_five_string_pluck_is_detected() {
+        let sample_rate = 44_100.0;
+        let samples = (0..4096)
+            .map(|index| 0.02 * (TAU * 55.0 * index as f32 / sample_rate).sin())
+            .collect::<Vec<_>>();
+        let mut detector = AudioOnsetDetector {
+            sample_rate,
+            ..Default::default()
+        };
+        assert!(
+            detector.detect(samples.into_iter()).is_some(),
+            "moderate bass pluck should pass the input gate"
         );
     }
 
