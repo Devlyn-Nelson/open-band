@@ -15,6 +15,9 @@ The current project is an input and gameplay prototype. It proves the real-time 
 - Configurable four-string or five-string bass mode.
 - MIDI input for electronic drums.
 - Audio onset detection with normalized YIN-style pitch estimation.
+- Polyphonic FFT pitch tracking for guitar and bass, with up to six simultaneous notes.
+- Monophonic YIN-style tracking retained for vocals, with note start, sustain, and release events.
+- Note-duration events report elapsed playing time in seconds for tracked guitar and bass notes.
 - Adaptive low-level onset gating for quieter plucks.
 - Pitch-to-lane mapping for guitar and vocals, plus physical-string mapping for bass.
 - MIDI drum note mapping to gameplay lanes.

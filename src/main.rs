@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use midir::{Ignore, MidiInput};
+use rustfft::{FftPlanner, num_complex::Complex};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -26,6 +27,163 @@ enum AppState {
     Gameplay,
 }
 
+struct PolyphonicAudioDetector {
+    sample_rate: f32,
+    processed_samples: usize,
+    noise_floor: f32,
+    samples: Vec<f32>,
+    tracks: Vec<PolyphonicTrack>,
+}
+
+struct PolyphonicTrack {
+    pitch_hz: f32,
+    strength: f32,
+    started_sample: usize,
+    missed_windows: usize,
+}
+
+impl PolyphonicAudioDetector {
+    fn new(sample_rate: f32) -> Self {
+        Self {
+            sample_rate,
+            processed_samples: 0,
+            noise_floor: 0.0,
+            samples: Vec::new(),
+            tracks: Vec::new(),
+        }
+    }
+
+    fn detect(&mut self, samples: impl Iterator<Item = f32>) -> Vec<DetectedNote> {
+        self.samples.extend(samples);
+        if self.samples.len() < 4096 {
+            return Vec::new();
+        }
+        let window = self.samples[..4096].to_vec();
+        self.samples.drain(..2048);
+        self.processed_samples += 2048;
+
+        let level =
+            (window.iter().map(|sample| sample * sample).sum::<f32>() / window.len() as f32).sqrt();
+        self.noise_floor = self.noise_floor * 0.995 + level * 0.005;
+        let peaks = spectral_peaks(
+            &window,
+            self.sample_rate,
+            (self.noise_floor * 2.5).max(0.008),
+        );
+        let mut events = Vec::new();
+        let mut matched = vec![false; self.tracks.len()];
+
+        for (pitch_hz, strength) in peaks {
+            let matching_track = self
+                .tracks
+                .iter()
+                .enumerate()
+                .filter(|(index, track)| {
+                    !matched[*index] && (pitch_hz / track.pitch_hz).log2().abs() <= 90.0 / 1200.0
+                })
+                .min_by(|(_, left), (_, right)| {
+                    (pitch_hz / left.pitch_hz)
+                        .log2()
+                        .abs()
+                        .total_cmp(&(pitch_hz / right.pitch_hz).log2().abs())
+                })
+                .map(|(index, _)| index);
+
+            if let Some(index) = matching_track {
+                matched[index] = true;
+                let track = &mut self.tracks[index];
+                track.pitch_hz = pitch_hz;
+                track.strength = strength;
+                track.missed_windows = 0;
+                events.push(DetectedNote {
+                    pitch_hz,
+                    strength,
+                    noise_floor: self.noise_floor,
+                    phase: NotePhase::Updated,
+                    duration_secs: (self.processed_samples - track.started_sample) as f32
+                        / self.sample_rate,
+                });
+            } else if self.tracks.len() < 6 {
+                self.tracks.push(PolyphonicTrack {
+                    pitch_hz,
+                    strength,
+                    started_sample: self.processed_samples,
+                    missed_windows: 0,
+                });
+                matched.push(true);
+                events.push(DetectedNote {
+                    pitch_hz,
+                    strength,
+                    noise_floor: self.noise_floor,
+                    phase: NotePhase::Started,
+                    duration_secs: 0.0,
+                });
+            }
+        }
+
+        for index in (0..self.tracks.len()).rev() {
+            if matched.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            self.tracks[index].missed_windows += 1;
+            if self.tracks[index].missed_windows >= 2 {
+                let track = self.tracks.remove(index);
+                events.push(DetectedNote {
+                    pitch_hz: track.pitch_hz,
+                    strength: track.strength,
+                    noise_floor: self.noise_floor,
+                    phase: NotePhase::Ended,
+                    duration_secs: (self.processed_samples - track.started_sample) as f32
+                        / self.sample_rate,
+                });
+            }
+        }
+        events
+    }
+}
+
+fn spectral_peaks(samples: &[f32], sample_rate: f32, threshold: f32) -> Vec<(f32, f32)> {
+    let mut planner = FftPlanner::new();
+    let fft = planner.plan_fft_forward(samples.len());
+    let mut spectrum = samples
+        .iter()
+        .enumerate()
+        .map(|(index, sample)| {
+            let window = 0.5
+                * (1.0 - (std::f32::consts::TAU * index as f32 / (samples.len() - 1) as f32).cos());
+            Complex::new(sample * window, 0.0)
+        })
+        .collect::<Vec<_>>();
+    fft.process(&mut spectrum);
+    let minimum_bin = (30.0 * samples.len() as f32 / sample_rate).ceil() as usize;
+    let maximum_bin = (1400.0 * samples.len() as f32 / sample_rate)
+        .floor()
+        .min((samples.len() / 2 - 1) as f32) as usize;
+    let magnitudes = (minimum_bin..=maximum_bin)
+        .map(|bin| spectrum[bin].norm() / samples.len() as f32 * 2.0)
+        .collect::<Vec<_>>();
+    let mut peaks = (1..magnitudes.len().saturating_sub(1))
+        .filter_map(|offset| {
+            let magnitude = magnitudes[offset];
+            (magnitude > threshold
+                && magnitude >= magnitudes[offset - 1]
+                && magnitude >= magnitudes[offset + 1])
+                .then_some((minimum_bin + offset, magnitude))
+        })
+        .collect::<Vec<_>>();
+    peaks.sort_by(|left, right| right.1.total_cmp(&left.1));
+    peaks
+        .into_iter()
+        .take(6)
+        .map(|(bin, strength)| {
+            (
+                bin as f32 * sample_rate / samples.len() as f32,
+                (strength * 8.0).clamp(0.15, 1.0),
+            )
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 /// Instruments supported by the input pipeline.
 enum Instrument {
@@ -44,6 +202,15 @@ struct InstrumentEvent {
     strength: f32,
     pitch_hz: Option<f32>,
     noise_floor: f32,
+    phase: NotePhase,
+    duration_secs: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NotePhase {
+    Started,
+    Updated,
+    Ended,
 }
 
 #[derive(Resource)]
@@ -169,6 +336,7 @@ struct DebugInputData {
     lane: Option<usize>,
     strength: f32,
     noise_floor: f32,
+    duration_secs: f32,
     event_count: u64,
 }
 
@@ -829,8 +997,7 @@ where
     f32: cpal::FromSample<T>,
 {
     // Convert each input frame to mono before onset and pitch analysis.
-    let mut detector = AudioOnsetDetector::default();
-    detector.sample_rate = config.sample_rate as f32;
+    let mut detector = AudioDetector::new(instrument, config.sample_rate as f32);
     device.build_input_stream(
         *config,
         move |data: &[T], _| {
@@ -841,7 +1008,7 @@ where
                     .sum::<f32>()
                     / frame.len().max(1) as f32
             });
-            send_detected_event(&mut detector, mono, instrument, &sender);
+            send_detected_events(&mut detector, mono, instrument, &sender);
         },
         error_callback,
         None,
@@ -858,15 +1025,15 @@ fn run_recording_input(
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
         let mut reader = hound::WavReader::open(path)?;
         let spec = reader.spec();
-        let mut detector = AudioOnsetDetector {
+        let mut detector = AudioDetector::Mono(AudioOnsetDetector {
             sample_rate: spec.sample_rate as f32,
             ..Default::default()
-        };
+        });
         for sample in reader.samples::<i32>() {
             if stop_receiver.try_recv().is_ok() {
                 return Ok(());
             }
-            send_detected_event(
+            send_detected_events(
                 &mut detector,
                 std::iter::once(sample? as f32 / 8_388_608.0),
                 instrument,
@@ -881,20 +1048,56 @@ fn run_recording_input(
 }
 
 /// Convert detector output into the event shape consumed by gameplay and calibration.
-fn send_detected_event(
-    detector: &mut AudioOnsetDetector,
+fn send_detected_events(
+    detector: &mut AudioDetector,
     samples: impl Iterator<Item = f32>,
     instrument: Instrument,
     sender: &Sender<InstrumentEvent>,
 ) {
-    if let Some((strength, pitch_hz, noise_floor)) = detector.detect(samples) {
+    for detected in detector.detect(samples) {
         let _ = sender.send(InstrumentEvent {
             instrument,
-            lane: pitch_to_lane(instrument, pitch_hz),
-            strength,
-            pitch_hz: Some(pitch_hz),
-            noise_floor,
+            lane: pitch_to_lane(instrument, detected.pitch_hz),
+            strength: detected.strength,
+            pitch_hz: Some(detected.pitch_hz),
+            noise_floor: detected.noise_floor,
+            phase: detected.phase,
+            duration_secs: detected.duration_secs,
         });
+    }
+}
+
+struct DetectedNote {
+    pitch_hz: f32,
+    strength: f32,
+    noise_floor: f32,
+    phase: NotePhase,
+    duration_secs: f32,
+}
+
+enum AudioDetector {
+    Mono(AudioOnsetDetector),
+    Poly(PolyphonicAudioDetector),
+}
+
+impl AudioDetector {
+    fn new(instrument: Instrument, sample_rate: f32) -> Self {
+        match instrument {
+            Instrument::Vocals | Instrument::Drums => Self::Mono(AudioOnsetDetector {
+                sample_rate,
+                ..Default::default()
+            }),
+            Instrument::Guitar | Instrument::Bass4 | Instrument::Bass5 => {
+                Self::Poly(PolyphonicAudioDetector::new(sample_rate))
+            }
+        }
+    }
+
+    fn detect(&mut self, samples: impl Iterator<Item = f32>) -> Vec<DetectedNote> {
+        match self {
+            Self::Mono(detector) => detector.detect_with_duration(samples),
+            Self::Poly(detector) => detector.detect(samples),
+        }
     }
 }
 
@@ -910,6 +1113,10 @@ struct AudioOnsetDetector {
     pending_pitch_count: usize,
     sample_rate: f32,
     samples: Vec<f32>,
+    last_level: f32,
+    active_pitch_hz: Option<f32>,
+    active_started_sample: usize,
+    silent_windows: usize,
 }
 
 impl AudioOnsetDetector {
@@ -927,6 +1134,7 @@ impl AudioOnsetDetector {
         self.processed_samples += 2048;
         let level =
             (window.iter().map(|sample| sample * sample).sum::<f32>() / window.len() as f32).sqrt();
+        self.last_level = level;
         // Track the background slowly so quiet playing can sit close to the noise floor.
         self.noise_floor = self.noise_floor * 0.995 + level * 0.005;
         self.average = self.average * 0.96 + level * 0.04;
@@ -972,6 +1180,57 @@ impl AudioOnsetDetector {
         } else {
             None
         }
+    }
+
+    fn detect_with_duration(&mut self, samples: impl Iterator<Item = f32>) -> Vec<DetectedNote> {
+        let onset = self.detect(samples);
+        if let Some((strength, pitch_hz, noise_floor)) = onset {
+            let phase = if self.active_pitch_hz.is_some() {
+                NotePhase::Updated
+            } else {
+                self.active_started_sample = self.processed_samples;
+                NotePhase::Started
+            };
+            self.active_pitch_hz = Some(pitch_hz);
+            self.silent_windows = 0;
+            return vec![DetectedNote {
+                pitch_hz,
+                strength,
+                noise_floor,
+                phase,
+                duration_secs: (self.processed_samples - self.active_started_sample) as f32
+                    / self.sample_rate,
+            }];
+        }
+
+        let Some(pitch_hz) = self.active_pitch_hz else {
+            return Vec::new();
+        };
+        let minimum_level = (self.noise_floor * 3.0).max(0.015);
+        if self.last_level <= minimum_level {
+            self.silent_windows += 1;
+        } else {
+            self.silent_windows = 0;
+        }
+        if self.silent_windows < 2 {
+            return vec![DetectedNote {
+                pitch_hz,
+                strength: (self.last_level * 4.0).clamp(0.15, 1.0),
+                noise_floor: self.noise_floor,
+                phase: NotePhase::Updated,
+                duration_secs: (self.processed_samples - self.active_started_sample) as f32
+                    / self.sample_rate,
+            }];
+        }
+        self.active_pitch_hz = None;
+        vec![DetectedNote {
+            pitch_hz,
+            strength: 0.0,
+            noise_floor: self.noise_floor,
+            phase: NotePhase::Ended,
+            duration_secs: (self.processed_samples - self.active_started_sample) as f32
+                / self.sample_rate,
+        }]
     }
 }
 
@@ -1130,6 +1389,8 @@ fn open_midi_input(
                         strength: message[2] as f32 / 127.0,
                         pitch_hz: None,
                         noise_floor: 0.0,
+                        phase: NotePhase::Started,
+                        duration_secs: 0.0,
                     });
                 }
             },
@@ -1593,21 +1854,24 @@ fn receive_instrument_events(
         debug.lane = Some(event.lane);
         debug.strength = event.strength;
         debug.noise_floor = event.noise_floor;
-        debug.event_count += 1;
-        let x = -360.0 + event.lane as f32 * 180.0;
-        commands.spawn((
-            Sprite {
-                color: instrument_color(event.instrument, event.lane),
-                custom_size: Some(Vec2::new(108.0, 24.0)),
-                ..default()
-            },
-            Transform::from_xyz(x, 300.0 + event.strength * 10.0, 1.0),
-            FallingNote {
-                lane: event.lane,
-                spawned_at: time.elapsed_secs(),
-            },
-            GameplayEntity,
-        ));
+        debug.duration_secs = event.duration_secs;
+        if event.phase == NotePhase::Started {
+            debug.event_count += 1;
+            let x = -360.0 + event.lane as f32 * 180.0;
+            commands.spawn((
+                Sprite {
+                    color: instrument_color(event.instrument, event.lane),
+                    custom_size: Some(Vec2::new(108.0, 24.0)),
+                    ..default()
+                },
+                Transform::from_xyz(x, 300.0 + event.strength * 10.0, 1.0),
+                FallingNote {
+                    lane: event.lane,
+                    spawned_at: time.elapsed_secs(),
+                },
+                GameplayEntity,
+            ));
+        }
     }
     let Ok(mut text) = text.single_mut() else {
         return;
@@ -1630,9 +1894,10 @@ fn debug_text(debug: &DebugInputData) -> String {
         |(instrument, pitch)| bass_debug_details(instrument, pitch),
     );
     format!(
-        "DEBUG INPUT  [F3]\n\nINSTRUMENT  {instrument}\nEST PITCH   {pitch}\n{bass}\nLANE        {lane}\nSIGNAL      {:>5.1}%\nNOISE FLOOR {:>5.2}%\nEVENTS      {}",
+        "DEBUG INPUT  [F3]\n\nINSTRUMENT  {instrument}\nEST PITCH   {pitch}\n{bass}\nLANE        {lane}\nSIGNAL      {:>5.1}%\nNOISE FLOOR {:>5.2}%\nDURATION    {:>5.2} s\nEVENTS      {}",
         debug.strength * 100.0,
         debug.noise_floor * 100.0,
+        debug.duration_secs,
         debug.event_count,
     )
 }
@@ -1731,7 +1996,10 @@ fn instrument_color(instrument: Instrument, lane: usize) -> Color {
 
 #[cfg(test)]
 mod tests {
-    use super::{AudioOnsetDetector, Instrument, bass_string_lane, estimate_pitch, pitch_to_lane};
+    use super::{
+        AudioOnsetDetector, Instrument, NotePhase, PolyphonicAudioDetector, bass_string_lane,
+        estimate_pitch, pitch_to_lane,
+    };
     use std::f32::consts::TAU;
     use std::path::Path;
 
@@ -1805,6 +2073,42 @@ mod tests {
         assert!(
             result.is_some(),
             "quiet bass pluck should pass the onset gate"
+        );
+    }
+
+    #[test]
+    /// Tracks more than one pitched voice and reports its playing duration.
+    fn polyphonic_detector_tracks_chord_duration() {
+        let sample_rate = 44_100.0;
+        let chord = |amplitude: f32| {
+            (0..4096).map(move |index| {
+                amplitude * (TAU * 110.0 * index as f32 / sample_rate).sin()
+                    + amplitude * 0.8 * (TAU * 164.81 * index as f32 / sample_rate).sin()
+            })
+        };
+        let mut detector = PolyphonicAudioDetector::new(sample_rate);
+        let starts = detector.detect(chord(0.4));
+        assert!(
+            starts
+                .iter()
+                .filter(|event| event.phase == NotePhase::Started)
+                .count()
+                >= 2
+        );
+
+        let updates = detector.detect(chord(0.4).take(2048));
+        assert!(
+            updates
+                .iter()
+                .any(|event| { event.phase == NotePhase::Updated && event.duration_secs > 0.0 })
+        );
+
+        let mut silence = detector.detect((0..4096).map(|_| 0.0));
+        silence.extend(detector.detect(std::iter::empty::<f32>()));
+        assert!(
+            silence
+                .iter()
+                .any(|event| { event.phase == NotePhase::Ended && event.duration_secs > 0.0 })
         );
     }
 
