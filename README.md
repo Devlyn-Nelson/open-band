@@ -111,7 +111,7 @@ Each setup tool returns to Set Up when accepted or exited. Returning to Input Se
 
 ## Saved Settings
 
-When Input Setup is accepted, Open Band saves the selected device names and bass string mode. Accepting latency calibration saves the best measured offset. The settings file is created in the working directory at `open-band-settings/settings.json` and is loaded on the next launch. Environment variables remain supported as fallback defaults when no saved device matches.
+When Input Setup is accepted, Open Band saves stable device identifiers and bass string mode. Audio settings use CPAL device IDs such as `alsa:...`; MIDI settings use a deterministic `midi:<index>` port key. The setup screen shows both the friendly device name and concrete identifier. The settings file is created in the working directory at `open-band-settings/settings.json` and is loaded on the next launch. Existing name-based settings and environment variables remain supported as fallback defaults when no saved identifier matches.
 
 The gameplay prototype also supports `A S D F G` as lane controls.
 
@@ -139,7 +139,7 @@ Available variables:
 - `BAND_HERO_VOCAL_DEVICE`: audio input for vocals.
 - `BAND_HERO_MIDI_DEVICE`: MIDI input for drums.
 
-Saved device names are preferred on later launches. When no saved device is available, a matching environment variable is tried, followed by the first available device. MIDI requires an available MIDI input port. The worker thread reports unavailable devices in the terminal and continues with whichever inputs opened successfully.
+Saved device identifiers are preferred on later launches. When no saved identifier is available, an exact or partial name from an existing settings file or environment variable is tried, followed by the first available device. MIDI requires an available MIDI input port. The worker thread reports unavailable devices in the terminal and continues with whichever inputs opened successfully.
 
 The detector accepts quieter bass plucks than the original fixed-level gate. The bass should still be connected through an audio interface or preamp that presents a clean, non-clipped input signal; an inline amp is only needed if the hardware signal is still too weak or noisy at the interface input.
 

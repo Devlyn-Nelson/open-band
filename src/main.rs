@@ -3,6 +3,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use midir::{Ignore, MidiInput};
 use rustfft::{FftPlanner, num_complex::Complex};
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -241,11 +242,17 @@ struct MenuCamera;
 #[derive(Resource)]
 /// Available devices and current choices in Input Setup.
 struct DeviceSelection {
-    audio_devices: Vec<String>,
-    midi_devices: Vec<String>,
+    audio_devices: Vec<DeviceChoice>,
+    midi_devices: Vec<DeviceChoice>,
     selected: [usize; 4],
     focus: usize,
     bass_strings: u8,
+}
+
+#[derive(Clone, Debug)]
+struct DeviceChoice {
+    id: String,
+    label: String,
 }
 
 #[derive(Resource, Serialize, Deserialize, Default, Debug)]
@@ -350,9 +357,10 @@ struct DebugText;
 
 /// Build and run the Bevy application.
 fn main() {
-    // Load persisted choices before scanning devices so saved names can be preselected.
+    // Load persisted choices before scanning devices so saved IDs can be preselected.
     let (sender, receiver) = mpsc::channel();
     let settings = load_settings();
+    let startup_state = initial_app_state();
     let device_selection = scan_devices(&settings);
     let (stop_sender, stop_receiver) = mpsc::channel();
     let input_thread = spawn_instrument_thread(
@@ -391,7 +399,7 @@ fn main() {
             }),
             ..default()
         }))
-        .init_state::<AppState>()
+        .insert_state(startup_state)
         .add_systems(OnEnter(AppState::Home), setup_home)
         .add_systems(Update, home_input.run_if(in_state(AppState::Home)))
         .add_systems(Update, home_display.run_if(in_state(AppState::Home)))
@@ -452,9 +460,18 @@ fn main() {
         .run();
 }
 
+/// Choose first-run input setup when no persisted configuration exists.
+fn initial_app_state() -> AppState {
+    if std::path::Path::new(SETTINGS_FILE).exists() {
+        AppState::Home
+    } else {
+        AppState::DeviceSelection
+    }
+}
+
 /// Runtime device configuration consumed by the input worker.
 struct InputConfig {
-    /// Device names passed to the worker after the setup screen is accepted.
+    /// Stable device identifiers passed to the worker after setup is accepted.
     audio_devices: [Option<String>; 3],
     midi_device: Option<String>,
     bass_strings: u8,
@@ -480,17 +497,32 @@ fn scan_devices(settings: &PersistentSettings) -> DeviceSelection {
     let host = cpal::default_host();
     let audio_devices = host
         .input_devices()
-        .map(|devices| devices.map(|device| device.to_string()).collect::<Vec<_>>())
+        .map(|devices| {
+            devices
+                .filter_map(|device| {
+                    let id = device.id().ok()?.to_string();
+                    Some(DeviceChoice {
+                        label: device.to_string(),
+                        id,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     let midi_devices = MidiInput::new("open-band-device-scan")
         .map(|input| {
             input
                 .ports()
                 .iter()
-                .map(|port| {
-                    input
+                .enumerate()
+                .map(|(index, port)| {
+                    let label = input
                         .port_name(port)
-                        .unwrap_or_else(|_| "Unknown MIDI device".into())
+                        .unwrap_or_else(|_| "Unknown MIDI device".into());
+                    DeviceChoice {
+                        id: format!("midi:{index}"),
+                        label,
+                    }
                 })
                 .collect::<Vec<_>>()
         })
@@ -617,16 +649,19 @@ fn device_selection_input(
     }
 
     if keyboard.just_pressed(KeyCode::Enter) {
-        let audio_name = |index: usize| {
+        let audio_id = |index: usize| {
             selection
                 .audio_devices
                 .get(selection.selected[index])
-                .cloned()
+                .map(|device| device.id.clone())
         };
-        let midi_name = selection.midi_devices.get(selection.selected[2]).cloned();
+        let midi_id = selection
+            .midi_devices
+            .get(selection.selected[2])
+            .map(|device| device.id.clone());
         let config = InputConfig {
-            audio_devices: [audio_name(0), audio_name(1), audio_name(3)],
-            midi_device: midi_name,
+            audio_devices: [audio_id(0), audio_id(1), audio_id(3)],
+            midi_device: midi_id,
             bass_strings: selection.bass_strings,
         };
         settings.guitar_device = config.audio_devices[0].clone();
@@ -662,10 +697,10 @@ fn device_selection_display(
     let Ok(mut text) = text.single_mut() else {
         return;
     };
-    let device_name = |devices: &[String], selected: usize| {
+    let device_name = |devices: &[DeviceChoice], selected: usize| {
         devices
             .get(selected)
-            .cloned()
+            .map(|device| format!("{}\n      ID: {}", device.label, device.id))
             .unwrap_or_else(|| "NO DEVICE FOUND".into())
     };
     let marker = |index: usize| if selection.focus == index { ">" } else { " " };
@@ -870,15 +905,15 @@ fn cleanup_menu(
 }
 
 /// Resolve a saved or environment-provided device name to an enumeration index.
-fn selected_device_index(devices: &[String], saved: Option<&str>, variable: &str) -> usize {
-    // Prefer an exact saved name, then retain environment-variable compatibility.
+fn selected_device_index(devices: &[DeviceChoice], saved: Option<&str>, variable: &str) -> usize {
+    // Prefer an exact stable ID, while accepting old saved names and environment defaults.
     saved
         .map(str::to_owned)
         .or_else(|| std::env::var(variable).ok())
         .and_then(|wanted| {
-            devices
-                .iter()
-                .position(|device| device == &wanted || device.contains(&wanted))
+            devices.iter().position(|device| {
+                device.id == wanted || device.label == wanted || device.label.contains(&wanted)
+            })
         })
         .unwrap_or(0)
 }
@@ -1185,22 +1220,29 @@ impl AudioOnsetDetector {
     fn detect_with_duration(&mut self, samples: impl Iterator<Item = f32>) -> Vec<DetectedNote> {
         let onset = self.detect(samples);
         if let Some((strength, pitch_hz, noise_floor)) = onset {
-            let phase = if self.active_pitch_hz.is_some() {
-                NotePhase::Updated
-            } else {
-                self.active_started_sample = self.processed_samples;
-                NotePhase::Started
-            };
+            let mut events = Vec::new();
+            if let Some(active_pitch_hz) = self.active_pitch_hz {
+                events.push(DetectedNote {
+                    pitch_hz: active_pitch_hz,
+                    strength: self.last_level,
+                    noise_floor,
+                    phase: NotePhase::Ended,
+                    duration_secs: (self.processed_samples - self.active_started_sample) as f32
+                        / self.sample_rate,
+                });
+            }
+            self.active_started_sample = self.processed_samples;
             self.active_pitch_hz = Some(pitch_hz);
             self.silent_windows = 0;
-            return vec![DetectedNote {
+            events.push(DetectedNote {
                 pitch_hz,
                 strength,
                 noise_floor,
-                phase,
+                phase: NotePhase::Started,
                 duration_secs: (self.processed_samples - self.active_started_sample) as f32
                     / self.sample_rate,
-            }];
+            });
+            return events;
         }
 
         let Some(pitch_hz) = self.active_pitch_hz else {
@@ -1343,7 +1385,14 @@ fn bass_string_lane(instrument: Instrument, pitch_hz: f32) -> usize {
 
 /// Find a CPAL input by exact configured name, or return an error.
 fn find_input_device(host: &cpal::Host, requested: Option<&str>) -> Result<cpal::Device, String> {
-    // CPAL exposes names dynamically, so compare the saved name while enumerating.
+    // Stable CPAL IDs reopen the exact device even when names are duplicated.
+    if let Some(requested) = requested {
+        if let Ok(id) = cpal::DeviceId::from_str(requested) {
+            if let Some(device) = host.device_by_id(&id) {
+                return Ok(device);
+            }
+        }
+    }
     let devices = host.input_devices().map_err(|error| error.to_string())?;
     for device in devices {
         let name = device.to_string();
@@ -1365,10 +1414,17 @@ fn open_midi_input(
     // Connect the selected MIDI port and translate drum notes into lanes.
     let mut input = MidiInput::new("open-band-drums").ok()?;
     input.ignore(Ignore::None);
-    let port = input.ports().into_iter().find(|port| {
-        let name = input.port_name(port).unwrap_or_default();
-        requested.is_none_or(|wanted| name == wanted)
-    })?;
+    let port = input
+        .ports()
+        .into_iter()
+        .enumerate()
+        .find(|(index, port)| {
+            let name = input.port_name(port).unwrap_or_default();
+            requested.is_none_or(|wanted| {
+                wanted == format!("midi:{index}") || name == wanted || name.contains(wanted)
+            })
+        })?
+        .1;
     let name = input.port_name(&port).unwrap_or_default();
     let connection = input
         .connect(
@@ -1997,8 +2053,8 @@ fn instrument_color(instrument: Instrument, lane: usize) -> Color {
 #[cfg(test)]
 mod tests {
     use super::{
-        AudioOnsetDetector, Instrument, NotePhase, PolyphonicAudioDetector, bass_string_lane,
-        estimate_pitch, pitch_to_lane,
+        AudioOnsetDetector, DeviceChoice, Instrument, NotePhase, PolyphonicAudioDetector,
+        bass_string_lane, estimate_pitch, pitch_to_lane, selected_device_index,
     };
     use std::f32::consts::TAU;
     use std::path::Path;
@@ -2054,6 +2110,25 @@ mod tests {
         for (lane, pitch) in four_string_open_notes.into_iter().enumerate() {
             assert_eq!(bass_string_lane(Instrument::Bass4, pitch), lane);
         }
+    }
+
+    #[test]
+    /// Selects the exact stable ID when display names are duplicated.
+    fn device_selection_prefers_stable_id_over_duplicate_name() {
+        let devices = vec![
+            DeviceChoice {
+                id: "alsa:hw:1,0".into(),
+                label: "USB Audio".into(),
+            },
+            DeviceChoice {
+                id: "alsa:hw:2,0".into(),
+                label: "USB Audio".into(),
+            },
+        ];
+        assert_eq!(
+            selected_device_index(&devices, Some("alsa:hw:2,0"), "MISSING"),
+            1
+        );
     }
 
     #[test]
@@ -2133,6 +2208,81 @@ mod tests {
         Ok(pitches)
     }
 
+    fn detect_recording_plucks(path: &Path) -> Result<Vec<(f32, f32)>, String> {
+        let mut reader = hound::WavReader::open(path)
+            .map_err(|error| format!("recording should open: {error}"))?;
+        let spec = reader.spec();
+        let samples = reader
+            .samples::<i32>()
+            .map(|sample| {
+                sample
+                    .map(|sample| sample as f32 / 8_388_608.0)
+                    .map_err(|error| format!("recording samples should decode: {error}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let window_size = 512;
+        let raw_envelope = samples
+            .chunks(window_size)
+            .map(|window| {
+                (window.iter().map(|sample| sample * sample).sum::<f32>()
+                    / window.len().max(1) as f32)
+                    .sqrt()
+            })
+            .collect::<Vec<_>>();
+        let smoothing_windows = 9;
+        let envelope = raw_envelope
+            .windows(smoothing_windows)
+            .map(|window| window.iter().sum::<f32>() / window.len() as f32)
+            .collect::<Vec<_>>();
+        let maximum = envelope.iter().copied().fold(0.0, f32::max);
+        let threshold = (maximum * 0.08).max(0.002);
+        let minimum_distance = (spec.sample_rate as f32 * 0.2 / window_size as f32) as usize;
+        let mut candidates = Vec::new();
+        for index in 1..envelope.len().saturating_sub(1) {
+            if envelope[index] <= threshold
+                || envelope[index] < envelope[index - 1]
+                || envelope[index] < envelope[index + 1]
+            {
+                continue;
+            }
+            candidates.push((index, envelope[index]));
+        }
+        candidates.sort_by(|left, right| right.1.total_cmp(&left.1));
+        let mut peaks = Vec::new();
+        for (index, _) in candidates {
+            if peaks_are_separated(index, &peaks, minimum_distance) {
+                peaks.push(index);
+            }
+            if peaks.len() == 12 {
+                break;
+            }
+        }
+        peaks.sort_unstable();
+        Ok(peaks
+            .into_iter()
+            .map(|peak| {
+                let sustain_threshold = envelope[peak] * 0.2;
+                let left = (0..=peak)
+                    .rev()
+                    .find(|index| envelope[*index] < sustain_threshold)
+                    .unwrap_or(0);
+                let right = (peak..envelope.len())
+                    .find(|index| envelope[*index] < sustain_threshold)
+                    .unwrap_or(envelope.len());
+                (
+                    peak as f32 * window_size as f32 / spec.sample_rate as f32,
+                    (right.saturating_sub(left) * window_size) as f32 / spec.sample_rate as f32,
+                )
+            })
+            .collect())
+    }
+
+    fn peaks_are_separated(index: usize, selected: &[usize], minimum_distance: usize) -> bool {
+        selected
+            .iter()
+            .all(|selected| index.abs_diff(*selected) >= minimum_distance)
+    }
+
     fn report_recording_errors(test_name: &str, errors: Vec<String>) {
         if !errors.is_empty() {
             panic!(
@@ -2152,6 +2302,11 @@ mod tests {
             .expect("recordings directory should exist")
             .map(|entry| entry.expect("recording entry should be readable").path())
             .filter(|path| path.extension().is_some_and(|extension| extension == "wav"))
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("open-"))
+            })
             .collect::<Vec<_>>();
         paths.sort();
 
@@ -2192,14 +2347,24 @@ mod tests {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 if expected_lanes.len() == 1 {
-                    if detected_lanes.len() < 2 {
+                    let plucks = detect_recording_plucks(&path)?;
+                    if plucks.len() != 12 {
                         return Err(format!(
-                            "should contain multiple plucks; detected lanes={detected_lanes:?}"
+                            "should contain exactly 12 plucks; detected {} plucks",
+                            plucks.len()
                         ));
                     }
-                    if !detected_lanes.iter().all(|lane| *lane == expected_lanes[0]) {
+                    let durations = plucks
+                        .iter()
+                        .map(|(_, duration)| *duration)
+                        .collect::<Vec<_>>();
+                    if durations.iter().any(|duration| *duration <= 0.0)
+                        || durations.iter().copied().fold(0.0, f32::max)
+                            - durations.iter().copied().fold(f32::MAX, f32::min)
+                            < 0.1
+                    {
                         return Err(format!(
-                            "changed lanes during a single-string recording: lanes={detected_lanes:?}, pitches={detected_pitches:?}"
+                            "unexpected pluck durations; expected short and long sustain groups, detected={durations:?}"
                         ));
                     }
                 } else {
