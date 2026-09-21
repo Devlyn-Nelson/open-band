@@ -159,7 +159,7 @@ CPAL audio callbacks       MIDI callback
        calibration, notes, scoring, rendering
 ```
 
-Audio callbacks stay small and perform level, onset, and pitch analysis. They send normalized `InstrumentEvent` values to Bevy through a channel. Bevy owns the UI, state transitions, falling notes, scoring, diagnostics, and gameplay timing. The input worker is started from saved settings at launch and is safely stopped and replaced when Input Setup is confirmed.
+Audio callbacks stay real-time safe: they downmix samples and enqueue bounded audio blocks without running DSP or blocking. The dedicated instrument worker owns onset, YIN, and FFT analysis, then sends normalized `InstrumentEvent` values to Bevy through a channel. Bevy owns the UI, state transitions, falling notes, scoring, diagnostics, and gameplay timing. The input worker is started from saved settings at launch and is safely stopped and replaced when Input Setup is confirmed.
 
 ## Source Documentation
 

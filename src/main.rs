@@ -5,7 +5,7 @@ use rustfft::{FftPlanner, num_complex::Complex};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Mutex;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, sync_channel};
 use std::thread;
 use std::time::Duration;
 
@@ -30,6 +30,7 @@ enum AppState {
 
 struct PolyphonicAudioDetector {
     sample_rate: f32,
+    max_pitch_hz: f32,
     processed_samples: usize,
     noise_floor: f32,
     samples: Vec<f32>,
@@ -44,9 +45,10 @@ struct PolyphonicTrack {
 }
 
 impl PolyphonicAudioDetector {
-    fn new(sample_rate: f32) -> Self {
+    fn new(sample_rate: f32, max_pitch_hz: f32) -> Self {
         Self {
             sample_rate,
+            max_pitch_hz,
             processed_samples: 0,
             noise_floor: 0.0,
             samples: Vec::new(),
@@ -66,11 +68,12 @@ impl PolyphonicAudioDetector {
         let level =
             (window.iter().map(|sample| sample * sample).sum::<f32>() / window.len() as f32).sqrt();
         self.noise_floor = self.noise_floor * 0.995 + level * 0.005;
-        let peaks = spectral_peaks(
+        let mut peaks = spectral_peaks(
             &window,
             self.sample_rate,
             (self.noise_floor * 2.5).max(0.008),
         );
+        peaks.retain(|(pitch, _)| *pitch <= self.max_pitch_hz);
         let mut events = Vec::new();
         let mut matched = vec![false; self.tracks.len()];
 
@@ -144,8 +147,9 @@ impl PolyphonicAudioDetector {
 }
 
 fn spectral_peaks(samples: &[f32], sample_rate: f32, threshold: f32) -> Vec<(f32, f32)> {
+    let fft_size = samples.len().next_power_of_two() * 4;
     let mut planner = FftPlanner::new();
-    let fft = planner.plan_fft_forward(samples.len());
+    let fft = planner.plan_fft_forward(fft_size);
     let mut spectrum = samples
         .iter()
         .enumerate()
@@ -154,12 +158,13 @@ fn spectral_peaks(samples: &[f32], sample_rate: f32, threshold: f32) -> Vec<(f32
                 * (1.0 - (std::f32::consts::TAU * index as f32 / (samples.len() - 1) as f32).cos());
             Complex::new(sample * window, 0.0)
         })
+        .chain(std::iter::repeat(Complex::new(0.0, 0.0)).take(fft_size - samples.len()))
         .collect::<Vec<_>>();
     fft.process(&mut spectrum);
-    let minimum_bin = (30.0 * samples.len() as f32 / sample_rate).ceil() as usize;
-    let maximum_bin = (1400.0 * samples.len() as f32 / sample_rate)
+    let minimum_bin = (30.0 * fft_size as f32 / sample_rate).ceil() as usize;
+    let maximum_bin = (1400.0 * fft_size as f32 / sample_rate)
         .floor()
-        .min((samples.len() / 2 - 1) as f32) as usize;
+        .min((fft_size / 2 - 1) as f32) as usize;
     let magnitudes = (minimum_bin..=maximum_bin)
         .map(|bin| spectrum[bin].norm() / samples.len() as f32 * 2.0)
         .collect::<Vec<_>>();
@@ -178,7 +183,7 @@ fn spectral_peaks(samples: &[f32], sample_rate: f32, threshold: f32) -> Vec<(f32
         .take(6)
         .map(|(bin, strength)| {
             (
-                bin as f32 * sample_rate / samples.len() as f32,
+                bin as f32 * sample_rate / fft_size as f32,
                 (strength * 8.0).clamp(0.15, 1.0),
             )
         })
@@ -222,6 +227,13 @@ struct InstrumentStream {
     _thread: Option<thread::JoinHandle<()>>,
     stop_sender: Option<Sender<()>>,
     started: bool,
+}
+
+struct AudioInput {
+    _stream: cpal::Stream,
+    frames: Receiver<Vec<f32>>,
+    detector: AudioDetector,
+    instrument: Instrument,
 }
 
 #[derive(Resource, Default)]
@@ -944,16 +956,34 @@ fn spawn_instrument_thread(
             (bass_instrument, config.audio_devices[1].as_deref()),
             (Instrument::Vocals, config.audio_devices[2].as_deref()),
         ] {
-            match open_audio_input(&host, instrument, device_name, sender.clone()) {
-                Ok(stream) => streams.push(stream),
+            match open_audio_input(&host, instrument, device_name) {
+                Ok(input) => streams.push(input),
                 Err(error) => eprintln!("{instrument:?} input unavailable: {error}"),
             }
         }
 
         let midi_connection = open_midi_input(sender.clone(), config.midi_device.as_deref());
         loop {
+            let mut stopping = false;
+            for input in &mut streams {
+                if stop_receiver.try_recv().is_ok() {
+                    stopping = true;
+                    break;
+                }
+                if let Some(frame) = input.frames.try_iter().last() {
+                    send_detected_events(
+                        &mut input.detector,
+                        frame.into_iter(),
+                        input.instrument,
+                        &sender,
+                    );
+                }
+            }
+            if stopping {
+                break;
+            }
             if stop_receiver
-                .recv_timeout(Duration::from_millis(100))
+                .recv_timeout(Duration::from_millis(10))
                 .is_ok()
             {
                 break;
@@ -973,8 +1003,7 @@ fn open_audio_input(
     host: &cpal::Host,
     instrument: Instrument,
     device_name: Option<&str>,
-    sender: Sender<InstrumentEvent>,
-) -> Result<cpal::Stream, String> {
+) -> Result<AudioInput, String> {
     // Select the requested device and build a callback for its native sample format.
     let device = find_input_device(host, device_name)?;
     let supported = device
@@ -983,6 +1012,7 @@ fn open_audio_input(
     let config = supported.config();
     let channels = config.channels as usize;
     let error_callback = |error| eprintln!("audio input error: {error}");
+    let (frame_sender, frame_receiver) = sync_channel(32);
 
     let stream = match supported.sample_format() {
         cpal::SampleFormat::F32 => build_audio_stream::<f32>(
@@ -990,7 +1020,7 @@ fn open_audio_input(
             &config,
             channels,
             instrument,
-            sender,
+            frame_sender.clone(),
             error_callback,
         ),
         cpal::SampleFormat::I16 => build_audio_stream::<i16>(
@@ -998,7 +1028,7 @@ fn open_audio_input(
             &config,
             channels,
             instrument,
-            sender,
+            frame_sender.clone(),
             error_callback,
         ),
         cpal::SampleFormat::U16 => build_audio_stream::<u16>(
@@ -1006,7 +1036,7 @@ fn open_audio_input(
             &config,
             channels,
             instrument,
-            sender,
+            frame_sender,
             error_callback,
         ),
         format => return Err(format!("unsupported sample format {format:?}")),
@@ -1015,7 +1045,12 @@ fn open_audio_input(
 
     stream.play().map_err(|error| error.to_string())?;
     println!("Listening to {instrument:?} on {device}");
-    Ok(stream)
+    Ok(AudioInput {
+        _stream: stream,
+        frames: frame_receiver,
+        detector: AudioDetector::new(instrument, config.sample_rate as f32),
+        instrument,
+    })
 }
 
 /// Build a typed CPAL callback that converts samples into normalized events.
@@ -1024,26 +1059,29 @@ fn build_audio_stream<T>(
     config: &cpal::StreamConfig,
     channels: usize,
     instrument: Instrument,
-    sender: Sender<InstrumentEvent>,
+    sender: SyncSender<Vec<f32>>,
     error_callback: impl FnMut(cpal::Error) + Send + 'static,
 ) -> Result<cpal::Stream, cpal::Error>
 where
     T: cpal::Sample + cpal::SizedSample,
     f32: cpal::FromSample<T>,
 {
-    // Convert each input frame to mono before onset and pitch analysis.
-    let mut detector = AudioDetector::new(instrument, config.sample_rate as f32);
+    // Keep the real-time callback limited to copying/downmixing audio into a bounded queue.
+    let _ = instrument;
     device.build_input_stream(
         *config,
         move |data: &[T], _| {
-            let mono = data.chunks(channels).map(|frame| {
-                frame
-                    .iter()
-                    .map(|sample| sample.to_sample::<f32>())
-                    .sum::<f32>()
-                    / frame.len().max(1) as f32
-            });
-            send_detected_events(&mut detector, mono, instrument, &sender);
+            let mono = data
+                .chunks(channels)
+                .map(|frame| {
+                    frame
+                        .iter()
+                        .map(|sample| sample.to_sample::<f32>())
+                        .sum::<f32>()
+                        / frame.len().max(1) as f32
+                })
+                .collect::<Vec<_>>();
+            let _ = sender.try_send(mono);
         },
         error_callback,
         None,
@@ -1122,9 +1160,11 @@ impl AudioDetector {
                 sample_rate,
                 ..Default::default()
             }),
-            Instrument::Guitar | Instrument::Bass4 | Instrument::Bass5 => {
-                Self::Poly(PolyphonicAudioDetector::new(sample_rate))
-            }
+            Instrument::Guitar => Self::Poly(PolyphonicAudioDetector::new(sample_rate, 1400.0)),
+            Instrument::Bass4 | Instrument::Bass5 => Self::Mono(AudioOnsetDetector {
+                sample_rate,
+                ..Default::default()
+            }),
         }
     }
 
@@ -1177,7 +1217,7 @@ impl AudioOnsetDetector {
         let ready = self.last_event_sample.map_or(true, |event| {
             self.processed_samples.saturating_sub(event) > (self.sample_rate * 0.12) as usize
         });
-        let minimum_level = (self.noise_floor * 3.0).max(0.015);
+        let minimum_level = (self.noise_floor * 2.5).max(0.005);
         let pitch_changed = self
             .last_pitch_hz
             .zip(pitch_hz)
@@ -1248,7 +1288,7 @@ impl AudioOnsetDetector {
         let Some(pitch_hz) = self.active_pitch_hz else {
             return Vec::new();
         };
-        let minimum_level = (self.noise_floor * 3.0).max(0.015);
+        let minimum_level = (self.noise_floor * 2.5).max(0.005);
         if self.last_level <= minimum_level {
             self.silent_windows += 1;
         } else {
@@ -2099,6 +2139,40 @@ mod tests {
     }
 
     #[test]
+    /// Confirms the bass fundamental estimator covers every five-string open note.
+    fn pitch_estimation_detects_all_five_string_open_notes() {
+        let sample_rate = 44_100.0;
+        for expected in [30.87, 41.20, 55.00, 73.42, 98.00] {
+            let samples = (0..4096)
+                .map(|index| (TAU * expected * index as f32 / sample_rate).sin())
+                .collect::<Vec<_>>();
+            let detected = estimate_pitch(&samples, sample_rate)
+                .expect("each five-string open note should be detected");
+            assert!(
+                (detected - expected).abs() < 1.0,
+                "expected={expected}, detected={detected}"
+            );
+        }
+    }
+
+    #[test]
+    /// Accepts a quiet low-B signal typical of an interface input level.
+    fn quiet_five_string_low_b_onset_is_detected() {
+        let sample_rate = 44_100.0;
+        let samples = (0..4096)
+            .map(|index| 0.01 * (TAU * 30.87 * index as f32 / sample_rate).sin())
+            .collect::<Vec<_>>();
+        let mut detector = AudioOnsetDetector {
+            sample_rate,
+            ..Default::default()
+        };
+        assert!(
+            detector.detect(samples.into_iter()).is_some(),
+            "quiet five-string low B should pass the input gate"
+        );
+    }
+
+    #[test]
     /// Confirms four- and five-string open-note lane assignments.
     fn bass_open_strings_map_to_their_string_lanes() {
         let five_string_open_notes = [30.87, 41.20, 55.00, 73.42, 98.00];
@@ -2161,7 +2235,7 @@ mod tests {
                     + amplitude * 0.8 * (TAU * 164.81 * index as f32 / sample_rate).sin()
             })
         };
-        let mut detector = PolyphonicAudioDetector::new(sample_rate);
+        let mut detector = PolyphonicAudioDetector::new(sample_rate, 1400.0);
         let starts = detector.detect(chord(0.4));
         assert!(
             starts
@@ -2277,6 +2351,91 @@ mod tests {
             .collect())
     }
 
+    #[allow(dead_code)]
+    fn detect_recording_attack_pitches(path: &Path) -> Result<Vec<f32>, String> {
+        let mut reader = hound::WavReader::open(path)
+            .map_err(|error| format!("recording should open: {error}"))?;
+        let spec = reader.spec();
+        let samples = reader
+            .samples::<i32>()
+            .map(|sample| {
+                sample
+                    .map(|sample| sample as f32 / 8_388_608.0)
+                    .map_err(|error| format!("recording samples should decode: {error}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let window_size = 4096;
+        let pitches = detect_recording_plucks(path)?
+            .into_iter()
+            .filter_map(|(time, _)| {
+                let center = (time * spec.sample_rate as f32) as usize;
+                let start = center.saturating_sub(window_size / 2);
+                let end = (start + window_size).min(samples.len());
+                (end - start >= 256)
+                    .then(|| estimate_pitch(&samples[start..end], spec.sample_rate as f32))
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+        Ok(pitches)
+    }
+
+    #[allow(dead_code)]
+    fn detect_recording_open_string_lanes(path: &Path) -> Result<Vec<usize>, String> {
+        let mut reader = hound::WavReader::open(path)
+            .map_err(|error| format!("recording should open: {error}"))?;
+        let spec = reader.spec();
+        let samples = reader
+            .samples::<i32>()
+            .map(|sample| {
+                sample
+                    .map(|sample| sample as f32 / 8_388_608.0)
+                    .map_err(|error| format!("recording samples should decode: {error}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let targets = [30.87, 41.20, 55.00, 73.42, 98.00];
+        let window_size = 4096;
+        let hop_size = 2048;
+        let mut lanes = Vec::new();
+        let mut previous_energies = [0.0; 5];
+        for window in samples.windows(window_size).step_by(hop_size) {
+            let level = (window.iter().map(|sample| sample * sample).sum::<f32>()
+                / window.len() as f32)
+                .sqrt();
+            if level < 0.005 {
+                continue;
+            }
+            let energies = targets.map(|frequency| {
+                let (real, imaginary) = window.iter().enumerate().fold(
+                    (0.0, 0.0),
+                    |(real, imaginary), (index, sample)| {
+                        let phase = std::f32::consts::TAU * frequency * index as f32
+                            / spec.sample_rate as f32;
+                        (
+                            real + sample * phase.cos(),
+                            imaginary + sample * phase.sin(),
+                        )
+                    },
+                );
+                real.mul_add(real, imaginary * imaginary).sqrt()
+            });
+            let increases: [f32; 5] =
+                std::array::from_fn(|index| energies[index] - previous_energies[index]);
+            previous_energies = energies;
+            if let Some((lane, increase)) = increases
+                .into_iter()
+                .enumerate()
+                .max_by(|(_, left), (_, right)| left.total_cmp(right))
+            {
+                if increase > level * window_size as f32 * 0.01 {
+                    if lanes.last().copied() != Some(lane) {
+                        lanes.push(lane);
+                    }
+                }
+            }
+        }
+        Ok(lanes)
+    }
+
     fn peaks_are_separated(index: usize, selected: &[usize], minimum_distance: usize) -> bool {
         selected
             .iter()
@@ -2330,11 +2489,6 @@ mod tests {
                     .ok_or_else(|| {
                         "recording should use the open-<strings>-<suffix>.wav format".to_string()
                     })?;
-                let detected_pitches = detect_recording_pitches(&path)?;
-                let mut detected_lanes = detected_pitches
-                    .iter()
-                    .map(|pitch| pitch_to_lane(Instrument::Bass5, *pitch))
-                    .collect::<Vec<_>>();
                 let expected_lanes = expected_strings
                     .chars()
                     .map(|string| match string {
@@ -2368,6 +2522,11 @@ mod tests {
                         ));
                     }
                 } else {
+                    let detected_pitches = detect_recording_pitches(&path)?;
+                    let mut detected_lanes = detected_pitches
+                        .iter()
+                        .map(|pitch| pitch_to_lane(Instrument::Bass5, *pitch))
+                        .collect::<Vec<_>>();
                     detected_lanes.dedup();
                     if detected_lanes != expected_lanes {
                         return Err(format!(
