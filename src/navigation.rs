@@ -99,25 +99,6 @@ pub(crate) fn instrument_navigation_command(
     latency: &mut Option<ResMut<LatencyCalibration>>,
     time: &Time,
 ) {
-    if matches!(state, AppState::LatencyCalibration) {
-        match key {
-            KeyCode::ArrowUp | KeyCode::ArrowDown => {
-                record_latency_tap(latency, time);
-            }
-            KeyCode::Escape => next_state.set(AppState::Setup),
-            KeyCode::Enter => {
-                if let Some(latency) = latency.as_ref() {
-                    if latency.attempts > 0 {
-                        settings.latency_ms = latency.best_ms;
-                        save_settings(settings);
-                        next_state.set(AppState::Setup);
-                    }
-                }
-            }
-            _ => {}
-        }
-        return;
-    }
     match state {
         AppState::Home => match key {
             KeyCode::ArrowUp => menu.home_selected = menu.home_selected.checked_sub(1).unwrap_or(2),
@@ -168,12 +149,21 @@ pub(crate) fn instrument_navigation_command(
             }
         }
         AppState::LatencyCalibration => {
-            if matches!(key, KeyCode::Escape) {
-                next_state.set(AppState::Setup);
-            } else if matches!(key, KeyCode::Enter) {
-                if latency.as_ref().is_some_and(|latency| latency.attempts > 0) {
-                    next_state.set(AppState::Setup);
+            match key {
+                KeyCode::ArrowUp | KeyCode::ArrowDown => {
+                    record_latency_tap(latency, time);
                 }
+                KeyCode::Escape => next_state.set(AppState::Setup),
+                KeyCode::Enter => {
+                    if let Some(latency) = latency.as_ref() {
+                        if latency.attempts > 0 {
+                            settings.latency_ms = latency.best_ms;
+                            save_settings(settings);
+                            next_state.set(AppState::Setup);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         AppState::ChartReview => match key {
