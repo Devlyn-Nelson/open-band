@@ -121,30 +121,51 @@ The gameplay prototype also supports `A S D F G` as lane controls.
 
 ## Chart Format
 
-Charts are JSON files with song metadata and timed notes. The included starter chart is
+Charts are versioned JSON songs with a shared timeline and one or more instrument tracks. At startup, Open Band loads every `*.json` file in the working directory's `charts/` folder in sorted filename order. Invalid files are reported and skipped. If no charts can be loaded, the embedded starter chart is used as a fallback. The included starter chart is
 `charts/open-strings.json`:
 
 ```json
 {
+  "version": 1,
   "title": "Open Strings Study",
   "bpm": 90.0,
-  "instrument": "bass5",
-  "notes": [
+  "time_signature": [4, 4],
+  "tracks": [
     {
-      "start": 1.0,
-      "duration": 0.5,
-      "string": 0,
-      "fret": 0,
-      "note": "B0",
-      "pitch_hz": 30.87
+      "name": "Bass",
+      "instrument": "bass5",
+      "tuning": "standard_bass_5",
+      "notes": [{
+        "start_beat": 1.5,
+        "duration_beats": 0.75,
+        "midi_note": 23,
+        "preferred_string": 0
+      }]
+    },
+    {
+      "name": "Lead Vocal",
+      "instrument": "vocals",
+      "phrases": [{
+        "start_beat": 4.0,
+        "duration_beats": 2.0,
+        "text": "Hello",
+        "notes": [{ "start_beat": 4.0, "duration_beats": 2.0, "midi_note": 60 }]
+      }]
     }
   ]
 }
 ```
 
-`start` and `duration` are seconds from the chart clock. Bass strings are ordered
-`0=B`, `1=E`, `2=A`, `3=D`, `4=G`. The current label mode is configured by
-`CHART_NOTE_DISPLAY` in `src/main.rs` and supports `Fret`, `Note`, or `Both`.
+`start_beat` and `duration_beats` are musical beats from the song timeline. Each event
+must define either `midi_note` or a readable `note` such as `C4`; both forms are
+normalized to the internal MIDI representation during parsing. If both are supplied,
+they must agree. Note names and frequencies are derived at runtime. For fretted
+instruments, `tuning` and optional `preferred_string` are used to derive a playable
+string/fret position. The current label mode is configured by `CHART_NOTE_DISPLAY` in
+`src/domain.rs` and supports `Fret`, `Note`, or `Both`.
+
+Songs can contain bass, guitar, drum, melodic, and vocal tracks. Vocal tracks use lyric
+phrases with nested pitch targets, allowing lyrics and melody to share the same timeline.
 
 Press `F3` during the live session to show or hide the input debug window. For bass, it reports the estimated frequency, nearest string, note, and cents offset.
 The panel also reports signal level, adaptive noise floor, lane, and event count. The noise-floor value is the detector's current estimate of the background input level.

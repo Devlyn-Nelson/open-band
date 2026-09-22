@@ -1,7 +1,7 @@
 use super::{
     AudioDetector, AudioOnsetDetector, Chart, DeviceChoice, Instrument, NotePhase,
-    PolyphonicAudioDetector, bass_string_lane, cents_error, estimate_pitch, pitch_to_lane,
-    selected_device_index,
+    PolyphonicAudioDetector, bass_string_lane, cents_error, estimate_pitch, load_charts,
+    pitch_to_lane, selected_device_index,
 };
 use std::f32::consts::TAU;
 use std::path::Path;
@@ -172,14 +172,74 @@ fn instrument_navigation_string_mapping() {
 fn built_in_chart_has_playable_notes() {
     let chart: Chart =
         serde_json::from_str(super::OPEN_STRINGS_CHART).expect("built-in chart should parse");
-    assert_eq!(chart.instrument, "bass5");
-    assert_eq!(chart.notes.len(), 10);
+    assert_eq!(chart.version, 1);
+    assert_eq!(chart.tracks.len(), 1);
+    assert_eq!(chart.tracks[0].instrument, "bass5");
+    assert_eq!(chart.tracks[0].tuning.as_deref(), Some("standard_bass_5"));
+    let notes = chart.bass_notes();
+    assert_eq!(notes.len(), 10);
+    assert_eq!(notes[0].note, "B0");
+    assert_eq!(notes[5].note, "D1");
     assert!(
-        chart
-            .notes
+        notes
             .windows(2)
             .all(|notes| notes[0].start < notes[1].start)
     );
+}
+
+#[test]
+fn chart_directory_loads_all_valid_charts() {
+    let charts = load_charts();
+    assert!(
+        charts.len() >= 2,
+        "expected the built-in and developer charts"
+    );
+    assert!(
+        charts
+            .iter()
+            .any(|chart| chart.title == "Open Strings Study")
+    );
+    assert!(charts.iter().any(|chart| chart.title == "Devs Test Song"));
+}
+
+#[test]
+fn chart_supports_multiple_instrument_tracks_and_vocal_phrases() {
+    let chart: Chart = serde_json::from_str(
+                r#"
+                {
+                    "version": 1,
+                    "title": "Band Test",
+                    "bpm": 120.0,
+                    "time_signature": [4, 4],
+                    "tracks": [
+                        {
+                            "name": "Bass",
+                            "instrument": "bass5",
+                            "tuning": "standard_bass_5",
+                            "notes": [{ "start_beat": 1.0, "duration_beats": 1.0, "midi_note": 23 }]
+                        },
+                        {
+                            "name": "Lead Vocal",
+                            "instrument": "vocals",
+                            "phrases": [{
+                                "start_beat": 2.0,
+                                "duration_beats": 2.0,
+                                "text": "Hello",
+                                "notes": [{ "start_beat": 2.0, "duration_beats": 2.0, "note": "C4" }]
+                            }]
+                        }
+                    ]
+                }
+                "#,
+        )
+        .expect("multi-track chart should parse");
+
+    assert_eq!(chart.time_signature, [4, 4]);
+    assert_eq!(chart.tracks.len(), 2);
+    assert_eq!(chart.tracks[1].phrases[0].text, "Hello");
+    assert_eq!(chart.tracks[1].phrases[0].notes[0].midi_note, 60);
+    assert_eq!(chart.total_beats(), 4.0);
+    assert_eq!(chart.bass_notes()[0].note, "B0");
 }
 
 #[test]

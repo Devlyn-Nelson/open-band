@@ -1,11 +1,42 @@
 use super::*;
 
+pub(crate) fn load_charts() -> Vec<Chart> {
+    let mut paths = std::fs::read_dir("charts")
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+
+    let mut charts = Vec::new();
+    for path in paths {
+        match std::fs::read_to_string(&path)
+            .map_err(|error| error.to_string())
+            .and_then(|contents| {
+                serde_json::from_str::<Chart>(&contents).map_err(|error| error.to_string())
+            }) {
+            Ok(chart) => charts.push(chart),
+            Err(error) => eprintln!("Could not load chart {}: {error}", path.display()),
+        }
+    }
+    if charts.is_empty() {
+        match serde_json::from_str(OPEN_STRINGS_CHART) {
+            Ok(chart) => charts.push(chart),
+            Err(error) => eprintln!("Could not load embedded starter chart: {error}"),
+        }
+    }
+    charts
+}
+
 pub(crate) fn setup_song_menu(mut commands: Commands) {
-    let chart: Chart =
-        serde_json::from_str(OPEN_STRINGS_CHART).expect("built-in chart should contain valid JSON");
     commands.insert_resource(SongMenuSelection {
         selected: 0,
-        charts: vec![chart],
+        charts: load_charts(),
     });
     commands.spawn((Camera2d, ChartEntity));
     commands.spawn((
@@ -63,12 +94,26 @@ pub(crate) fn song_menu_display(
     let Ok(mut text) = text.single_mut() else {
         return;
     };
-    let chart = menu.charts.get(menu.selected);
+    let entries = if menu.charts.is_empty() {
+        "NO CHARTS FOUND".into()
+    } else {
+        menu.charts
+            .iter()
+            .enumerate()
+            .map(|(index, chart)| {
+                format!(
+                    "{} [{}] {} ({:.0} BPM)",
+                    if index == menu.selected { ">" } else { " " },
+                    index + 1,
+                    chart.title,
+                    chart.bpm
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     *text = Text::new(format!(
-        "OPEN BAND  //  SONGS\n\n{} [1] {} ({:.0} BPM)\n\nUp/Down: select     Enter: play     Esc: home\n\nNote display: {:?}",
-        if menu.selected == 0 { ">" } else { " " },
-        chart.map_or("NO CHARTS", |chart| chart.title.as_str()),
-        chart.map_or(0.0, |chart| chart.bpm),
+        "OPEN BAND  //  SONGS\n\n{entries}\n\nUp/Down: select     Enter: play     Esc: home\n\nNote display: {:?}",
         CHART_NOTE_DISPLAY,
     ));
 }
@@ -90,12 +135,9 @@ pub(crate) fn setup_chart_countdown(
     let chart = menu
         .and_then(|menu| menu.charts.get(menu.selected).cloned())
         .unwrap_or_else(|| serde_json::from_str(OPEN_STRINGS_CHART).expect("built-in chart JSON"));
-    let total_notes = chart.notes.len();
-    let sustain_expected = chart
-        .notes
-        .iter()
-        .filter(|note| note.duration > 0.0)
-        .count();
+    let notes = chart.bass_notes();
+    let total_notes = notes.len();
+    let sustain_expected = notes.iter().filter(|note| note.duration > 0.0).count();
     commands.insert_resource(ChartSession {
         chart,
         started_at: time.elapsed_secs() + 5.0,
@@ -137,6 +179,7 @@ pub(crate) fn chart_countdown_system(
 }
 
 pub(crate) fn setup_chart_gameplay(mut commands: Commands, session: Res<ChartSession>) {
+    let notes = session.chart.bass_notes();
     commands.spawn((Camera2d, ChartEntity));
     commands.spawn((
         Text2d::new(""),
@@ -152,7 +195,9 @@ pub(crate) fn setup_chart_gameplay(mut commands: Commands, session: Res<ChartSes
     commands.spawn((
         Text2d::new(format!(
             "{}  //  {}  //  {:.0} BPM",
-            session.chart.title, session.chart.instrument, session.chart.bpm
+            session.chart.title,
+            session.chart.first_instrument(),
+            session.chart.bpm
         )),
         TextFont {
             font_size: FontSize::Px(26.0),
@@ -194,7 +239,7 @@ pub(crate) fn setup_chart_gameplay(mut commands: Commands, session: Res<ChartSes
         Transform::from_xyz(0.0, CHART_HIT_LINE_Y, 1.0),
         ChartEntity,
     ));
-    for note in &session.chart.notes {
+    for note in &notes {
         let x = -360.0 + note.string.min(4) as f32 * 180.0;
         let label = match CHART_NOTE_DISPLAY {
             NoteDisplayMode::Fret => format!("{}", note.fret),
@@ -245,6 +290,7 @@ pub(crate) fn chart_gameplay_system(
     mut feedback_text: Query<&mut Text2d, With<ChartFeedbackText>>,
     mut notes: Query<(Entity, &mut ChartNoteVisual, &mut Transform, &mut Sprite)>,
 ) {
+    let chart_notes = session.chart.bass_notes();
     let elapsed = time.elapsed_secs() - session.started_at;
     let mut detected_events = Vec::new();
     if let Ok(events) = stream.events.lock() {
@@ -330,9 +376,7 @@ pub(crate) fn chart_gameplay_system(
         sprite.custom_size = Some(Vec2::new(108.0, height));
         transform.translation.y = head_y + height * 0.5;
     }
-    let chart_end = session
-        .chart
-        .notes
+    let chart_end = chart_notes
         .iter()
         .map(|note| note.start + note.duration)
         .fold(0.0, f32::max);
@@ -412,7 +456,7 @@ pub(crate) fn chart_review_display(
         "OPEN BAND  //  SONG REVIEW\n\n{}\n\nCORRECT HITS  {:>3} / {:<3}\nSUSTAIN SUCCESS {:>5.1}%\nAVG ATTACK OFFSET {:>+6.1} ms\n\nEnter: songs     Esc: home",
         session.chart.title,
         stats.correct_hits,
-        stats.total_notes.max(session.chart.notes.len()),
+        stats.total_notes.max(session.chart.bass_notes().len()),
         sustain_percent,
         average_offset,
     ));
