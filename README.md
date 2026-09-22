@@ -11,7 +11,8 @@ The current project is an input and gameplay prototype. It proves the real-time 
 - CPAL audio input for any number of configured `Strings`/`Voice` instrument slots:
   - Electric guitar or bass through a 1/4-inch-to-USB audio interface.
   - Vocal microphones.
-- Any number of `Strings` slots with a configurable string count and detector profile
+- Any number of `Strings` slots, each with a configured tuning (loaded from the
+  `tunings/` library) and a detector profile
   (polyphonic for chords, per-string for bass-style physical strings).
 - MIDI input for electronic drums, with any number of `Percussion` slots.
 - Audio onset detection with normalized YIN-style pitch estimation.
@@ -80,7 +81,7 @@ are supported (e.g. two `Strings` slots for guitar and bass).
 | `N` | Add a new slot (defaults to `Strings`) |
 | `X` | Remove the focused slot |
 | `K` | Cycle the focused slot's kind (`Strings` -> `Percussion` -> `Voice`) |
-| `[` / `]` | Adjust the focused `Strings` slot's string count |
+| `[` / `]` | Cycle the focused `Strings` slot's tuning (from `tunings/`) or `Percussion` slot's kit (from `kits/`) |
 | `P` | Toggle the focused `Strings` slot's detector profile (polyphonic vs. per-string) |
 | `Enter` | Continue to calibration |
 
@@ -121,7 +122,7 @@ Each setup tool returns to Set Up when accepted or exited. Returning to Input Se
 ## Saved Settings
 
 When Input Setup is accepted, Open Band saves the full list of configured instrument
-slots (kind, device, string count, detector profile). Audio settings use CPAL device IDs
+slots (kind, device, tuning, detector profile). Audio settings use CPAL device IDs
 such as `alsa:...`; MIDI settings use a deterministic `midi:<index>` port key. The setup
 screen shows both the friendly device name and concrete identifier. The settings file is
 created in the working directory at `open-band-settings/settings.json` and is loaded on
@@ -215,8 +216,55 @@ Saved device identifiers are preferred on later launches. MIDI requires an avail
 input port. The worker thread reports unavailable devices in the terminal and continues
 with whichever inputs opened successfully.
 
+## Tuning Library
+
+`Strings` slots select a tuning (used for real per-string lane assignment, the live
+per-string tuner, and menu navigation) from the `tunings/` directory: one JSON file per
+tuning, each shaped like:
+
+```json
+{ "name": "5-String Bass (BEADG)", "strings": ["B0", "E1", "A1", "D2", "G2"] }
+```
+
+`strings` is ordered low string first, with octave-qualified note names. At startup, Open
+Band loads every `*.json` file in the working directory's `tunings/` folder in sorted
+filename order; invalid files are reported and skipped. If the directory is missing or
+empty, four embedded defaults are used (4-string bass, 5-string bass, standard guitar,
+7-string guitar). Selecting a tuning in Input Setup resolves and copies it into the saved
+`InstrumentSlot`, so a saved settings file never depends on the `tunings/` directory still
+existing or being unchanged. Add a new tuning by dropping another `*.json` file (any
+filename) into `tunings/`.
 
 The detector accepts quieter bass plucks than the original fixed-level gate. The bass should still be connected through an audio interface or preamp that presents a clean, non-clipped input signal; an inline amp is only needed if the hardware signal is still too weak or noisy at the interface input.
+
+## Kit Library
+
+`Percussion` slots select a kit (used for real MIDI-note-to-lane mapping instead of a
+hardcoded table) from the `kits/` directory: one JSON file per kit, shaped like:
+
+```json
+{
+  "name": "Standard Rock Kit",
+  "lanes": 4,
+  "pieces": [
+    { "name": "kick", "trigger": "midi:36", "lane_span": "yellow" },
+    { "name": "snare", "trigger": "midi:38", "lane": 0, "symbol": "tom" },
+    { "name": "tom1", "trigger": "midi:50", "lane": 1, "symbol": "tom" },
+    { "name": "hihat", "trigger": "midi:42", "lane": 1, "symbol": "hihat" }
+  ]
+}
+```
+
+Each piece has a `trigger` (`midi:<note>`, the raw MIDI note number that fires it) and
+either a `lane` (0-based, shared with other pieces on the same lane and distinguished by
+`symbol`) or a `lane_span` color (a piece that isn't pinned to one lane, e.g. a kick). At
+startup, Open Band loads every `*.json` file in the working directory's `kits/` folder in
+sorted filename order; invalid files are reported and skipped. If the directory is
+missing or empty, an embedded "Standard Rock Kit" (kick, snare, 3 toms, hi-hat, crash,
+ride across 4 lanes) is used. Selecting a kit in Input Setup resolves and copies it into
+the saved `InstrumentSlot`, so a saved settings file never depends on the `kits/`
+directory still existing or being unchanged. Add a new kit by dropping another `*.json`
+file (any filename) into `kits/`.
 
 ## Architecture
 

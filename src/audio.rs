@@ -133,8 +133,9 @@ pub(crate) fn estimate_pitch_with_confidence(
         .then_some((pitch_hz, confidence))
 }
 
-/// Convert an instrument pitch into its gameplay lane.
-pub(crate) fn pitch_to_lane(instrument: Instrument, pitch_hz: f32) -> usize {
+/// Convert an instrument pitch into its gameplay lane. `open_frequencies` is the
+/// instrument's actual configured tuning (ignored for `Percussion`/`Voice`).
+pub(crate) fn pitch_to_lane(instrument: Instrument, open_frequencies: &[f32], pitch_hz: f32) -> usize {
     match instrument.kind {
         InstrumentKind::Percussion => 0,
         InstrumentKind::Voice => {
@@ -142,25 +143,14 @@ pub(crate) fn pitch_to_lane(instrument: Instrument, pitch_hz: f32) -> usize {
             let normalized = ((pitch_hz / low).ln() / (high / low).ln()).clamp(0.0, 0.999);
             (normalized * LANES as f32) as usize
         }
-        InstrumentKind::Strings => string_lane(instrument.strings, pitch_hz),
+        InstrumentKind::Strings => string_lane(open_frequencies, pitch_hz),
     }
 }
 
-/// Standard open-string frequencies used for lane assignment, chosen by string count.
-/// Only a lane-assignment default (menu navigation, debug window); chart gameplay uses the
-/// chart's own embedded tuning instead.
-pub(crate) fn standard_open_frequencies(strings: u8) -> Vec<f32> {
-    match strings {
-        5 => vec![30.87, 41.20, 55.00, 73.42, 98.00],
-        6 => vec![82.41, 110.00, 146.83, 196.00, 246.94, 329.63],
-        _ => vec![41.20, 55.00, 73.42, 98.00],
-    }
-}
-
-/// Map a string-instrument pitch to the nearest open-string lane.
-pub(crate) fn string_lane(strings: u8, pitch_hz: f32) -> usize {
-    let open = standard_open_frequencies(strings);
-    open.iter()
+/// Map a string-instrument pitch to the nearest lane in its actual configured tuning.
+pub(crate) fn string_lane(open_frequencies: &[f32], pitch_hz: f32) -> usize {
+    open_frequencies
+        .iter()
         .enumerate()
         .min_by(|(_, left), (_, right)| {
             (pitch_hz / **left).ln().abs().total_cmp(&(pitch_hz / **right).ln().abs())

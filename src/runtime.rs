@@ -1,4 +1,4 @@
-use super::{Instrument, InstrumentKind};
+use super::{Instrument, InstrumentKind, Kit, NamedKit, NamedTuning, Tuning};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -41,9 +41,16 @@ pub(crate) struct InstrumentSlot {
     /// Stable CPAL device id (`Strings`/`Voice`) or `midi:<index>` port key (`Percussion`).
     #[serde(default)]
     pub(crate) device: Option<String>,
-    /// String count; only meaningful when `kind` is `Strings`.
+    /// The configured tuning; only meaningful when `kind` is `Strings`. Resolved and
+    /// copied from the `tunings/` library on selection, so this never depends on the
+    /// library still existing on disk once saved.
     #[serde(default)]
-    pub(crate) strings: u8,
+    pub(crate) tuning: Option<Tuning>,
+    /// The configured kit; only meaningful when `kind` is `Percussion`. Resolved and
+    /// copied from the `kits/` library on selection, so this never depends on the library
+    /// still existing on disk once saved.
+    #[serde(default)]
+    pub(crate) kit: Option<Kit>,
     /// Only meaningful when `kind` is `Strings`.
     #[serde(default = "default_detector_profile")]
     pub(crate) detector: DetectorProfile,
@@ -59,13 +66,22 @@ impl InstrumentSlot {
             InstrumentKind::Strings => Self {
                 kind,
                 device: None,
-                strings: 4,
+                tuning: Some(Tuning::default()),
+                kit: None,
                 detector: DetectorProfile::PerString,
             },
-            InstrumentKind::Percussion | InstrumentKind::Voice => Self {
+            InstrumentKind::Percussion => Self {
                 kind,
                 device: None,
-                strings: 0,
+                tuning: None,
+                kit: Some(Kit::default()),
+                detector: DetectorProfile::PerString,
+            },
+            InstrumentKind::Voice => Self {
+                kind,
+                device: None,
+                tuning: None,
+                kit: None,
                 detector: DetectorProfile::PerString,
             },
         }
@@ -73,10 +89,30 @@ impl InstrumentSlot {
 
     pub(crate) fn label(&self) -> String {
         match self.kind {
-            InstrumentKind::Strings => format!("STRINGS ({}-string)", self.strings),
-            InstrumentKind::Percussion => "PERCUSSION (MIDI)".into(),
+            InstrumentKind::Strings => {
+                let tuning = self.tuning.clone().unwrap_or_default();
+                format!("STRINGS ({})", tuning.strings.join("-"))
+            }
+            InstrumentKind::Percussion => {
+                let kit = self.kit.clone().unwrap_or_default();
+                format!("PERCUSSION (MIDI, {} pieces)", kit.pieces.len())
+            }
             InstrumentKind::Voice => "VOICE".into(),
         }
+    }
+
+    /// The real open-string frequencies for this slot's tuning, falling back to a
+    /// default 4-string tuning if none is configured or it fails to parse.
+    pub(crate) fn open_frequencies(&self) -> Vec<f32> {
+        self.tuning
+            .as_ref()
+            .and_then(|tuning| tuning.open_frequencies().ok())
+            .unwrap_or_else(|| Tuning::default().open_frequencies().expect("default tuning parses"))
+    }
+
+    /// This slot's configured kit, falling back to the default kit if none is configured.
+    pub(crate) fn kit_or_default(&self) -> Kit {
+        self.kit.clone().unwrap_or_default()
     }
 }
 
@@ -85,6 +121,8 @@ impl InstrumentSlot {
 pub(crate) struct DeviceSelection {
     pub(crate) audio_devices: Vec<DeviceChoice>,
     pub(crate) midi_devices: Vec<DeviceChoice>,
+    pub(crate) tuning_library: Vec<NamedTuning>,
+    pub(crate) kit_library: Vec<NamedKit>,
     pub(crate) slots: Vec<InstrumentSlot>,
     pub(crate) focus: usize,
 }
@@ -95,6 +133,29 @@ impl DeviceSelection {
         match kind {
             InstrumentKind::Percussion => &self.midi_devices,
             InstrumentKind::Strings | InstrumentKind::Voice => &self.audio_devices,
+        }
+    }
+
+    /// The library preset name matching a slot's configured tuning/kit, if any (a slot
+    /// loaded from an older settings file, or with a hand-edited tuning/kit, may not
+    /// match a current library entry).
+    pub(crate) fn preset_name_for(&self, slot: &InstrumentSlot) -> Option<&str> {
+        match slot.kind {
+            InstrumentKind::Strings => {
+                let tuning = slot.tuning.as_ref()?;
+                self.tuning_library
+                    .iter()
+                    .find(|named| named.strings == tuning.strings)
+                    .map(|named| named.name.as_str())
+            }
+            InstrumentKind::Percussion => {
+                let kit = slot.kit.as_ref()?;
+                self.kit_library
+                    .iter()
+                    .find(|named| named.lanes == kit.lanes && named.pieces == kit.pieces)
+                    .map(|named| named.name.as_str())
+            }
+            InstrumentKind::Voice => None,
         }
     }
 }
@@ -184,6 +245,9 @@ pub(crate) struct GameplayEntity;
 /// Latest event values shown in the live-session debug window.
 pub(crate) struct DebugInputData {
     pub(crate) instrument: Option<Instrument>,
+    /// The current instrument's real configured open-string frequencies, for the debug
+    /// window's per-string breakdown (empty for non-`Strings` kinds).
+    pub(crate) open_frequencies: Vec<f32>,
     pub(crate) pitch_hz: Option<f32>,
     pub(crate) lane: Option<usize>,
     pub(crate) strength: f32,

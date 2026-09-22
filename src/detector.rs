@@ -173,7 +173,7 @@ pub(crate) struct AudioDetector(AudioDetectorKind);
 impl AudioDetector {
     pub(crate) fn new(
         kind: InstrumentKind,
-        strings: u8,
+        open_frequencies: &[f32],
         profile: DetectorProfile,
         sample_rate: f32,
     ) -> Self {
@@ -191,9 +191,8 @@ impl AudioDetector {
                     PolyphonicAudioDetector::new(sample_rate, 1400.0),
                 )),
                 DetectorProfile::PerString => Self(AudioDetectorKind::Bass(BassDetector::new(
-                    strings,
+                    open_frequencies.to_vec(),
                     sample_rate,
-                    standard_open_frequencies(strings),
                 ))),
             },
         }
@@ -209,22 +208,22 @@ impl AudioDetector {
 }
 
 struct BassDetector {
-    strings: u8,
+    open_frequencies: Vec<f32>,
     mono: AudioOnsetDetector,
     strings_detector: BassStringDetector,
 }
 
 impl BassDetector {
-    fn new(strings: u8, sample_rate: f32, targets: Vec<f32>) -> Self {
+    fn new(open_frequencies: Vec<f32>, sample_rate: f32) -> Self {
         Self {
-            strings,
             mono: AudioOnsetDetector {
                 sample_rate,
                 min_pitch_hz: 30.0,
                 max_pitch_hz: 500.0,
                 ..Default::default()
             },
-            strings_detector: BassStringDetector::new(sample_rate, targets),
+            strings_detector: BassStringDetector::new(sample_rate, open_frequencies.clone()),
+            open_frequencies,
         }
     }
 
@@ -234,10 +233,10 @@ impl BassDetector {
         let mono_lanes = events
             .iter()
             .filter(|event| event.phase == NotePhase::Started)
-            .map(|event| string_lane(self.strings, event.pitch_hz))
+            .map(|event| string_lane(&self.open_frequencies, event.pitch_hz))
             .collect::<Vec<_>>();
         for note in self.strings_detector.detect(samples.into_iter()) {
-            if !mono_lanes.contains(&string_lane(self.strings, note.pitch_hz)) {
+            if !mono_lanes.contains(&string_lane(&self.open_frequencies, note.pitch_hz)) {
                 events.push(note);
             }
         }

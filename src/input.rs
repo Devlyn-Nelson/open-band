@@ -1,6 +1,6 @@
 use super::{
     AudioDetector, DetectorProfile, InputConfig, Instrument, InstrumentEvent, InstrumentKind,
-    InstrumentSlot, NotePhase, RECORDING_ENVIRONMENT_VARIABLE, pitch_to_lane,
+    InstrumentSlot, Kit, LANES, NotePhase, RECORDING_ENVIRONMENT_VARIABLE, pitch_to_lane,
 };
 use bevy::prelude::*;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -26,6 +26,7 @@ pub(crate) struct AudioInput {
     pub(crate) frames: Receiver<Vec<f32>>,
     pub(crate) detector: AudioDetector,
     pub(crate) instrument: Instrument,
+    pub(crate) open_frequencies: Vec<f32>,
 }
 
 /// Open configured audio and MIDI inputs on a dedicated worker thread.
@@ -62,9 +63,12 @@ pub(crate) fn spawn_instrument_thread(
                     }
                 }
                 InstrumentKind::Percussion => {
-                    if let Some(connection) =
-                        open_midi_input(sender.clone(), index, slot.device.as_deref())
-                    {
+                    if let Some(connection) = open_midi_input(
+                        sender.clone(),
+                        index,
+                        slot.kit_or_default(),
+                        slot.device.as_deref(),
+                    ) {
                         midi_connections.push(connection);
                     } else {
                         eprintln!("slot {index} (Percussion) MIDI input unavailable");
@@ -91,6 +95,7 @@ pub(crate) fn spawn_instrument_thread(
                         &mut input.detector,
                         frame.into_iter(),
                         input.instrument,
+                        &input.open_frequencies,
                         &sender,
                     );
                 }
@@ -120,10 +125,11 @@ pub(crate) fn spawn_instrument_thread(
 
 /// Open one CPAL input and attach the onset/pitch callback.
 fn open_audio_input(host: &cpal::Host, slot_index: usize, slot: &InstrumentSlot) -> Result<AudioInput, String> {
+    let open_frequencies = slot.open_frequencies();
     let instrument = Instrument {
         slot: slot_index,
         kind: slot.kind,
-        strings: slot.strings,
+        strings: open_frequencies.len() as u8,
     };
     let device = find_input_device(host, slot.device.as_deref())?;
     let supported = device
@@ -153,8 +159,9 @@ fn open_audio_input(host: &cpal::Host, slot_index: usize, slot: &InstrumentSlot)
     Ok(AudioInput {
         _stream: stream,
         frames: frame_receiver,
-        detector: AudioDetector::new(slot.kind, slot.strings, slot.detector, config.sample_rate as f32),
+        detector: AudioDetector::new(slot.kind, &open_frequencies, slot.detector, config.sample_rate as f32),
         instrument,
+        open_frequencies,
     })
 }
 
@@ -198,16 +205,21 @@ fn run_recording_input(
     sender: Sender<InstrumentEvent>,
     stop_receiver: Receiver<()>,
 ) {
+    let open_frequencies = slot.open_frequencies();
     let instrument = Instrument {
         slot: slot_index,
         kind: slot.kind,
-        strings: slot.strings,
+        strings: open_frequencies.len() as u8,
     };
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
         let mut reader = hound::WavReader::open(path)?;
         let spec = reader.spec();
-        let mut detector =
-            AudioDetector::new(slot.kind, slot.strings, slot.detector, spec.sample_rate as f32);
+        let mut detector = AudioDetector::new(
+            slot.kind,
+            &open_frequencies,
+            slot.detector,
+            spec.sample_rate as f32,
+        );
         for sample in reader.samples::<i32>() {
             if stop_receiver.try_recv().is_ok() {
                 return Ok(());
@@ -216,6 +228,7 @@ fn run_recording_input(
                 &mut detector,
                 std::iter::once(sample? as f32 / 8_388_608.0),
                 instrument,
+                &open_frequencies,
                 &sender,
             );
         }
@@ -231,12 +244,13 @@ fn send_detected_events(
     detector: &mut AudioDetector,
     samples: impl Iterator<Item = f32>,
     instrument: Instrument,
+    open_frequencies: &[f32],
     sender: &Sender<InstrumentEvent>,
 ) {
     for detected in detector.detect(samples) {
         let _ = sender.send(InstrumentEvent {
             instrument,
-            lane: pitch_to_lane(instrument, detected.pitch_hz),
+            lane: pitch_to_lane(instrument, open_frequencies, detected.pitch_hz),
             strength: detected.strength,
             pitch_hz: Some(detected.pitch_hz),
             noise_floor: detected.noise_floor,
@@ -270,6 +284,7 @@ fn find_input_device(host: &cpal::Host, requested: Option<&str>) -> Result<cpal:
 fn open_midi_input(
     sender: Sender<InstrumentEvent>,
     slot_index: usize,
+    kit: Kit,
     requested: Option<&str>,
 ) -> Option<midir::MidiInputConnection<()>> {
     let mut input = MidiInput::new("open-band-percussion").ok()?;
@@ -297,13 +312,7 @@ fn open_midi_input(
             "open-band-midi-input",
             move |_, message, _| {
                 if message.len() >= 3 && message[0] & 0xf0 == 0x90 && message[2] > 0 {
-                    let lane = match message[1] {
-                        36 | 35 => 0,
-                        38 | 40 => 1,
-                        42 | 44 | 46 => 2,
-                        45 | 47 | 48 => 3,
-                        _ => 4,
-                    };
+                    let lane = percussion_lane_for_trigger(&kit, message[1]);
                     let _ = sender.send(InstrumentEvent {
                         instrument,
                         lane,
@@ -320,5 +329,19 @@ fn open_midi_input(
         .ok()?;
     println!("Listening to slot {slot_index} (Percussion) on {name}");
     Some(connection)
+}
+
+/// Resolves a raw MIDI note to a gameplay lane using the kit's configured pieces instead
+/// of a hardcoded note table. A `lane_span` piece (e.g. kick) uses a dedicated lane past
+/// the kit's regular lanes; an unrecognized note falls back to the same dedicated lane.
+fn percussion_lane_for_trigger(kit: &Kit, note: u8) -> usize {
+    let trigger = format!("midi:{note}");
+    let spanning_lane = kit.lanes.min(LANES - 1);
+    kit.pieces
+        .iter()
+        .find(|piece| piece.trigger == trigger)
+        .map_or(spanning_lane, |piece| {
+            piece.lane.map_or(spanning_lane, |lane| lane.min(LANES - 1))
+        })
 }
 

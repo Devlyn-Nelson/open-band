@@ -1,8 +1,8 @@
 use super::{
     AudioDetector, AudioOnsetDetector, Chart, DeviceChoice, DetectorProfile, Instrument,
     InstrumentKind, NoteDynamics, NotePhase, PolyphonicAudioDetector, RollKind, cents_error,
-    estimate_pitch, load_charts, pitch_to_lane, selected_device_index, standard_kit_presets,
-    standard_tuning_presets, string_lane,
+    estimate_pitch, load_charts, load_kit_library, load_tuning_library, pitch_to_lane,
+    selected_device_index, string_lane,
 };
 use std::f32::consts::TAU;
 use std::path::Path;
@@ -131,12 +131,12 @@ fn sustained_bass_note_produces_one_start() {
 fn bass_open_strings_map_to_their_string_lanes() {
     let five_string_open_notes = [30.87, 41.20, 55.00, 73.42, 98.00];
     for (lane, pitch) in five_string_open_notes.into_iter().enumerate() {
-        assert_eq!(string_lane(5, pitch), lane);
+        assert_eq!(string_lane(&five_string_open_notes, pitch), lane);
     }
 
     let four_string_open_notes = [41.20, 55.00, 73.42, 98.00];
     for (lane, pitch) in four_string_open_notes.into_iter().enumerate() {
-        assert_eq!(string_lane(4, pitch), lane);
+        assert_eq!(string_lane(&four_string_open_notes, pitch), lane);
     }
 }
 
@@ -162,10 +162,11 @@ fn device_selection_prefers_stable_id_over_duplicate_name() {
 #[test]
 /// Documents the physical-string lanes used for instrument navigation.
 fn instrument_navigation_string_mapping() {
-    assert_eq!(string_lane(5, 98.0), 4);
-    assert_eq!(string_lane(5, 73.42), 3);
-    assert_eq!(string_lane(5, 55.0), 2);
-    assert_eq!(string_lane(5, 41.20), 1);
+    let five_string_open_notes = [30.87, 41.20, 55.00, 73.42, 98.00];
+    assert_eq!(string_lane(&five_string_open_notes, 98.0), 4);
+    assert_eq!(string_lane(&five_string_open_notes, 73.42), 3);
+    assert_eq!(string_lane(&five_string_open_notes, 55.0), 2);
+    assert_eq!(string_lane(&five_string_open_notes, 41.20), 1);
 }
 
 #[test]
@@ -243,6 +244,42 @@ fn chart_directory_loads_all_valid_charts() {
         .find(|chart| chart.title == "Devs Test Song")
         .expect("developer chart should load");
     assert_eq!(developer_chart.string_notes().len(), 10);
+}
+
+#[test]
+/// The drum-only test chart hits every standard rock kit piece at least twice.
+fn drum_kit_workout_chart_covers_every_piece_at_least_twice() {
+    let charts = load_charts();
+    let chart = charts
+        .iter()
+        .find(|chart| chart.title == "Drum Kit Workout")
+        .expect("drum kit workout chart should load");
+    let notes = chart.percussion_notes();
+    for piece in [
+        "kick", "snare", "tom1", "hihat", "tom2", "ride", "tom3", "crash",
+    ] {
+        let count = notes.iter().filter(|note| note.piece == piece).count();
+        assert!(count >= 2, "expected {piece} to appear at least twice, got {count}");
+    }
+}
+
+#[test]
+/// The three-track jam chart is roughly 30 seconds and has a part for each instrument.
+fn easy_band_jam_chart_has_three_tracks_and_is_about_thirty_seconds() {
+    let charts = load_charts();
+    let chart = charts
+        .iter()
+        .find(|chart| chart.title == "Easy Band Jam")
+        .expect("easy band jam chart should load");
+    assert_eq!(chart.tracks.len(), 3);
+    assert!(chart.tracks.iter().any(|track| track.name == "Bass"));
+    assert!(chart.tracks.iter().any(|track| track.name == "Guitar"));
+    assert!(chart.tracks.iter().any(|track| track.name == "Drums"));
+    let seconds = chart.tick_to_seconds(chart.total_ticks());
+    assert!(
+        (25.0..=35.0).contains(&seconds),
+        "expected roughly 30 seconds, got {seconds}"
+    );
 }
 
 #[test]
@@ -383,37 +420,66 @@ fn star_power_phrase_parses_as_a_range_marker() {
 }
 
 #[test]
-/// Every standard tuning preset parses as valid note names, low string first.
-fn standard_tuning_presets_parse_and_are_nonempty() {
-    let presets = standard_tuning_presets();
-    assert!(!presets.is_empty());
-    for preset in &presets {
+/// The tuning library loads named tunings with valid, parseable note names (either from
+/// `tunings/` or the embedded fallback if that directory isn't present).
+fn tuning_library_loads_and_parses() {
+    let library = load_tuning_library();
+    assert!(!library.is_empty());
+    for named in &library {
         assert!(
-            !preset.tuning.strings.is_empty(),
+            !named.strings.is_empty(),
             "{} should list at least one string",
-            preset.name
+            named.name
+        );
+        assert!(
+            named.tuning().open_frequencies().is_ok(),
+            "{} should parse as valid note names",
+            named.name
         );
     }
 }
 
 #[test]
-/// The bundled kit preset's pieces all reference a valid lane or a lane-spanning color.
-fn standard_kit_presets_pieces_are_placed() {
-    let presets = standard_kit_presets();
-    assert!(!presets.is_empty());
-    for preset in &presets {
-        for piece in &preset.kit.pieces {
+/// The kit library's pieces all reference a valid lane or a lane-spanning color, and the
+/// standard rock kit specifically has 3 toms, snare, hi-hat, crash, ride, and a kick.
+fn kit_library_pieces_are_placed_and_standard_kit_has_expected_pieces() {
+    let library = load_kit_library();
+    assert!(!library.is_empty());
+    for named in &library {
+        for piece in &named.pieces {
             assert!(
                 piece.lane.is_some() != piece.lane_span.is_some(),
                 "{} piece {} should have exactly one of lane/lane_span",
-                preset.name,
+                named.name,
                 piece.name
             );
             if let Some(lane) = piece.lane {
-                assert!(lane < preset.kit.lanes, "{} piece {} lane out of range", preset.name, piece.name);
+                assert!(lane < named.lanes, "{} piece {} lane out of range", named.name, piece.name);
             }
         }
     }
+
+    let standard = library
+        .iter()
+        .find(|named| named.name == "Standard Rock Kit")
+        .expect("standard rock kit should be in the library");
+    let symbol_counts = |symbol: &str| {
+        standard
+            .pieces
+            .iter()
+            .filter(|piece| piece.symbol.as_deref() == Some(symbol))
+            .count()
+    };
+    assert_eq!(symbol_counts("tom"), 4, "expected snare + 3 toms tagged as toms");
+    assert_eq!(symbol_counts("cymbal"), 2, "expected crash and ride");
+    assert_eq!(symbol_counts("hihat"), 1);
+    assert!(
+        standard
+            .pieces
+            .iter()
+            .any(|piece| piece.name == "kick" && piece.lane_span.is_some()),
+        "expected a lane-spanning kick"
+    );
 }
 
 #[test]
@@ -485,7 +551,7 @@ fn detect_recording_pitches(path: &Path) -> Result<Vec<f32>, String> {
     let spec = reader.spec();
     let mut detector = AudioDetector::new(
         InstrumentKind::Strings,
-        5,
+        &[30.87, 41.20, 55.00, 73.42, 98.00],
         DetectorProfile::PerString,
         spec.sample_rate as f32,
     );
@@ -746,9 +812,10 @@ fn supplied_bass_recordings_detect_expected_open_strings() {
                     kind: InstrumentKind::Strings,
                     strings: 5,
                 };
+                let bass5_open_frequencies = [30.87, 41.20, 55.00, 73.42, 98.00];
                 let mut detected_lanes = detected_pitches
                     .iter()
-                    .map(|pitch| pitch_to_lane(bass5, *pitch))
+                    .map(|pitch| pitch_to_lane(bass5, &bass5_open_frequencies, *pitch))
                     .collect::<Vec<_>>();
                 detected_lanes.dedup();
                 if detected_lanes != expected_lanes {

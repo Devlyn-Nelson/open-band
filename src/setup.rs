@@ -77,24 +77,74 @@ pub(crate) fn device_selection_input(
         }
     }
     if keyboard.just_pressed(KeyCode::BracketLeft) {
-        let focus = selection.focus;
-        if let Some(slot) = selection.slots.get_mut(focus)
-            && slot.kind == InstrumentKind::Strings
-        {
-            slot.strings = slot.strings.saturating_sub(1).max(4);
-        }
+        cycle_slot_tuning(&mut selection, -1);
+        cycle_slot_kit(&mut selection, -1);
     }
     if keyboard.just_pressed(KeyCode::BracketRight) {
-        let focus = selection.focus;
-        if let Some(slot) = selection.slots.get_mut(focus)
-            && slot.kind == InstrumentKind::Strings
-        {
-            slot.strings = (slot.strings + 1).min(7);
-        }
+        cycle_slot_tuning(&mut selection, 1);
+        cycle_slot_kit(&mut selection, 1);
     }
 
     if keyboard.just_pressed(KeyCode::Enter) {
         commit_device_selection(&selection, &mut stream, &mut settings, &mut next_state);
+    }
+}
+
+/// Cycles the focused `Percussion` slot's kit among the loaded `kits/` library, starting
+/// from whichever library entry currently matches (or the start of the list).
+fn cycle_slot_kit(selection: &mut DeviceSelection, delta: i32) {
+    if selection.kit_library.is_empty() {
+        return;
+    }
+    let Some(slot) = selection.slots.get(selection.focus) else {
+        return;
+    };
+    if slot.kind != InstrumentKind::Percussion {
+        return;
+    }
+    let current = slot
+        .kit
+        .as_ref()
+        .and_then(|kit| {
+            selection
+                .kit_library
+                .iter()
+                .position(|named| named.pieces == kit.pieces && named.lanes == kit.lanes)
+        })
+        .unwrap_or(0);
+    let len = selection.kit_library.len() as i32;
+    let next = (current as i32 + delta).rem_euclid(len) as usize;
+    if let Some(slot) = selection.slots.get_mut(selection.focus) {
+        slot.kit = Some(selection.kit_library[next].kit());
+    }
+}
+
+/// Cycles the focused `Strings` slot's tuning among the loaded `tunings/` library,
+/// starting from whichever library entry currently matches (or the start of the list).
+fn cycle_slot_tuning(selection: &mut DeviceSelection, delta: i32) {
+    if selection.tuning_library.is_empty() {
+        return;
+    }
+    let Some(slot) = selection.slots.get(selection.focus) else {
+        return;
+    };
+    if slot.kind != InstrumentKind::Strings {
+        return;
+    }
+    let current = slot
+        .tuning
+        .as_ref()
+        .and_then(|tuning| {
+            selection
+                .tuning_library
+                .iter()
+                .position(|named| named.strings == tuning.strings)
+        })
+        .unwrap_or(0);
+    let len = selection.tuning_library.len() as i32;
+    let next = (current as i32 + delta).rem_euclid(len) as usize;
+    if let Some(slot) = selection.slots.get_mut(selection.focus) {
+        slot.tuning = Some(selection.tuning_library[next].tuning());
     }
 }
 
@@ -168,8 +218,14 @@ pub(crate) fn device_selection_display(
         } else {
             String::new()
         };
+        let preset = match slot.kind {
+            InstrumentKind::Strings | InstrumentKind::Percussion => selection
+                .preset_name_for(slot)
+                .map_or_else(|| " (custom)".to_string(), |name| format!(" — {name}")),
+            InstrumentKind::Voice => String::new(),
+        };
         slot_lines.push_str(&format!(
-            "{marker} [{}] {}{detail}\n      {device_label}\n\n",
+            "{marker} [{}] {}{preset}{detail}\n      {device_label}\n\n",
             index + 1,
             slot.label(),
         ));
@@ -182,7 +238,7 @@ pub(crate) fn device_selection_display(
         {slot_lines}\
         Up/Down: focus slot     Left/Right: choose device\n\
         N: add slot     X: remove focused slot     K: cycle slot kind\n\
-        [ / ]: string count     P: detector profile (Strings only)\n\
+        [ / ]: cycle tuning (Strings) / kit (Percussion)     P: detector profile (Strings only)\n\
         Enter: continue\n\
         Environment variables remain supported as first-run defaults.",
     ));
@@ -418,7 +474,7 @@ pub(crate) fn calibration_display(
     let instrument = slot.map_or_else(|| "NONE CONFIGURED".into(), InstrumentSlot::label);
     let tuner = slot.map_or_else(
         || "TUNER: no instrument slots configured".into(),
-        |slot| bass_tuner_reading(slot.kind, slot.strings, calibration.last_pitch_hz),
+        |slot| bass_tuner_reading(slot.kind, slot.tuning.as_ref(), calibration.last_pitch_hz),
     );
     let status = if calibration.samples > 0 {
         "SIGNAL DETECTED"
@@ -462,15 +518,22 @@ pub(crate) fn cleanup_calibration(
     }
 }
 
-pub(crate) fn bass_tuner_reading(kind: InstrumentKind, strings: u8, pitch_hz: Option<f32>) -> String {
+pub(crate) fn bass_tuner_reading(
+    kind: InstrumentKind,
+    tuning: Option<&Tuning>,
+    pitch_hz: Option<f32>,
+) -> String {
     if kind != InstrumentKind::Strings {
-        return format!("TUNER: not applicable to {}", instrument_name(kind, strings));
+        return format!("TUNER: not applicable to {}", instrument_name(kind, 0));
     }
     let Some(pitch_hz) = pitch_hz else {
         return "STRING TUNER\nPlay an open string to begin tuning.".into();
     };
-    let targets = standard_open_frequencies(strings);
-    let (index, target) = targets
+    let tuning = tuning.cloned().unwrap_or_default();
+    let Ok(open_frequencies) = tuning.open_frequencies() else {
+        return "STRING TUNER\nConfigured tuning failed to parse.".into();
+    };
+    let (index, target) = open_frequencies
         .iter()
         .enumerate()
         .min_by(|(_, left), (_, right)| {
@@ -486,8 +549,9 @@ pub(crate) fn bass_tuner_reading(kind: InstrumentKind, strings: u8, pitch_hz: Op
     } else {
         "TUNE DOWN"
     };
+    let note = tuning.strings.get(index).map_or("?", String::as_str);
     format!(
-        "STRING TUNER\nSTRING  {}\nPITCH   {pitch_hz:>6.2} Hz\nOFFSET  {cents:>+6.1} cents   {verdict}",
+        "STRING TUNER\nSTRING  {} ({note})\nPITCH   {pitch_hz:>6.2} Hz\nOFFSET  {cents:>+6.1} cents   {verdict}",
         index + 1
     )
 }

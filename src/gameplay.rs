@@ -113,6 +113,7 @@ pub(crate) fn debug_input(
 pub(crate) fn receive_instrument_events(
     mut commands: Commands,
     stream: Res<InstrumentStream>,
+    selection: Res<DeviceSelection>,
     mut debug: ResMut<DebugInputData>,
     mut text: Query<&mut Text, With<DebugText>>,
     mut notes: Query<(&mut FallingNote, &mut Sprite)>,
@@ -123,6 +124,10 @@ pub(crate) fn receive_instrument_events(
     };
     for event in events.try_iter() {
         debug.instrument = Some(event.instrument);
+        debug.open_frequencies = selection
+            .slots
+            .get(event.instrument.slot)
+            .map_or_else(Vec::new, InstrumentSlot::open_frequencies);
         debug.pitch_hz = event.pitch_hz;
         debug.lane = Some(event.lane);
         debug.strength = event.strength;
@@ -182,7 +187,7 @@ fn debug_text(debug: &DebugInputData) -> String {
         .map_or_else(|| "--".into(), |lane| (lane + 1).to_string());
     let bass = debug.instrument.zip(debug.pitch_hz).map_or_else(
         || "STRING  --\nNOTE    --".into(),
-        |(instrument, pitch)| bass_debug_details(instrument, pitch),
+        |(instrument, pitch)| bass_debug_details(instrument, &debug.open_frequencies, pitch),
     );
     format!(
         "DEBUG INPUT  [F3]\n\nINSTRUMENT  {instrument}\nEST PITCH   {pitch}\n{bass}\nLANE        {lane}\nSIGNAL      {:>5.1}%\nNOISE FLOOR {:>5.2}%\nDURATION    {:>5.2} s\nEVENTS      {}",
@@ -193,11 +198,10 @@ fn debug_text(debug: &DebugInputData) -> String {
     )
 }
 
-fn bass_debug_details(instrument: Instrument, pitch_hz: f32) -> String {
-    if instrument.kind != InstrumentKind::Strings {
+fn bass_debug_details(instrument: Instrument, open_frequencies: &[f32], pitch_hz: f32) -> String {
+    if instrument.kind != InstrumentKind::Strings || open_frequencies.is_empty() {
         return "STRING      --\nNOTE        --".into();
     }
-    let open_frequencies = standard_open_frequencies(instrument.strings);
     let (string, target) = open_frequencies
         .iter()
         .enumerate()

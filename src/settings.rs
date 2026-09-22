@@ -21,22 +21,36 @@ fn default_slots(audio_devices: &[DeviceChoice], midi_devices: &[DeviceChoice]) 
         let index = selected_device_index(midi_devices, None, variable);
         midi_devices.get(index).map(|device| device.id.clone())
     };
-    let bass_strings = if std::env::var("BAND_HERO_BASS_STRINGS").as_deref() == Ok("5") {
-        5
+    let bass_tuning = if std::env::var("BAND_HERO_BASS_STRINGS").as_deref() == Ok("5") {
+        Tuning {
+            strings: vec!["B0".into(), "E1".into(), "A1".into(), "D2".into(), "G2".into()],
+        }
     } else {
-        4
+        Tuning::default()
+    };
+    let guitar_tuning = Tuning {
+        strings: vec![
+            "E2".into(),
+            "A2".into(),
+            "D3".into(),
+            "G3".into(),
+            "B3".into(),
+            "E4".into(),
+        ],
     };
     vec![
         InstrumentSlot {
             kind: InstrumentKind::Strings,
             device: audio_device("BAND_HERO_GUITAR_DEVICE"),
-            strings: 6,
+            tuning: Some(guitar_tuning),
+            kit: None,
             detector: DetectorProfile::Polyphonic,
         },
         InstrumentSlot {
             kind: InstrumentKind::Strings,
             device: audio_device("BAND_HERO_BASS_DEVICE"),
-            strings: bass_strings,
+            tuning: Some(bass_tuning),
+            kit: None,
             detector: DetectorProfile::PerString,
         },
         InstrumentSlot {
@@ -103,6 +117,8 @@ pub(crate) fn scan_devices(settings: &PersistentSettings) -> DeviceSelection {
     DeviceSelection {
         audio_devices,
         midi_devices,
+        tuning_library: load_tuning_library(),
+        kit_library: load_kit_library(),
         slots,
         focus: 0,
     }

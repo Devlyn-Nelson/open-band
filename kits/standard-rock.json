@@ -1,0 +1,14 @@
+{
+  "name": "Standard Rock Kit",
+  "lanes": 4,
+  "pieces": [
+    { "name": "kick", "trigger": "midi:36", "lane_span": "yellow" },
+    { "name": "snare", "trigger": "midi:38", "lane": 0, "symbol": "tom" },
+    { "name": "tom1", "trigger": "midi:50", "lane": 1, "symbol": "tom" },
+    { "name": "hihat", "trigger": "midi:42", "lane": 1, "symbol": "hihat" },
+    { "name": "tom2", "trigger": "midi:47", "lane": 2, "symbol": "tom" },
+    { "name": "ride", "trigger": "midi:51", "lane": 2, "symbol": "cymbal" },
+    { "name": "tom3", "trigger": "midi:43", "lane": 3, "symbol": "tom" },
+    { "name": "crash", "trigger": "midi:49", "lane": 3, "symbol": "cymbal" }
+  ]
+}

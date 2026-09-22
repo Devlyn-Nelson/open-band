@@ -116,7 +116,7 @@ pub(crate) struct Chart {
 
 /// Ordered, low-string-first open-string notes (octave-qualified, e.g. `"B0"`). Covers any
 /// string count or tuning without code changes.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Tuning {
     pub(crate) strings: Vec<String>,
 }
@@ -125,11 +125,26 @@ impl Tuning {
     fn open_midi(&self) -> Result<Vec<u8>, String> {
         self.strings.iter().map(|note| parse_note_name(note)).collect()
     }
+
+    /// The real open-string frequencies for this tuning, used for lane assignment and
+    /// per-string detection instead of guessing from a string count.
+    pub(crate) fn open_frequencies(&self) -> Result<Vec<f32>, String> {
+        Ok(self.open_midi()?.into_iter().map(midi_to_frequency).collect())
+    }
+}
+
+impl Default for Tuning {
+    /// Last-resort fallback when no tuning has been configured or loaded.
+    fn default() -> Self {
+        Tuning {
+            strings: vec!["E1".into(), "A1".into(), "D2".into(), "G2".into()],
+        }
+    }
 }
 
 /// A single physical piece in a percussion kit; pieces are referenced by `name` from chart
 /// notes, not by index, so reordering a kit never invalidates existing notes.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct KitPiece {
     pub(crate) name: String,
     pub(crate) trigger: String,
@@ -143,7 +158,7 @@ pub(crate) struct KitPiece {
 
 /// A percussion kit: a fixed lane count plus named pieces, some sharing a lane
 /// (distinguished by `symbol`) and some spanning all lanes (`lane_span`, e.g. a kick).
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Kit {
     pub(crate) lanes: usize,
     pub(crate) pieces: Vec<KitPiece>,
@@ -155,106 +170,133 @@ impl Kit {
     }
 }
 
-/// A named `Tuning`/`Kit` an editor can offer for selection; presets are resolved and
-/// copied into the chart on save, so a saved chart never depends on this list (see
-/// todo.md Part A6). Not consumed by gameplay — editor convenience data only.
-pub(crate) struct TuningPreset {
-    pub(crate) name: &'static str,
-    pub(crate) tuning: Tuning,
-}
-
-pub(crate) struct KitPreset {
-    pub(crate) name: &'static str,
-    pub(crate) kit: Kit,
-}
-
-fn tuning_of(strings: &[&str]) -> Tuning {
-    Tuning {
-        strings: strings.iter().map(|note| note.to_string()).collect(),
+impl Default for Kit {
+    /// Last-resort fallback when no kit has been configured or loaded: the standard rock
+    /// kit (kick, snare, 3 toms, hi-hat, crash, ride) across 4 lanes.
+    fn default() -> Self {
+        serde_json::from_str(EMBEDDED_KITS[0]).expect("embedded default kit parses")
     }
 }
 
-/// Standard string tunings offered as editor presets.
-pub(crate) fn standard_tuning_presets() -> Vec<TuningPreset> {
-    vec![
-        TuningPreset {
-            name: "4-String Bass (EADG)",
-            tuning: tuning_of(&["E1", "A1", "D2", "G2"]),
-        },
-        TuningPreset {
-            name: "5-String Bass (BEADG)",
-            tuning: tuning_of(&["B0", "E1", "A1", "D2", "G2"]),
-        },
-        TuningPreset {
-            name: "Standard Guitar (EADGBE)",
-            tuning: tuning_of(&["E2", "A2", "D3", "G3", "B3", "E4"]),
-        },
-        TuningPreset {
-            name: "7-String Guitar (BEADGBE)",
-            tuning: tuning_of(&["B1", "E2", "A2", "D3", "G3", "B3", "E4"]),
-        },
-    ]
+/// A named tuning loaded from the `tunings/` library directory (one JSON file per
+/// tuning, e.g. `{"name": "Standard Guitar", "strings": [...]}`). Presets are resolved
+/// and copied into an `InstrumentSlot` on selection, so saved settings never depend on
+/// this list still existing on disk (see todo.md Part A6).
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct NamedTuning {
+    pub(crate) name: String,
+    pub(crate) strings: Vec<String>,
 }
 
-/// Standard percussion kits offered as editor presets.
-pub(crate) fn standard_kit_presets() -> Vec<KitPreset> {
-    vec![KitPreset {
-        name: "4-Lane Rock Kit",
-        kit: Kit {
-            lanes: 4,
-            pieces: vec![
-                KitPiece {
-                    name: "kick".into(),
-                    trigger: "midi:36".into(),
-                    lane: None,
-                    lane_span: Some("yellow".into()),
-                    symbol: None,
-                },
-                KitPiece {
-                    name: "snare".into(),
-                    trigger: "midi:38".into(),
-                    lane: Some(0),
-                    lane_span: None,
-                    symbol: Some("tom".into()),
-                },
-                KitPiece {
-                    name: "tom1".into(),
-                    trigger: "midi:48".into(),
-                    lane: Some(1),
-                    lane_span: None,
-                    symbol: Some("tom".into()),
-                },
-                KitPiece {
-                    name: "crash".into(),
-                    trigger: "midi:49".into(),
-                    lane: Some(1),
-                    lane_span: None,
-                    symbol: Some("cymbal".into()),
-                },
-                KitPiece {
-                    name: "tom2".into(),
-                    trigger: "midi:45".into(),
-                    lane: Some(2),
-                    lane_span: None,
-                    symbol: Some("tom".into()),
-                },
-                KitPiece {
-                    name: "ride".into(),
-                    trigger: "midi:51".into(),
-                    lane: Some(2),
-                    lane_span: None,
-                    symbol: Some("cymbal".into()),
-                },
-                KitPiece {
-                    name: "floor_tom".into(),
-                    trigger: "midi:41".into(),
-                    lane: Some(3),
-                    lane_span: None,
-                    symbol: Some("tom".into()),
-                },
-            ],
-        },
-    }]
+impl NamedTuning {
+    pub(crate) fn tuning(&self) -> Tuning {
+        Tuning {
+            strings: self.strings.clone(),
+        }
+    }
+}
+
+/// Embedded fallback tunings, used if the `tunings/` directory is missing or empty so the
+/// app still has sensible choices to offer.
+const EMBEDDED_TUNINGS: &[&str] = &[
+    include_str!("../tunings/bass-4-standard.json"),
+    include_str!("../tunings/bass-5-standard.json"),
+    include_str!("../tunings/guitar-standard.json"),
+    include_str!("../tunings/guitar-7-standard.json"),
+];
+
+/// Loads every `*.json` file in the working directory's `tunings/` folder, in sorted
+/// filename order. Invalid files are reported and skipped. Falls back to the embedded
+/// defaults if the directory is missing or yields no valid tunings.
+pub(crate) fn load_tuning_library() -> Vec<NamedTuning> {
+    let mut paths = std::fs::read_dir("tunings")
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .collect::<Vec<_>>();
+    paths.sort();
+
+    let mut tunings = Vec::new();
+    for path in paths {
+        match std::fs::read_to_string(&path)
+            .map_err(|error| error.to_string())
+            .and_then(|contents| {
+                serde_json::from_str::<NamedTuning>(&contents).map_err(|error| error.to_string())
+            }) {
+            Ok(tuning) => tunings.push(tuning),
+            Err(error) => eprintln!("Could not load tuning {}: {error}", path.display()),
+        }
+    }
+    if tunings.is_empty() {
+        for embedded in EMBEDDED_TUNINGS {
+            match serde_json::from_str(embedded) {
+                Ok(tuning) => tunings.push(tuning),
+                Err(error) => eprintln!("Could not load embedded starter tuning: {error}"),
+            }
+        }
+    }
+    tunings
+}
+
+/// A named percussion kit loaded from the `kits/` library directory (one JSON file per
+/// kit, e.g. `{"name": "Standard Rock Kit", "lanes": 4, "pieces": [...]}`). Presets are
+/// resolved and copied into an `InstrumentSlot` on selection, so saved settings never
+/// depend on this list still existing on disk (see todo.md Part A6).
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct NamedKit {
+    pub(crate) name: String,
+    pub(crate) lanes: usize,
+    pub(crate) pieces: Vec<KitPiece>,
+}
+
+impl NamedKit {
+    pub(crate) fn kit(&self) -> Kit {
+        Kit {
+            lanes: self.lanes,
+            pieces: self.pieces.clone(),
+        }
+    }
+}
+
+/// Embedded fallback kits, used if the `kits/` directory is missing or empty so the app
+/// still has sensible choices to offer.
+const EMBEDDED_KITS: &[&str] = &[include_str!("../kits/standard-rock.json")];
+
+/// Loads every `*.json` file in the working directory's `kits/` folder, in sorted
+/// filename order. Invalid files are reported and skipped. Falls back to the embedded
+/// defaults if the directory is missing or yields no valid kits.
+pub(crate) fn load_kit_library() -> Vec<NamedKit> {
+    let mut paths = std::fs::read_dir("kits")
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .collect::<Vec<_>>();
+    paths.sort();
+
+    let mut kits = Vec::new();
+    for path in paths {
+        match std::fs::read_to_string(&path)
+            .map_err(|error| error.to_string())
+            .and_then(|contents| {
+                serde_json::from_str::<NamedKit>(&contents).map_err(|error| error.to_string())
+            }) {
+            Ok(kit) => kits.push(kit),
+            Err(error) => eprintln!("Could not load kit {}: {error}", path.display()),
+        }
+    }
+    if kits.is_empty() {
+        for embedded in EMBEDDED_KITS {
+            match serde_json::from_str(embedded) {
+                Ok(kit) => kits.push(kit),
+                Err(error) => eprintln!("Could not load embedded starter kit: {error}"),
+            }
+        }
+    }
+    kits
 }
 
 /// Descriptive-only vocal range; does not gate playability or detection.
