@@ -188,6 +188,37 @@ fn built_in_chart_has_playable_notes() {
 }
 
 #[test]
+fn bass_projection_falls_back_when_preferred_string_cannot_play_note() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+                {
+                    "version": 1,
+                    "title": "Projection",
+                    "bpm": 90.0,
+                    "time_signature": [4, 4],
+                    "tracks": [{
+                        "name": "Bass",
+                        "instrument": "bass5",
+                        "tuning": "standard_bass_5",
+                        "notes": [{
+                            "start_beat": 1.0,
+                            "duration_beats": 1.0,
+                            "note": "C1",
+                            "preferred_string": 2
+                        }]
+                    }]
+                }
+                "#,
+    )
+    .expect("projection chart should parse");
+
+    let notes = chart.bass_notes();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].string, 0);
+    assert_eq!(notes[0].fret, 1);
+}
+
+#[test]
 fn chart_directory_loads_all_valid_charts() {
     let charts = load_charts();
     assert!(
@@ -199,7 +230,11 @@ fn chart_directory_loads_all_valid_charts() {
             .iter()
             .any(|chart| chart.title == "Open Strings Study")
     );
-    assert!(charts.iter().any(|chart| chart.title == "Devs Test Song"));
+    let developer_chart = charts
+        .iter()
+        .find(|chart| chart.title == "Devs Test Song")
+        .expect("developer chart should load");
+    assert_eq!(developer_chart.bass_notes().len(), 10);
 }
 
 #[test]

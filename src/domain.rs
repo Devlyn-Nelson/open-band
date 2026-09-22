@@ -117,8 +117,15 @@ impl Chart {
             .flat_map(|track| {
                 let tuning = tuning_for(track.tuning.as_deref(), &track.instrument);
                 track.notes.iter().filter_map(move |event| {
-                    let (string, fret) =
-                        best_string_fret(event.midi_note, &tuning, event.preferred_string)?;
+                    let Some((string, fret)) =
+                        best_string_fret(event.midi_note, &tuning, event.preferred_string)
+                    else {
+                        eprintln!(
+                            "Skipping unplayable bass note {}: no string/fret in tuning",
+                            midi_note_name(event.midi_note)
+                        );
+                        return None;
+                    };
                     Some(ChartNoteData {
                         start: event.start_beat * 60.0 / self.bpm,
                         duration: event.duration_beats * 60.0 / self.bpm,
