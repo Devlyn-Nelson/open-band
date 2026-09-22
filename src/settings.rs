@@ -8,16 +8,55 @@ pub(crate) fn initial_app_state() -> AppState {
     }
 }
 
+/// The starter slot list shown the first time Input Setup runs, matching the previous
+/// fixed guitar/bass/drums/vocals lineup so existing users see a familiar default. Device
+/// choices are preselected from `BAND_HERO_*_DEVICE` environment variables when available,
+/// matching the previous first-run behavior.
+fn default_slots(audio_devices: &[DeviceChoice], midi_devices: &[DeviceChoice]) -> Vec<InstrumentSlot> {
+    let audio_device = |variable: &str| {
+        let index = selected_device_index(audio_devices, None, variable);
+        audio_devices.get(index).map(|device| device.id.clone())
+    };
+    let midi_device = |variable: &str| {
+        let index = selected_device_index(midi_devices, None, variable);
+        midi_devices.get(index).map(|device| device.id.clone())
+    };
+    let bass_strings = if std::env::var("BAND_HERO_BASS_STRINGS").as_deref() == Ok("5") {
+        5
+    } else {
+        4
+    };
+    vec![
+        InstrumentSlot {
+            kind: InstrumentKind::Strings,
+            device: audio_device("BAND_HERO_GUITAR_DEVICE"),
+            strings: 6,
+            detector: DetectorProfile::Polyphonic,
+        },
+        InstrumentSlot {
+            kind: InstrumentKind::Strings,
+            device: audio_device("BAND_HERO_BASS_DEVICE"),
+            strings: bass_strings,
+            detector: DetectorProfile::PerString,
+        },
+        InstrumentSlot {
+            device: midi_device("BAND_HERO_MIDI_DEVICE"),
+            ..InstrumentSlot::default_for(InstrumentKind::Percussion)
+        },
+        InstrumentSlot {
+            device: audio_device("BAND_HERO_VOCAL_DEVICE"),
+            ..InstrumentSlot::default_for(InstrumentKind::Voice)
+        },
+    ]
+}
+
 pub(crate) fn input_config_from_settings(settings: &PersistentSettings) -> InputConfig {
-    InputConfig {
-        audio_devices: [
-            settings.guitar_device.clone(),
-            settings.bass_device.clone(),
-            settings.vocal_device.clone(),
-        ],
-        midi_device: settings.midi_device.clone(),
-        bass_strings: settings.bass_strings.unwrap_or(4),
-    }
+    let slots = if settings.slots.is_empty() {
+        default_slots(&[], &[])
+    } else {
+        settings.slots.clone()
+    };
+    InputConfig { slots }
 }
 
 pub(crate) fn scan_devices(settings: &PersistentSettings) -> DeviceSelection {
@@ -55,39 +94,17 @@ pub(crate) fn scan_devices(settings: &PersistentSettings) -> DeviceSelection {
         })
         .unwrap_or_default();
 
+    let slots = if settings.slots.is_empty() {
+        default_slots(&audio_devices, &midi_devices)
+    } else {
+        settings.slots.clone()
+    };
+
     DeviceSelection {
-        selected: [
-            selected_device_index(
-                &audio_devices,
-                settings.guitar_device.as_deref(),
-                "BAND_HERO_GUITAR_DEVICE",
-            ),
-            selected_device_index(
-                &audio_devices,
-                settings.bass_device.as_deref(),
-                "BAND_HERO_BASS_DEVICE",
-            ),
-            selected_device_index(
-                &midi_devices,
-                settings.midi_device.as_deref(),
-                "BAND_HERO_MIDI_DEVICE",
-            ),
-            selected_device_index(
-                &audio_devices,
-                settings.vocal_device.as_deref(),
-                "BAND_HERO_VOCAL_DEVICE",
-            ),
-        ],
-        focus: 0,
-        bass_strings: settings.bass_strings.unwrap_or_else(|| {
-            if std::env::var("BAND_HERO_BASS_STRINGS").as_deref() == Ok("5") {
-                5
-            } else {
-                4
-            }
-        }),
         audio_devices,
         midi_devices,
+        slots,
+        focus: 0,
     }
 }
 
@@ -125,3 +142,4 @@ pub(crate) fn selected_device_index(
         })
         .unwrap_or(0)
 }
+

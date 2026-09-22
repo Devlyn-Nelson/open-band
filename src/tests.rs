@@ -1,7 +1,7 @@
 use super::{
-    AudioDetector, AudioOnsetDetector, Chart, DeviceChoice, Instrument, NotePhase,
-    PolyphonicAudioDetector, bass_string_lane, cents_error, estimate_pitch, load_charts,
-    pitch_to_lane, selected_device_index,
+    AudioDetector, AudioOnsetDetector, Chart, DeviceChoice, DetectorProfile, Instrument,
+    InstrumentKind, NoteDynamics, NotePhase, PolyphonicAudioDetector, RollKind, cents_error,
+    estimate_pitch, load_charts, pitch_to_lane, selected_device_index, string_lane,
 };
 use std::f32::consts::TAU;
 use std::path::Path;
@@ -130,12 +130,12 @@ fn sustained_bass_note_produces_one_start() {
 fn bass_open_strings_map_to_their_string_lanes() {
     let five_string_open_notes = [30.87, 41.20, 55.00, 73.42, 98.00];
     for (lane, pitch) in five_string_open_notes.into_iter().enumerate() {
-        assert_eq!(bass_string_lane(Instrument::Bass5, pitch), lane);
+        assert_eq!(string_lane(5, pitch), lane);
     }
 
     let four_string_open_notes = [41.20, 55.00, 73.42, 98.00];
     for (lane, pitch) in four_string_open_notes.into_iter().enumerate() {
-        assert_eq!(bass_string_lane(Instrument::Bass4, pitch), lane);
+        assert_eq!(string_lane(4, pitch), lane);
     }
 }
 
@@ -161,10 +161,10 @@ fn device_selection_prefers_stable_id_over_duplicate_name() {
 #[test]
 /// Documents the physical-string lanes used for instrument navigation.
 fn instrument_navigation_string_mapping() {
-    assert_eq!(bass_string_lane(Instrument::Bass5, 98.0), 4);
-    assert_eq!(bass_string_lane(Instrument::Bass5, 73.42), 3);
-    assert_eq!(bass_string_lane(Instrument::Bass5, 55.0), 2);
-    assert_eq!(bass_string_lane(Instrument::Bass5, 41.20), 1);
+    assert_eq!(string_lane(5, 98.0), 4);
+    assert_eq!(string_lane(5, 73.42), 3);
+    assert_eq!(string_lane(5, 55.0), 2);
+    assert_eq!(string_lane(5, 41.20), 1);
 }
 
 #[test]
@@ -174,9 +174,15 @@ fn built_in_chart_has_playable_notes() {
         serde_json::from_str(super::OPEN_STRINGS_CHART).expect("built-in chart should parse");
     assert_eq!(chart.version, 1);
     assert_eq!(chart.tracks.len(), 1);
-    assert_eq!(chart.tracks[0].instrument, "bass5");
-    assert_eq!(chart.tracks[0].tuning.as_deref(), Some("standard_bass_5"));
-    let notes = chart.bass_notes();
+    assert_eq!(chart.tracks[0].kind, InstrumentKind::Strings);
+    assert_eq!(
+        chart.tracks[0]
+            .tuning
+            .as_ref()
+            .map(|tuning| tuning.strings.iter().map(String::as_str).collect::<Vec<_>>()),
+        Some(vec!["B0", "E1", "A1", "D2", "G2"])
+    );
+    let notes = chart.string_notes();
     assert_eq!(notes.len(), 10);
     assert_eq!(notes[0].note, "B0");
     assert_eq!(notes[5].note, "D1");
@@ -194,17 +200,18 @@ fn bass_projection_falls_back_when_preferred_string_cannot_play_note() {
                 {
                     "version": 1,
                     "title": "Projection",
-                    "bpm": 90.0,
-                    "time_signature": [4, 4],
+                    "resolution": 960,
+                    "tempo_map": [{ "start": 0, "bpm": 90.0 }],
+                    "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
                     "tracks": [{
                         "name": "Bass",
-                        "instrument": "bass5",
-                        "tuning": "standard_bass_5",
+                        "kind": "strings",
+                        "tuning": { "strings": ["B0", "E1", "A1", "D2", "G2"] },
                         "notes": [{
-                            "start_beat": 1.0,
-                            "duration_beats": 1.0,
+                            "start": 960,
+                            "length": 4,
                             "note": "C1",
-                            "preferred_string": 2
+                            "ps": 2
                         }]
                     }]
                 }
@@ -212,7 +219,7 @@ fn bass_projection_falls_back_when_preferred_string_cannot_play_note() {
     )
     .expect("projection chart should parse");
 
-    let notes = chart.bass_notes();
+    let notes = chart.string_notes();
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0].string, 0);
     assert_eq!(notes[0].fret, 1);
@@ -234,7 +241,7 @@ fn chart_directory_loads_all_valid_charts() {
         .iter()
         .find(|chart| chart.title == "Devs Test Song")
         .expect("developer chart should load");
-    assert_eq!(developer_chart.bass_notes().len(), 10);
+    assert_eq!(developer_chart.string_notes().len(), 10);
 }
 
 #[test]
@@ -244,23 +251,24 @@ fn chart_supports_multiple_instrument_tracks_and_vocal_phrases() {
                 {
                     "version": 1,
                     "title": "Band Test",
-                    "bpm": 120.0,
-                    "time_signature": [4, 4],
+                    "resolution": 960,
+                    "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+                    "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
                     "tracks": [
                         {
                             "name": "Bass",
-                            "instrument": "bass5",
-                            "tuning": "standard_bass_5",
-                            "notes": [{ "start_beat": 1.0, "duration_beats": 1.0, "midi_note": 23 }]
+                            "kind": "strings",
+                            "tuning": { "strings": ["B0", "E1", "A1", "D2", "G2"] },
+                            "notes": [{ "start": 960, "length": 4, "note": 23 }]
                         },
                         {
                             "name": "Lead Vocal",
-                            "instrument": "vocals",
+                            "kind": "voice",
                             "phrases": [{
-                                "start_beat": 2.0,
-                                "duration_beats": 2.0,
+                                "start": 1920,
+                                "duration_ticks": 1920,
                                 "text": "Hello",
-                                "notes": [{ "start_beat": 2.0, "duration_beats": 2.0, "note": "C4" }]
+                                "notes": [{ "start": 1920, "length": 2, "note": "C4" }]
                             }]
                         }
                     ]
@@ -269,12 +277,108 @@ fn chart_supports_multiple_instrument_tracks_and_vocal_phrases() {
         )
         .expect("multi-track chart should parse");
 
-    assert_eq!(chart.time_signature, [4, 4]);
+    assert_eq!(chart.starting_time_signature(), [4, 4]);
     assert_eq!(chart.tracks.len(), 2);
     assert_eq!(chart.tracks[1].phrases[0].text, "Hello");
-    assert_eq!(chart.tracks[1].phrases[0].notes[0].midi_note, 60);
-    assert_eq!(chart.total_beats(), 4.0);
-    assert_eq!(chart.bass_notes()[0].note, "B0");
+    assert_eq!(chart.tracks[1].phrases[0].notes[0].note(), Some(60));
+    assert_eq!(chart.total_ticks(), 3840);
+    assert_eq!(chart.string_notes()[0].note, "B0");
+}
+
+#[test]
+/// Resolves shared-lane percussion pieces (tom vs. cymbal) and a lane-spanning kick by name.
+fn percussion_track_resolves_pieces_by_name() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Drums Test",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": [{
+                "name": "Drums",
+                "kind": "percussion",
+                "kit": {
+                    "lanes": 4,
+                    "pieces": [
+                        { "name": "kick", "trigger": "midi:36", "lane_span": "yellow" },
+                        { "name": "snare", "trigger": "midi:38", "lane": 0, "symbol": "tom" },
+                        { "name": "crash", "trigger": "midi:49", "lane": 1, "symbol": "cymbal" }
+                    ]
+                },
+                "notes": [
+                    { "start": 0, "length": 4, "piece": "kick" },
+                    { "start": 960, "length": 4, "piece": "snare", "dynamics": "accent" },
+                    { "start": 1920, "length": 4, "piece": "crash", "roll": "single_lane" }
+                ]
+            }]
+        }
+        "#,
+    )
+    .expect("percussion chart should parse");
+
+    let notes = chart.percussion_notes();
+    assert_eq!(notes.len(), 3);
+    assert_eq!(notes[0].piece, "kick");
+    assert_eq!(notes[0].lane_span_color.as_deref(), Some("yellow"));
+    assert_eq!(notes[1].dynamics, NoteDynamics::Accent);
+    assert_eq!(notes[1].symbol.as_deref(), Some("tom"));
+    assert_eq!(notes[2].symbol.as_deref(), Some("cymbal"));
+    assert_eq!(notes[2].roll, Some(RollKind::SingleLane));
+}
+
+#[test]
+/// Walks a mid-song tempo change when converting ticks to seconds.
+fn tick_to_seconds_honors_a_mid_song_tempo_change() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Tempo Change",
+            "resolution": 960,
+            "tempo_map": [
+                { "start": 0, "bpm": 120.0 },
+                { "start": 1920, "bpm": 60.0 }
+            ],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": []
+        }
+        "#,
+    )
+    .expect("tempo-change chart should parse");
+
+    // Two quarter notes at 120 BPM (0.5s each) land exactly on the tempo change.
+    assert!((chart.tick_to_seconds(1920) - 1.0).abs() < 1e-4);
+    // One further quarter note at 60 BPM adds a full second.
+    assert!((chart.tick_to_seconds(2880) - 2.0).abs() < 1e-4);
+}
+
+#[test]
+/// Star Power phrases are simple range markers with no nested note list.
+fn star_power_phrase_parses_as_a_range_marker() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Star Power",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": [{
+                "name": "Bass",
+                "kind": "strings",
+                "tuning": { "strings": ["E1", "A1", "D2", "G2"] },
+                "notes": [],
+                "star_power_phrases": [{ "start": 0, "duration_ticks": 3840 }]
+            }]
+        }
+        "#,
+    )
+    .expect("star power chart should parse");
+
+    assert_eq!(chart.tracks[0].star_power_phrases.len(), 1);
+    assert_eq!(chart.tracks[0].star_power_phrases[0].duration_ticks, 3840);
 }
 
 #[test]
@@ -344,7 +448,12 @@ fn detect_recording_pitches(path: &Path) -> Result<Vec<f32>, String> {
     let mut reader =
         hound::WavReader::open(path).map_err(|error| format!("recording should open: {error}"))?;
     let spec = reader.spec();
-    let mut detector = AudioDetector::new(Instrument::Bass5, spec.sample_rate as f32);
+    let mut detector = AudioDetector::new(
+        InstrumentKind::Strings,
+        5,
+        DetectorProfile::PerString,
+        spec.sample_rate as f32,
+    );
     let mut pitches = Vec::new();
     for sample in reader.samples::<i32>() {
         let sample = sample.map_err(|error| format!("recording samples should decode: {error}"))?;
@@ -597,9 +706,14 @@ fn supplied_bass_recordings_detect_expected_open_strings() {
                 }
             } else {
                 let detected_pitches = detect_recording_pitches(&path)?;
+                let bass5 = Instrument {
+                    slot: 0,
+                    kind: InstrumentKind::Strings,
+                    strings: 5,
+                };
                 let mut detected_lanes = detected_pitches
                     .iter()
-                    .map(|pitch| pitch_to_lane(Instrument::Bass5, *pitch))
+                    .map(|pitch| pitch_to_lane(bass5, *pitch))
                     .collect::<Vec<_>>();
                 detected_lanes.dedup();
                 if detected_lanes != expected_lanes {

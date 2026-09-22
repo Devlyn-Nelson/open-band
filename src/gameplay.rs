@@ -170,7 +170,10 @@ pub(crate) fn receive_instrument_events(
 }
 
 fn debug_text(debug: &DebugInputData) -> String {
-    let instrument = debug.instrument.map_or("NONE", instrument_name);
+    let instrument = debug.instrument.map_or_else(
+        || "NONE".into(),
+        |instrument| instrument_name(instrument.kind, instrument.strings),
+    );
     let pitch = debug
         .pitch_hz
         .map_or_else(|| "--".into(), |pitch| format!("{pitch:>7.2} Hz"));
@@ -191,31 +194,20 @@ fn debug_text(debug: &DebugInputData) -> String {
 }
 
 fn bass_debug_details(instrument: Instrument, pitch_hz: f32) -> String {
-    let targets = match instrument {
-        Instrument::Bass5 => [
-            (30.87, "B0", "String 5"),
-            (41.20, "E1", "String 4"),
-            (55.00, "A1", "String 3"),
-            (73.42, "D2", "String 2"),
-            (98.00, "G2", "String 1"),
-        ],
-        Instrument::Bass4 => [
-            (41.20, "E1", "String 4"),
-            (55.00, "A1", "String 3"),
-            (73.42, "D2", "String 2"),
-            (98.00, "G2", "String 1"),
-            (98.00, "G2", "String 1"),
-        ],
-        _ => return "STRING      --\nNOTE        --".into(),
-    };
-    let (target, note, string) = targets
-        .into_iter()
-        .min_by(|(left, _, _), (right, _, _)| {
-            (pitch_hz - left).abs().total_cmp(&(pitch_hz - right).abs())
+    if instrument.kind != InstrumentKind::Strings {
+        return "STRING      --\nNOTE        --".into();
+    }
+    let open_frequencies = standard_open_frequencies(instrument.strings);
+    let (string, target) = open_frequencies
+        .iter()
+        .enumerate()
+        .min_by(|(_, left), (_, right)| {
+            (pitch_hz - *left).abs().total_cmp(&(pitch_hz - *right).abs())
         })
-        .unwrap();
+        .map(|(index, target)| (index, *target))
+        .unwrap_or((0, pitch_hz));
     let cents = 1200.0 * (pitch_hz / target).log2();
-    format!("STRING      {string}\nNOTE        {note} ({cents:+.1} cents)")
+    format!("STRING      {}\nPITCH       {target:.2} Hz ({cents:+.1} cents)", string + 1)
 }
 
 pub(crate) fn move_notes(
@@ -269,10 +261,15 @@ pub(crate) fn lane_color(lane: usize) -> Color {
 }
 
 pub(crate) fn instrument_color(instrument: Instrument, lane: usize) -> Color {
-    match instrument {
-        Instrument::Guitar => lane_color(lane),
-        Instrument::Bass4 | Instrument::Bass5 => Color::srgb(0.95, 0.45, 0.15),
-        Instrument::Drums => Color::srgb(0.25, 0.85, 0.45),
-        Instrument::Vocals => Color::srgb(0.8, 0.3, 0.95),
+    match instrument.kind {
+        InstrumentKind::Strings => {
+            if instrument.strings >= 6 {
+                lane_color(lane)
+            } else {
+                Color::srgb(0.95, 0.45, 0.15)
+            }
+        }
+        InstrumentKind::Percussion => Color::srgb(0.25, 0.85, 0.45),
+        InstrumentKind::Voice => Color::srgb(0.8, 0.3, 0.95),
     }
 }

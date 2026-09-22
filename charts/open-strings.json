@@ -1,25 +1,28 @@
 {
   "version": 1,
   "title": "Open Strings Study",
-  "bpm": 90.0,
-  "time_signature": [4, 4],
+  "resolution": 960,
+  "tempo_map": [{ "start": 0, "bpm": 90.0 }],
+  "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
   "tracks": [
     {
       "name": "Bass",
-      "instrument": "bass5",
-      "tuning": "standard_bass_5",
+      "kind": "strings",
+      "tuning": { "strings": ["B0", "E1", "A1", "D2", "G2"] },
       "notes": [
-        { "start_beat": 1.5, "duration_beats": 0.75, "midi_note": 23, "preferred_string": 0 },
-        { "start_beat": 3.0, "duration_beats": 0.75, "midi_note": 28, "preferred_string": 1 },
-        { "start_beat": 4.5, "duration_beats": 0.75, "midi_note": 33, "preferred_string": 2 },
-        { "start_beat": 6.0, "duration_beats": 0.75, "midi_note": 38, "preferred_string": 3 },
-        { "start_beat": 7.5, "duration_beats": 0.75, "midi_note": 43, "preferred_string": 4 },
-        { "start_beat": 9.0, "duration_beats": 1.5, "midi_note": 26, "preferred_string": 0 },
-        { "start_beat": 11.25, "duration_beats": 1.5, "midi_note": 33, "preferred_string": 1 },
-        { "start_beat": 13.5, "duration_beats": 1.5, "midi_note": 40, "preferred_string": 2 },
-        { "start_beat": 15.75, "duration_beats": 1.5, "midi_note": 43, "preferred_string": 3 },
-        { "start_beat": 18.0, "duration_beats": 1.5, "midi_note": 45, "preferred_string": 4 }
+        { "start": 1440, "length": 8, "dots": 1, "note": 23, "ps": 0 },
+        { "start": 2880, "length": 8, "dots": 1, "note": 28, "ps": 1 },
+        { "start": 4320, "length": 8, "dots": 1, "note": 33, "ps": 2 },
+        { "start": 5760, "length": 8, "dots": 1, "note": 38, "ps": 3 },
+        { "start": 7200, "length": 8, "dots": 1, "note": 43, "ps": 4 },
+        { "start": 8640, "length": 4, "dots": 1, "note": 26, "ps": 0 },
+        { "start": 10800, "length": 4, "dots": 1, "note": 33, "ps": 1 },
+        { "start": 12960, "length": 4, "dots": 1, "note": 40, "ps": 2 },
+        { "start": 15120, "length": 4, "dots": 1, "note": 43, "ps": 3 },
+        { "start": 17280, "length": 4, "dots": 1, "note": 45, "ps": 4 }
       ]
     }
   ]
 }
+
+

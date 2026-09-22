@@ -171,9 +171,14 @@ enum AudioDetectorKind {
 pub(crate) struct AudioDetector(AudioDetectorKind);
 
 impl AudioDetector {
-    pub(crate) fn new(instrument: Instrument, sample_rate: f32) -> Self {
-        match instrument {
-            Instrument::Vocals | Instrument::Drums => {
+    pub(crate) fn new(
+        kind: InstrumentKind,
+        strings: u8,
+        profile: DetectorProfile,
+        sample_rate: f32,
+    ) -> Self {
+        match kind {
+            InstrumentKind::Voice | InstrumentKind::Percussion => {
                 Self(AudioDetectorKind::Mono(AudioOnsetDetector {
                     sample_rate,
                     min_pitch_hz: 60.0,
@@ -181,17 +186,16 @@ impl AudioDetector {
                     ..Default::default()
                 }))
             }
-            Instrument::Guitar => Self(AudioDetectorKind::Poly(PolyphonicAudioDetector::new(
-                sample_rate,
-                1400.0,
-            ))),
-            Instrument::Bass4 | Instrument::Bass5 => {
-                Self(AudioDetectorKind::Bass(BassDetector::new(
-                    instrument,
+            InstrumentKind::Strings => match profile {
+                DetectorProfile::Polyphonic => Self(AudioDetectorKind::Poly(
+                    PolyphonicAudioDetector::new(sample_rate, 1400.0),
+                )),
+                DetectorProfile::PerString => Self(AudioDetectorKind::Bass(BassDetector::new(
+                    strings,
                     sample_rate,
-                    bass_open_string_targets(instrument),
-                )))
-            }
+                    standard_open_frequencies(strings),
+                ))),
+            },
         }
     }
 
@@ -204,30 +208,23 @@ impl AudioDetector {
     }
 }
 
-fn bass_open_string_targets(instrument: Instrument) -> Vec<f32> {
-    match instrument {
-        Instrument::Bass5 => vec![30.87, 41.20, 55.00, 73.42, 98.00],
-        _ => vec![41.20, 55.00, 73.42, 98.00],
-    }
-}
-
 struct BassDetector {
-    instrument: Instrument,
+    strings: u8,
     mono: AudioOnsetDetector,
-    strings: BassStringDetector,
+    strings_detector: BassStringDetector,
 }
 
 impl BassDetector {
-    fn new(instrument: Instrument, sample_rate: f32, targets: Vec<f32>) -> Self {
+    fn new(strings: u8, sample_rate: f32, targets: Vec<f32>) -> Self {
         Self {
-            instrument,
+            strings,
             mono: AudioOnsetDetector {
                 sample_rate,
                 min_pitch_hz: 30.0,
                 max_pitch_hz: 500.0,
                 ..Default::default()
             },
-            strings: BassStringDetector::new(sample_rate, targets),
+            strings_detector: BassStringDetector::new(sample_rate, targets),
         }
     }
 
@@ -237,10 +234,10 @@ impl BassDetector {
         let mono_lanes = events
             .iter()
             .filter(|event| event.phase == NotePhase::Started)
-            .map(|event| bass_string_lane(self.instrument, event.pitch_hz))
+            .map(|event| string_lane(self.strings, event.pitch_hz))
             .collect::<Vec<_>>();
-        for note in self.strings.detect(samples.into_iter()) {
-            if !mono_lanes.contains(&bass_string_lane(self.instrument, note.pitch_hz)) {
+        for note in self.strings_detector.detect(samples.into_iter()) {
+            if !mono_lanes.contains(&string_lane(self.strings, note.pitch_hz)) {
                 events.push(note);
             }
         }

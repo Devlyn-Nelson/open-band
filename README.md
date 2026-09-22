@@ -68,26 +68,30 @@ The application opens on Home. Choose `Live Session` to start playing immediatel
 
 ### Device Selection
 
+Input Setup shows a dynamic list of instrument slots; any number of slots of any kind
+(`Strings`, `Percussion`, `Voice`) can be configured, and multiple slots of the same kind
+are supported (e.g. two `Strings` slots for guitar and bass).
+
 | Key | Action |
 | --- | --- |
-| `1` | Select guitar device |
-| `2` | Select bass device |
-| `3` | Select MIDI drum device |
-| `4` | Select vocal device |
-| `Left` / `Right` | Cycle through available devices |
-| `B` | Toggle four- or five-string bass |
+| `Up` / `Down` | Move focus between slots |
+| `Left` / `Right` | Cycle the focused slot's device (audio devices for `Strings`/`Voice`, MIDI ports for `Percussion`) |
+| `N` | Add a new slot (defaults to `Strings`) |
+| `X` | Remove the focused slot |
+| `K` | Cycle the focused slot's kind (`Strings` -> `Percussion` -> `Voice`) |
+| `[` / `]` | Adjust the focused `Strings` slot's string count |
+| `P` | Toggle the focused `Strings` slot's detector profile (polyphonic vs. per-string) |
 | `Enter` | Continue to calibration |
 
 ### Calibration
 
-| Key | Instrument |
+Calibration lists the currently configured slots; press the number key matching a slot
+(`1`-`9`, in configured order) to select it for calibration.
+
+| Key | Action |
 | --- | --- |
-| `1` | Guitar |
-| `2` | Four-string bass |
-| `3` | Five-string bass |
-| `4` | MIDI drums |
-| `5` | Vocals |
-| `Enter` | Accept calibration; bass continues to latency calibration |
+| `1`-`9` | Select a configured instrument slot |
+| `Enter` | Accept calibration and return to Set Up |
 
 ### Bass Latency Calibration
 
@@ -172,7 +176,10 @@ The panel also reports signal level, adaptive noise floor, lane, and event count
 
 ## Input Device Configuration
 
-Inputs can be selected from `Set Up` -> `Input Setup`. Environment variables are still supported as optional first-run defaults:
+Inputs are configured from `Set Up` -> `Input Setup` as a dynamic list of instrument
+slots (see Device Selection controls above). Environment variables preselect devices for
+the four starter slots (`Strings` x2, `Percussion`, `Voice`) shown the first time Input
+Setup runs, before any settings have been saved:
 
 ```bash
 BAND_HERO_GUITAR_DEVICE="USB Audio" \
@@ -185,13 +192,18 @@ cargo run
 
 Available variables:
 
-- `BAND_HERO_GUITAR_DEVICE`: audio input for guitar.
-- `BAND_HERO_BASS_DEVICE`: audio input for bass.
-- `BAND_HERO_BASS_STRINGS`: use `4` or `5`; defaults to `4`.
-- `BAND_HERO_VOCAL_DEVICE`: audio input for vocals.
-- `BAND_HERO_MIDI_DEVICE`: MIDI input for drums.
+- `BAND_HERO_GUITAR_DEVICE`: audio input for the first (guitar-like, polyphonic) `Strings` slot.
+- `BAND_HERO_BASS_DEVICE`: audio input for the second (bass-like, per-string) `Strings` slot.
+- `BAND_HERO_BASS_STRINGS`: string count for that slot; use `4` or `5`, defaults to `4`.
+- `BAND_HERO_VOCAL_DEVICE`: audio input for the `Voice` slot.
+- `BAND_HERO_MIDI_DEVICE`: MIDI input for the `Percussion` slot.
 
-Saved device identifiers are preferred on later launches. When no saved identifier is available, an exact or partial name from an existing settings file or environment variable is tried, followed by the first available device. MIDI requires an available MIDI input port. The worker thread reports unavailable devices in the terminal and continues with whichever inputs opened successfully.
+These only apply to the starter slots on first run; slots added or removed afterward, and
+all slots once a settings file exists, are configured entirely from the Input Setup screen.
+Saved device identifiers are preferred on later launches. MIDI requires an available MIDI
+input port. The worker thread reports unavailable devices in the terminal and continues
+with whichever inputs opened successfully.
+
 
 The detector accepts quieter bass plucks than the original fixed-level gate. The bass should still be connected through an audio interface or preamp that presents a clean, non-clipped input signal; an inline amp is only needed if the hardware signal is still too weak or noisy at the interface input.
 

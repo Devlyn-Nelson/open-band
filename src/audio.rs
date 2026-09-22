@@ -1,13 +1,12 @@
-use super::LANES;
+use super::{InstrumentKind, LANES};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-/// Instruments supported by the input pipeline.
-pub(crate) enum Instrument {
-    Guitar,
-    Bass4,
-    Bass5,
-    Drums,
-    Vocals,
+/// A configured instrument input: which slot it came from, its kind, and (for `Strings`)
+/// its string count. Any number of slots of any kind may be configured at once.
+pub(crate) struct Instrument {
+    pub(crate) slot: usize,
+    pub(crate) kind: InstrumentKind,
+    pub(crate) strings: u8,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -136,39 +135,35 @@ pub(crate) fn estimate_pitch_with_confidence(
 
 /// Convert an instrument pitch into its gameplay lane.
 pub(crate) fn pitch_to_lane(instrument: Instrument, pitch_hz: f32) -> usize {
-    // Bass uses physical-string lanes; other pitched instruments use logarithmic bands.
-    let (low, high, lane_count) = match instrument {
-        Instrument::Guitar => (82.0, 988.0, LANES),
-        Instrument::Vocals => (80.0, 1200.0, LANES),
-        Instrument::Drums => return 0,
-        Instrument::Bass4 | Instrument::Bass5 => return bass_string_lane(instrument, pitch_hz),
-    };
-    let normalized = ((pitch_hz / low).ln() / (high / low).ln()).clamp(0.0, 0.999);
-    (normalized * lane_count as f32) as usize
+    match instrument.kind {
+        InstrumentKind::Percussion => 0,
+        InstrumentKind::Voice => {
+            let (low, high) = (80.0_f32, 1200.0_f32);
+            let normalized = ((pitch_hz / low).ln() / (high / low).ln()).clamp(0.0, 0.999);
+            (normalized * LANES as f32) as usize
+        }
+        InstrumentKind::Strings => string_lane(instrument.strings, pitch_hz),
+    }
 }
 
-/// Map bass pitch to the nearest physical string lane.
-pub(crate) fn bass_string_lane(instrument: Instrument, pitch_hz: f32) -> usize {
-    // Choose the string whose open-note frequency is closest to the detected pitch.
-    let strings = match instrument {
-        Instrument::Bass5 => [30.87, 41.20, 55.00, 73.42, 98.00],
-        Instrument::Bass4 => [41.20, 55.00, 73.42, 98.00, 98.00],
-        _ => return 0,
-    };
-    strings
-        .into_iter()
+/// Standard open-string frequencies used for lane assignment, chosen by string count.
+/// Only a lane-assignment default (menu navigation, debug window); chart gameplay uses the
+/// chart's own embedded tuning instead.
+pub(crate) fn standard_open_frequencies(strings: u8) -> Vec<f32> {
+    match strings {
+        5 => vec![30.87, 41.20, 55.00, 73.42, 98.00],
+        6 => vec![82.41, 110.00, 146.83, 196.00, 246.94, 329.63],
+        _ => vec![41.20, 55.00, 73.42, 98.00],
+    }
+}
+
+/// Map a string-instrument pitch to the nearest open-string lane.
+pub(crate) fn string_lane(strings: u8, pitch_hz: f32) -> usize {
+    let open = standard_open_frequencies(strings);
+    open.iter()
         .enumerate()
         .min_by(|(_, left), (_, right)| {
-            (pitch_hz / left)
-                .ln()
-                .abs()
-                .total_cmp(&(pitch_hz / right).ln().abs())
+            (pitch_hz / **left).ln().abs().total_cmp(&(pitch_hz / **right).ln().abs())
         })
-        .map_or(0, |(lane, _)| {
-            lane.min(if matches!(instrument, Instrument::Bass5) {
-                4
-            } else {
-                3
-            })
-        })
+        .map_or(0, |(lane, _)| lane.min(LANES - 1))
 }

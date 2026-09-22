@@ -23,10 +23,7 @@ pub(crate) fn instrument_navigation(
     let commands = events
         .try_iter()
         .filter(|event| {
-            matches!(
-                event.instrument,
-                Instrument::Guitar | Instrument::Bass4 | Instrument::Bass5
-            ) && event.phase == NotePhase::Started
+            event.instrument.kind == InstrumentKind::Strings && event.phase == NotePhase::Started
         })
         .map(|event| event.lane)
         .collect::<Vec<_>>();

@@ -106,7 +106,7 @@ pub(crate) fn song_menu_display(
                     if index == menu.selected { ">" } else { " " },
                     index + 1,
                     chart.title,
-                    chart.bpm
+                    chart.starting_bpm()
                 )
             })
             .collect::<Vec<_>>()
@@ -135,7 +135,7 @@ pub(crate) fn setup_chart_countdown(
     let chart = menu
         .and_then(|menu| menu.charts.get(menu.selected).cloned())
         .unwrap_or_else(|| serde_json::from_str(OPEN_STRINGS_CHART).expect("built-in chart JSON"));
-    let notes = chart.bass_notes();
+    let notes = chart.string_notes();
     let total_notes = notes.len();
     let sustain_expected = notes.iter().filter(|note| note.duration > 0.0).count();
     commands.insert_resource(ChartSession {
@@ -179,7 +179,7 @@ pub(crate) fn chart_countdown_system(
 }
 
 pub(crate) fn setup_chart_gameplay(mut commands: Commands, session: Res<ChartSession>) {
-    let notes = session.chart.bass_notes();
+    let notes = session.chart.string_notes();
     commands.spawn((Camera2d, ChartEntity));
     commands.spawn((
         Text2d::new(""),
@@ -196,8 +196,8 @@ pub(crate) fn setup_chart_gameplay(mut commands: Commands, session: Res<ChartSes
         Text2d::new(format!(
             "{}  //  {}  //  {:.0} BPM",
             session.chart.title,
-            session.chart.first_instrument(),
-            session.chart.bpm
+            session.chart.primary_track_name(),
+            session.chart.starting_bpm()
         )),
         TextFont {
             font_size: FontSize::Px(26.0),
@@ -290,12 +290,12 @@ pub(crate) fn chart_gameplay_system(
     mut feedback_text: Query<&mut Text2d, With<ChartFeedbackText>>,
     mut notes: Query<(Entity, &mut ChartNoteVisual, &mut Transform, &mut Sprite)>,
 ) {
-    let chart_notes = session.chart.bass_notes();
+    let chart_notes = session.chart.string_notes();
     let elapsed = time.elapsed_secs() - session.started_at;
     let mut detected_events = Vec::new();
     if let Ok(events) = stream.events.lock() {
         for event in events.try_iter() {
-            if event.instrument == Instrument::Bass5 {
+            if event.instrument.kind == InstrumentKind::Strings {
                 detected_events.push((
                     event.phase,
                     event.lane,
@@ -456,7 +456,7 @@ pub(crate) fn chart_review_display(
         "OPEN BAND  //  SONG REVIEW\n\n{}\n\nCORRECT HITS  {:>3} / {:<3}\nSUSTAIN SUCCESS {:>5.1}%\nAVG ATTACK OFFSET {:>+6.1} ms\n\nEnter: songs     Esc: home",
         session.chart.title,
         stats.correct_hits,
-        stats.total_notes.max(session.chart.bass_notes().len()),
+        stats.total_notes.max(session.chart.string_notes().len()),
         sustain_percent,
         average_offset,
     ));

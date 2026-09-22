@@ -1,4 +1,4 @@
-use super::Instrument;
+use super::{Instrument, InstrumentKind};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -24,14 +24,79 @@ pub(crate) struct MenuText;
 /// Camera owned by a menu screen.
 pub(crate) struct MenuCamera;
 
+/// Which detector algorithm a `Strings` slot uses; irrelevant for other kinds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DetectorProfile {
+    /// Multiple simultaneous pitches (chords), e.g. a guitar.
+    Polyphonic,
+    /// One physical string at a time, matched to the nearest open-string lane, e.g. a bass.
+    PerString,
+}
+
+/// One configured physical instrument input. Any number of slots of any kind can exist.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct InstrumentSlot {
+    pub(crate) kind: InstrumentKind,
+    /// Stable CPAL device id (`Strings`/`Voice`) or `midi:<index>` port key (`Percussion`).
+    #[serde(default)]
+    pub(crate) device: Option<String>,
+    /// String count; only meaningful when `kind` is `Strings`.
+    #[serde(default)]
+    pub(crate) strings: u8,
+    /// Only meaningful when `kind` is `Strings`.
+    #[serde(default = "default_detector_profile")]
+    pub(crate) detector: DetectorProfile,
+}
+
+fn default_detector_profile() -> DetectorProfile {
+    DetectorProfile::PerString
+}
+
+impl InstrumentSlot {
+    pub(crate) fn default_for(kind: InstrumentKind) -> Self {
+        match kind {
+            InstrumentKind::Strings => Self {
+                kind,
+                device: None,
+                strings: 4,
+                detector: DetectorProfile::PerString,
+            },
+            InstrumentKind::Percussion | InstrumentKind::Voice => Self {
+                kind,
+                device: None,
+                strings: 0,
+                detector: DetectorProfile::PerString,
+            },
+        }
+    }
+
+    pub(crate) fn label(&self) -> String {
+        match self.kind {
+            InstrumentKind::Strings => format!("STRINGS ({}-string)", self.strings),
+            InstrumentKind::Percussion => "PERCUSSION (MIDI)".into(),
+            InstrumentKind::Voice => "VOICE".into(),
+        }
+    }
+}
+
 #[derive(Resource)]
 /// Available devices and current choices in Input Setup.
 pub(crate) struct DeviceSelection {
     pub(crate) audio_devices: Vec<DeviceChoice>,
     pub(crate) midi_devices: Vec<DeviceChoice>,
-    pub(crate) selected: [usize; 4],
+    pub(crate) slots: Vec<InstrumentSlot>,
     pub(crate) focus: usize,
-    pub(crate) bass_strings: u8,
+}
+
+impl DeviceSelection {
+    /// The device list a slot's device selection should cycle through.
+    pub(crate) fn devices_for(&self, kind: InstrumentKind) -> &[DeviceChoice] {
+        match kind {
+            InstrumentKind::Percussion => &self.midi_devices,
+            InstrumentKind::Strings | InstrumentKind::Voice => &self.audio_devices,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -43,11 +108,8 @@ pub(crate) struct DeviceChoice {
 #[derive(Resource, Serialize, Deserialize, Default, Debug)]
 /// Settings persisted between launches in `open-band-settings/settings.json`.
 pub(crate) struct PersistentSettings {
-    pub(crate) guitar_device: Option<String>,
-    pub(crate) bass_device: Option<String>,
-    pub(crate) midi_device: Option<String>,
-    pub(crate) vocal_device: Option<String>,
-    pub(crate) bass_strings: Option<u8>,
+    #[serde(default)]
+    pub(crate) slots: Vec<InstrumentSlot>,
     pub(crate) latency_ms: Option<f32>,
 }
 
@@ -68,7 +130,8 @@ pub(crate) struct Score {
 #[derive(Resource)]
 /// Signal and tuner state displayed during instrument calibration.
 pub(crate) struct Calibration {
-    pub(crate) selected: Instrument,
+    /// Index into the configured `InstrumentSlot` list.
+    pub(crate) selected: usize,
     pub(crate) level: f32,
     pub(crate) peak: f32,
     pub(crate) samples: u32,
@@ -137,7 +200,6 @@ pub(crate) struct DebugText;
 
 /// Runtime device configuration consumed by the input worker.
 pub(crate) struct InputConfig {
-    pub(crate) audio_devices: [Option<String>; 3],
-    pub(crate) midi_device: Option<String>,
-    pub(crate) bass_strings: u8,
+    pub(crate) slots: Vec<InstrumentSlot>,
 }
+

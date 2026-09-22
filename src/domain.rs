@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use serde::{Deserialize, Deserializer, de};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use std::fmt;
 
 pub(crate) const OPEN_STRINGS_CHART: &str = include_str!("../charts/open-strings.json");
@@ -16,45 +16,256 @@ pub(crate) enum NoteDisplayMode {
 
 pub(crate) const CHART_NOTE_DISPLAY: NoteDisplayMode = NoteDisplayMode::Both;
 
+/// Generic instrument category a chart track belongs to; string count, kit layout, and
+/// vocal range are all data (`Tuning`/`Kit`/`VocalRange`), not separate kinds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InstrumentKind {
+    Strings,
+    Percussion,
+    Voice,
+}
+
+/// The notated rhythmic value of an event, expressed the way musicians say it: `1` for a
+/// whole note, `2` for a half, `4` for a quarter, `8` for an eighth, `16` for a sixteenth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NoteValue {
+    Whole,
+    Half,
+    Quarter,
+    Eighth,
+    Sixteenth,
+}
+
+impl NoteValue {
+    fn ticks(self, resolution: u32) -> u32 {
+        match self {
+            NoteValue::Whole => resolution * 4,
+            NoteValue::Half => resolution * 2,
+            NoteValue::Quarter => resolution,
+            NoteValue::Eighth => resolution / 2,
+            NoteValue::Sixteenth => resolution / 4,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for NoteValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match u8::deserialize(deserializer)? {
+            1 => Ok(NoteValue::Whole),
+            2 => Ok(NoteValue::Half),
+            4 => Ok(NoteValue::Quarter),
+            8 => Ok(NoteValue::Eighth),
+            16 => Ok(NoteValue::Sixteenth),
+            other => Err(de::Error::custom(format!(
+                "invalid note length {other}; expected 1, 2, 4, 8, or 16"
+            ))),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NoteDynamics {
+    Normal,
+    Accent,
+    Ghost,
+}
+
+impl Default for NoteDynamics {
+    fn default() -> Self {
+        NoteDynamics::Normal
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RollKind {
+    SingleLane,
+    DoubleLane,
+}
+
+/// A tempo change at a tick position; `tempo_map[0].start` should be `0`.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub(crate) struct TempoChange {
+    pub(crate) start: u32,
+    pub(crate) bpm: f32,
+}
+
+/// A time-signature change at a tick position; `time_signature_map[0].start` should be `0`.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub(crate) struct TimeSignatureChange {
+    pub(crate) start: u32,
+    pub(crate) numerator: u8,
+    pub(crate) denominator: u8,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct Chart {
     pub(crate) version: u8,
     pub(crate) title: String,
-    pub(crate) bpm: f32,
-    pub(crate) time_signature: [u8; 2],
+    /// Ticks per quarter note; the exact-integer basis for all event positions/durations.
+    pub(crate) resolution: u32,
+    pub(crate) tempo_map: Vec<TempoChange>,
+    pub(crate) time_signature_map: Vec<TimeSignatureChange>,
     pub(crate) tracks: Vec<ChartTrack>,
+}
+
+/// Ordered, low-string-first open-string notes (octave-qualified, e.g. `"B0"`). Covers any
+/// string count or tuning without code changes.
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct Tuning {
+    pub(crate) strings: Vec<String>,
+}
+
+impl Tuning {
+    fn open_midi(&self) -> Result<Vec<u8>, String> {
+        self.strings.iter().map(|note| parse_note_name(note)).collect()
+    }
+}
+
+/// A single physical piece in a percussion kit; pieces are referenced by `name` from chart
+/// notes, not by index, so reordering a kit never invalidates existing notes.
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct KitPiece {
+    pub(crate) name: String,
+    pub(crate) trigger: String,
+    #[serde(default)]
+    pub(crate) lane: Option<usize>,
+    #[serde(default)]
+    pub(crate) lane_span: Option<String>,
+    #[serde(default)]
+    pub(crate) symbol: Option<String>,
+}
+
+/// A percussion kit: a fixed lane count plus named pieces, some sharing a lane
+/// (distinguished by `symbol`) and some spanning all lanes (`lane_span`, e.g. a kick).
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct Kit {
+    pub(crate) lanes: usize,
+    pub(crate) pieces: Vec<KitPiece>,
+}
+
+impl Kit {
+    fn piece(&self, name: &str) -> Option<&KitPiece> {
+        self.pieces.iter().find(|piece| piece.name == name)
+    }
+}
+
+/// Descriptive-only vocal range; does not gate playability or detection.
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct VocalRange {
+    pub(crate) low: String,
+    pub(crate) high: String,
+}
+
+/// A simple range marker; anything played during the span counts as part of the phrase.
+/// Used for both Star Power phrases and (via `VocalPhrase`) vocal lyric phrases.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub(crate) struct Phrase {
+    pub(crate) start: u32,
+    pub(crate) duration_ticks: u32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct ChartTrack {
     pub(crate) name: String,
-    pub(crate) instrument: String,
+    pub(crate) kind: InstrumentKind,
     #[serde(default)]
-    pub(crate) tuning: Option<String>,
+    pub(crate) tuning: Option<Tuning>,
+    #[serde(default)]
+    pub(crate) kit: Option<Kit>,
+    #[serde(default)]
+    pub(crate) vocal_range: Option<VocalRange>,
     #[serde(default)]
     pub(crate) notes: Vec<ChartEvent>,
     #[serde(default)]
     pub(crate) phrases: Vec<VocalPhrase>,
+    #[serde(default)]
+    pub(crate) star_power_phrases: Vec<Phrase>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum NoteContent {
+    Pitched {
+        note: u8,
+        ps: Option<usize>,
+    },
+    Percussive {
+        piece: String,
+        dynamics: NoteDynamics,
+        roll: Option<RollKind>,
+    },
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct ChartEvent {
-    pub(crate) start_beat: f32,
-    pub(crate) duration_beats: f32,
-    pub(crate) midi_note: u8,
-    pub(crate) preferred_string: Option<usize>,
+    pub(crate) start: u32,
+    pub(crate) length: NoteValue,
+    pub(crate) dots: u8,
+    pub(crate) tied: bool,
+    pub(crate) content: NoteContent,
+}
+
+impl ChartEvent {
+    /// The nominal notated duration in ticks, before following any tie chain.
+    pub(crate) fn duration_ticks(&self, resolution: u32) -> u32 {
+        let base = self.length.ticks(resolution);
+        let mut total = base;
+        let mut addition = base;
+        for _ in 0..self.dots {
+            addition /= 2;
+            total += addition;
+        }
+        total
+    }
+
+    pub(crate) fn note(&self) -> Option<u8> {
+        match &self.content {
+            NoteContent::Pitched { note, .. } => Some(*note),
+            NoteContent::Percussive { .. } => None,
+        }
+    }
+}
+
+/// A pitch expressed either as a raw MIDI number or a readable name like `"B0"`.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum NoteInput {
+    Midi(u8),
+    Named(String),
+}
+
+impl NoteInput {
+    fn resolve(&self) -> Result<u8, String> {
+        match self {
+            NoteInput::Midi(value) => Ok(*value),
+            NoteInput::Named(name) => parse_note_name(name),
+        }
+    }
 }
 
 #[derive(Deserialize)]
 struct ChartEventFields {
-    start_beat: f32,
-    duration_beats: f32,
+    start: u32,
+    length: NoteValue,
     #[serde(default)]
-    midi_note: Option<u8>,
+    dots: u8,
     #[serde(default)]
-    note: Option<String>,
+    tied: bool,
     #[serde(default)]
-    preferred_string: Option<usize>,
+    note: Option<NoteInput>,
+    #[serde(default)]
+    ps: Option<usize>,
+    #[serde(default)]
+    piece: Option<String>,
+    #[serde(default)]
+    dynamics: Option<NoteDynamics>,
+    #[serde(default)]
+    roll: Option<RollKind>,
 }
 
 impl<'de> Deserialize<'de> for ChartEvent {
@@ -63,37 +274,50 @@ impl<'de> Deserialize<'de> for ChartEvent {
         D: Deserializer<'de>,
     {
         let fields = ChartEventFields::deserialize(deserializer)?;
-        let midi_note = match (fields.midi_note, fields.note) {
-            (Some(midi_note), None) => midi_note,
-            (None, Some(note)) => parse_note_name(&note).map_err(de::Error::custom)?,
-            (Some(midi_note), Some(note)) => {
-                let named_note = parse_note_name(&note).map_err(de::Error::custom)?;
-                if midi_note != named_note {
-                    return Err(de::Error::custom(format!(
-                        "midi_note {midi_note} does not match note {note}"
-                    )));
+        let is_pitched = fields.note.is_some();
+        let is_percussive = fields.piece.is_some();
+        let content = match (is_pitched, is_percussive) {
+            (true, false) => {
+                let note = fields
+                    .note
+                    .expect("checked by is_pitched")
+                    .resolve()
+                    .map_err(de::Error::custom)?;
+                NoteContent::Pitched {
+                    note,
+                    ps: fields.ps,
                 }
-                midi_note
             }
-            (None, None) => {
+            (false, true) => NoteContent::Percussive {
+                piece: fields.piece.expect("checked by is_percussive"),
+                dynamics: fields.dynamics.unwrap_or_default(),
+                roll: fields.roll,
+            },
+            (true, true) => {
                 return Err(de::Error::custom(
-                    "chart event requires either midi_note or note",
+                    "chart event cannot mix pitched (note) and percussive (piece) fields",
+                ));
+            }
+            (false, false) => {
+                return Err(de::Error::custom(
+                    "chart event requires either note (pitched) or piece (percussive)",
                 ));
             }
         };
         Ok(Self {
-            start_beat: fields.start_beat,
-            duration_beats: fields.duration_beats,
-            midi_note,
-            preferred_string: fields.preferred_string,
+            start: fields.start,
+            length: fields.length,
+            dots: fields.dots,
+            tied: fields.tied,
+            content,
         })
     }
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct VocalPhrase {
-    pub(crate) start_beat: f32,
-    pub(crate) duration_beats: f32,
+    pub(crate) start: u32,
+    pub(crate) duration_ticks: u32,
     pub(crate) text: String,
     #[serde(default)]
     pub(crate) notes: Vec<ChartEvent>,
@@ -109,87 +333,215 @@ pub(crate) struct ChartNoteData {
     pub(crate) pitch_hz: f32,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct PercussionNoteData {
+    pub(crate) start: f32,
+    pub(crate) duration: f32,
+    pub(crate) piece: String,
+    pub(crate) lane: Option<usize>,
+    pub(crate) lane_span_color: Option<String>,
+    pub(crate) symbol: Option<String>,
+    pub(crate) dynamics: NoteDynamics,
+    pub(crate) roll: Option<RollKind>,
+}
+
+/// Sums the nominal duration of `events[index]` forward across a `tied` chain.
+fn resolved_duration_ticks(events: &[ChartEvent], index: usize, resolution: u32) -> u32 {
+    let mut total = events[index].duration_ticks(resolution);
+    let mut current = index;
+    while events[current].tied {
+        let Some(next) = events.get(current + 1) else {
+            break;
+        };
+        total += next.duration_ticks(resolution);
+        current += 1;
+    }
+    total
+}
+
 impl Chart {
-    pub(crate) fn bass_notes(&self) -> Vec<ChartNoteData> {
+    /// The tempo at tick 0, defaulting to 120 BPM if `tempo_map` has no tick-0 entry.
+    pub(crate) fn starting_bpm(&self) -> f32 {
+        self.tempo_map
+            .iter()
+            .find(|change| change.start == 0)
+            .map_or(120.0, |change| change.bpm)
+    }
+
+    /// The time signature at tick 0, defaulting to 4/4 if `time_signature_map` has no
+    /// tick-0 entry.
+    pub(crate) fn starting_time_signature(&self) -> [u8; 2] {
+        self.time_signature_map
+            .iter()
+            .find(|change| change.start == 0)
+            .map_or([4, 4], |change| [change.numerator, change.denominator])
+    }
+
+    /// Converts a tick position to elapsed seconds by walking the tempo map segment by
+    /// segment, so tempo changes mid-song are handled correctly.
+    pub(crate) fn tick_to_seconds(&self, tick: u32) -> f32 {
+        let resolution = self.resolution.max(1) as f32;
+        let mut changes = self.tempo_map.clone();
+        changes.sort_by_key(|change| change.start);
+        if changes.first().map_or(true, |first| first.start != 0) {
+            changes.insert(0, TempoChange { start: 0, bpm: 120.0 });
+        }
+        let mut seconds = 0.0;
+        let mut previous_tick = 0u32;
+        let mut previous_bpm = changes[0].bpm;
+        for change in changes.iter().skip(1) {
+            if change.start >= tick {
+                break;
+            }
+            seconds += (change.start - previous_tick) as f32 / resolution * 60.0 / previous_bpm;
+            previous_tick = change.start;
+            previous_bpm = change.bpm;
+        }
+        seconds += (tick - previous_tick) as f32 / resolution * 60.0 / previous_bpm;
+        seconds
+    }
+
+    pub(crate) fn string_notes(&self) -> Vec<ChartNoteData> {
         self.tracks
             .iter()
-            .filter(|track| track.instrument.starts_with("bass"))
-            .flat_map(|track| {
-                let tuning = tuning_for(track.tuning.as_deref(), &track.instrument);
-                track.notes.iter().filter_map(move |event| {
-                    let Some((string, fret)) =
-                        best_string_fret(event.midi_note, &tuning, event.preferred_string)
-                    else {
-                        eprintln!(
-                            "Skipping unplayable bass note {}: no string/fret in tuning",
-                            midi_note_name(event.midi_note)
-                        );
-                        return None;
-                    };
-                    Some(ChartNoteData {
-                        start: event.start_beat * 60.0 / self.bpm,
-                        duration: event.duration_beats * 60.0 / self.bpm,
-                        string,
-                        fret,
-                        note: midi_note_name(event.midi_note),
-                        pitch_hz: midi_to_frequency(event.midi_note),
-                    })
+            .filter(|track| track.kind == InstrumentKind::Strings)
+            .flat_map(|track| self.string_notes_for_track(track))
+            .collect()
+    }
+
+    fn string_notes_for_track(&self, track: &ChartTrack) -> Vec<ChartNoteData> {
+        let Some(tuning) = track.tuning.as_ref() else {
+            eprintln!("Strings track {} has no tuning; skipping", track.name);
+            return Vec::new();
+        };
+        let open_midi = match tuning.open_midi() {
+            Ok(open_midi) => open_midi,
+            Err(error) => {
+                eprintln!("Strings track {} has an invalid tuning: {error}", track.name);
+                return Vec::new();
+            }
+        };
+        track
+            .notes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| {
+                let NoteContent::Pitched { note, ps } = &event.content else {
+                    return None;
+                };
+                let Some((string, fret)) = best_string_fret(*note, &open_midi, *ps) else {
+                    eprintln!(
+                        "Skipping unplayable note {}: no string/fret in tuning",
+                        midi_note_name(*note)
+                    );
+                    return None;
+                };
+                let duration_ticks = resolved_duration_ticks(&track.notes, index, self.resolution);
+                let start = self.tick_to_seconds(event.start);
+                let duration = self.tick_to_seconds(event.start + duration_ticks) - start;
+                Some(ChartNoteData {
+                    start,
+                    duration,
+                    string,
+                    fret,
+                    note: midi_note_name(*note),
+                    pitch_hz: midi_to_frequency(*note),
                 })
             })
             .collect()
     }
 
-    pub(crate) fn first_instrument(&self) -> &str {
+    pub(crate) fn percussion_notes(&self) -> Vec<PercussionNoteData> {
         self.tracks
-            .first()
-            .map_or("unknown", |track| track.instrument.as_str())
+            .iter()
+            .filter(|track| track.kind == InstrumentKind::Percussion)
+            .flat_map(|track| self.percussion_notes_for_track(track))
+            .collect()
     }
 
-    pub(crate) fn total_beats(&self) -> f32 {
+    fn percussion_notes_for_track(&self, track: &ChartTrack) -> Vec<PercussionNoteData> {
+        let Some(kit) = track.kit.as_ref() else {
+            eprintln!("Percussion track {} has no kit; skipping", track.name);
+            return Vec::new();
+        };
+        track
+            .notes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| {
+                let NoteContent::Percussive {
+                    piece,
+                    dynamics,
+                    roll,
+                } = &event.content
+                else {
+                    return None;
+                };
+                let Some(kit_piece) = kit.piece(piece) else {
+                    eprintln!(
+                        "Skipping unknown percussion piece {piece} on track {}",
+                        track.name
+                    );
+                    return None;
+                };
+                let duration_ticks = resolved_duration_ticks(&track.notes, index, self.resolution);
+                let start = self.tick_to_seconds(event.start);
+                let duration = self.tick_to_seconds(event.start + duration_ticks) - start;
+                Some(PercussionNoteData {
+                    start,
+                    duration,
+                    piece: piece.clone(),
+                    lane: kit_piece.lane,
+                    lane_span_color: kit_piece.lane_span.clone(),
+                    symbol: kit_piece.symbol.clone(),
+                    dynamics: *dynamics,
+                    roll: *roll,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn primary_track_name(&self) -> &str {
+        self.tracks
+            .first()
+            .map_or("unknown", |track| track.name.as_str())
+    }
+
+    pub(crate) fn total_ticks(&self) -> u32 {
         self.tracks
             .iter()
             .flat_map(|track| {
                 track
                     .notes
                     .iter()
-                    .map(|note| note.start_beat + note.duration_beats)
+                    .enumerate()
+                    .map(|(index, note)| {
+                        note.start + resolved_duration_ticks(&track.notes, index, self.resolution)
+                    })
                     .chain(
                         track
                             .phrases
                             .iter()
-                            .map(|phrase| phrase.start_beat + phrase.duration_beats),
+                            .map(|phrase| phrase.start + phrase.duration_ticks),
+                    )
+                    .chain(
+                        track
+                            .star_power_phrases
+                            .iter()
+                            .map(|phrase| phrase.start + phrase.duration_ticks),
                     )
             })
-            .fold(0.0, f32::max)
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Tuning {
-    open_midi: &'static [u8],
-}
-
-fn tuning_for(name: Option<&str>, instrument: &str) -> Tuning {
-    match name.unwrap_or(instrument) {
-        "standard_bass_4" | "bass4" => Tuning {
-            open_midi: &[28, 33, 38, 43],
-        },
-        "standard_bass_5" | "bass5" | "standard" => Tuning {
-            open_midi: &[23, 28, 33, 38, 43],
-        },
-        _ => Tuning {
-            open_midi: &[23, 28, 33, 38, 43],
-        },
+            .max()
+            .unwrap_or(0)
     }
 }
 
 fn best_string_fret(
     midi_note: u8,
-    tuning: &Tuning,
+    open_midi: &[u8],
     preferred_string: Option<usize>,
 ) -> Option<(usize, u8)> {
-    let candidates = tuning
-        .open_midi
+    let candidates = open_midi
         .iter()
         .enumerate()
         .filter_map(|(string, open)| {
@@ -259,6 +611,7 @@ impl fmt::Display for ChartTrack {
         formatter.write_str(&self.name)
     }
 }
+
 
 #[derive(Resource)]
 pub(crate) struct SongMenuSelection {

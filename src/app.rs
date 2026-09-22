@@ -28,7 +28,7 @@ pub(crate) fn run() {
         })
         .init_resource::<MenuSelection>()
         .insert_resource(Calibration {
-            selected: Instrument::Guitar,
+            selected: 0,
             level: 0.0,
             peak: 0.0,
             samples: 0,

@@ -26,39 +26,95 @@ pub(crate) fn device_selection_input(
     mut settings: ResMut<PersistentSettings>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    let focus_keys = [
-        KeyCode::Digit1,
-        KeyCode::Digit2,
-        KeyCode::Digit3,
-        KeyCode::Digit4,
-    ];
-    for (index, key) in focus_keys.into_iter().enumerate() {
-        if keyboard.just_pressed(key) {
-            selection.focus = index;
+    if !selection.slots.is_empty() {
+        if keyboard.just_pressed(KeyCode::ArrowUp) {
+            selection.focus = selection
+                .focus
+                .checked_sub(1)
+                .unwrap_or(selection.slots.len() - 1);
+        }
+        if keyboard.just_pressed(KeyCode::ArrowDown) {
+            selection.focus = (selection.focus + 1) % selection.slots.len();
         }
     }
-    if keyboard.just_pressed(KeyCode::KeyB) {
-        selection.bass_strings = if selection.bass_strings == 4 { 5 } else { 4 };
+    if keyboard.just_pressed(KeyCode::ArrowLeft) {
+        cycle_slot_device(&mut selection, -1);
     }
-
-    let device_count = if selection.focus == 2 {
-        selection.midi_devices.len()
-    } else {
-        selection.audio_devices.len()
-    };
-    if device_count > 0 && keyboard.just_pressed(KeyCode::ArrowLeft) {
-        let focus = selection.focus;
-        selection.selected[focus] = selection.selected[focus]
-            .checked_sub(1)
-            .unwrap_or(device_count - 1);
+    if keyboard.just_pressed(KeyCode::ArrowRight) {
+        cycle_slot_device(&mut selection, 1);
     }
-    if device_count > 0 && keyboard.just_pressed(KeyCode::ArrowRight) {
+    if keyboard.just_pressed(KeyCode::KeyN) {
+        selection
+            .slots
+            .push(InstrumentSlot::default_for(InstrumentKind::Strings));
+        selection.focus = selection.slots.len() - 1;
+    }
+    if keyboard.just_pressed(KeyCode::KeyX) && !selection.slots.is_empty() {
         let focus = selection.focus;
-        selection.selected[focus] = (selection.selected[focus] + 1) % device_count;
+        selection.slots.remove(focus);
+        selection.focus = selection.focus.min(selection.slots.len().saturating_sub(1));
+    }
+    if keyboard.just_pressed(KeyCode::KeyK) {
+        let focus = selection.focus;
+        if let Some(slot) = selection.slots.get_mut(focus) {
+            let next_kind = match slot.kind {
+                InstrumentKind::Strings => InstrumentKind::Percussion,
+                InstrumentKind::Percussion => InstrumentKind::Voice,
+                InstrumentKind::Voice => InstrumentKind::Strings,
+            };
+            *slot = InstrumentSlot::default_for(next_kind);
+        }
+    }
+    if keyboard.just_pressed(KeyCode::KeyP) {
+        let focus = selection.focus;
+        if let Some(slot) = selection.slots.get_mut(focus)
+            && slot.kind == InstrumentKind::Strings
+        {
+            slot.detector = match slot.detector {
+                DetectorProfile::Polyphonic => DetectorProfile::PerString,
+                DetectorProfile::PerString => DetectorProfile::Polyphonic,
+            };
+        }
+    }
+    if keyboard.just_pressed(KeyCode::BracketLeft) {
+        let focus = selection.focus;
+        if let Some(slot) = selection.slots.get_mut(focus)
+            && slot.kind == InstrumentKind::Strings
+        {
+            slot.strings = slot.strings.saturating_sub(1).max(4);
+        }
+    }
+    if keyboard.just_pressed(KeyCode::BracketRight) {
+        let focus = selection.focus;
+        if let Some(slot) = selection.slots.get_mut(focus)
+            && slot.kind == InstrumentKind::Strings
+        {
+            slot.strings = (slot.strings + 1).min(7);
+        }
     }
 
     if keyboard.just_pressed(KeyCode::Enter) {
         commit_device_selection(&selection, &mut stream, &mut settings, &mut next_state);
+    }
+}
+
+/// Cycles the focused slot's device selection among the device list matching its kind.
+fn cycle_slot_device(selection: &mut DeviceSelection, delta: i32) {
+    let Some(slot) = selection.slots.get(selection.focus).cloned() else {
+        return;
+    };
+    let devices = selection.devices_for(slot.kind).to_vec();
+    if devices.is_empty() {
+        return;
+    }
+    let current = slot
+        .device
+        .as_deref()
+        .and_then(|id| devices.iter().position(|device| device.id == id))
+        .unwrap_or(0);
+    let next = (current as i32 + delta).rem_euclid(devices.len() as i32) as usize;
+    if let Some(slot) = selection.slots.get_mut(selection.focus) {
+        slot.device = Some(devices[next].id.clone());
     }
 }
 
@@ -68,26 +124,10 @@ pub(crate) fn commit_device_selection(
     settings: &mut PersistentSettings,
     next_state: &mut NextState<AppState>,
 ) {
-    let audio_id = |index: usize| {
-        selection
-            .audio_devices
-            .get(selection.selected[index])
-            .map(|device| device.id.clone())
-    };
-    let midi_id = selection
-        .midi_devices
-        .get(selection.selected[2])
-        .map(|device| device.id.clone());
     let config = InputConfig {
-        audio_devices: [audio_id(0), audio_id(1), audio_id(3)],
-        midi_device: midi_id,
-        bass_strings: selection.bass_strings,
+        slots: selection.slots.clone(),
     };
-    settings.guitar_device = config.audio_devices[0].clone();
-    settings.bass_device = config.audio_devices[1].clone();
-    settings.vocal_device = config.audio_devices[2].clone();
-    settings.midi_device = config.midi_device.clone();
-    settings.bass_strings = Some(config.bass_strings);
+    settings.slots = selection.slots.clone();
     save_settings(settings);
     if let Some(stop_sender) = stream.stop_sender.take() {
         let _ = stop_sender.send(());
@@ -113,30 +153,38 @@ pub(crate) fn device_selection_display(
     let Ok(mut text) = text.single_mut() else {
         return;
     };
-    let device_name = |devices: &[DeviceChoice], selected: usize| {
-        devices
-            .get(selected)
-            .map(|device| format!("{}\n      ID: {}", device.label, device.id))
-            .unwrap_or_else(|| "NO DEVICE FOUND".into())
-    };
-    let marker = |index: usize| if selection.focus == index { ">" } else { " " };
+    let mut slot_lines = String::new();
+    for (index, slot) in selection.slots.iter().enumerate() {
+        let marker = if selection.focus == index { ">" } else { " " };
+        let devices = selection.devices_for(slot.kind);
+        let device_label = slot
+            .device
+            .as_deref()
+            .and_then(|id| devices.iter().find(|device| device.id == id))
+            .map(|device| format!("{}  (ID: {})", device.label, device.id))
+            .unwrap_or_else(|| "NO DEVICE SELECTED".into());
+        let detail = if slot.kind == InstrumentKind::Strings {
+            format!(" [{:?}]", slot.detector)
+        } else {
+            String::new()
+        };
+        slot_lines.push_str(&format!(
+            "{marker} [{}] {}{detail}\n      {device_label}\n\n",
+            index + 1,
+            slot.label(),
+        ));
+    }
+    if selection.slots.is_empty() {
+        slot_lines.push_str("  (no instrument slots configured; press N to add one)\n\n");
+    }
     *text = Text::new(format!(
         "OPEN BAND  //  INPUT DEVICES\n\n\
-        {} [1] GUITAR\n      {}\n\n\
-        {} [2] BASS (B to switch {}-string)\n      {}\n\n\
-        {} [3] MIDI DRUMS\n      {}\n\n\
-        {} [4] VOCALS\n      {}\n\n\
-        Left/Right: choose device     Enter: continue\n\
-        Environment variables remain supported as defaults.",
-        marker(0),
-        device_name(&selection.audio_devices, selection.selected[0]),
-        marker(1),
-        selection.bass_strings,
-        device_name(&selection.audio_devices, selection.selected[1]),
-        marker(2),
-        device_name(&selection.midi_devices, selection.selected[2]),
-        marker(3),
-        device_name(&selection.audio_devices, selection.selected[3]),
+        {slot_lines}\
+        Up/Down: focus slot     Left/Right: choose device\n\
+        N: add slot     X: remove focused slot     K: cycle slot kind\n\
+        [ / ]: string count     P: detector profile (Strings only)\n\
+        Enter: continue\n\
+        Environment variables remain supported as first-run defaults.",
     ));
 }
 
@@ -304,6 +352,7 @@ pub(crate) fn calibration_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut next_state: ResMut<NextState<AppState>>,
     mut calibration: ResMut<Calibration>,
+    selection: Res<DeviceSelection>,
     stream: Res<InstrumentStream>,
     time: Res<Time>,
 ) {
@@ -311,16 +360,20 @@ pub(crate) fn calibration_input(
         next_state.set(AppState::Setup);
         return;
     }
-    let choices = [
-        (KeyCode::Digit1, Instrument::Guitar),
-        (KeyCode::Digit2, Instrument::Bass4),
-        (KeyCode::Digit3, Instrument::Bass5),
-        (KeyCode::Digit4, Instrument::Drums),
-        (KeyCode::Digit5, Instrument::Vocals),
+    let digit_keys = [
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+        KeyCode::Digit7,
+        KeyCode::Digit8,
+        KeyCode::Digit9,
     ];
-    for (key, instrument) in choices {
-        if keyboard.just_pressed(key) {
-            calibration.selected = instrument;
+    for (index, key) in digit_keys.into_iter().enumerate() {
+        if index < selection.slots.len() && keyboard.just_pressed(key) {
+            calibration.selected = index;
             calibration.level = 0.0;
             calibration.peak = 0.0;
             calibration.samples = 0;
@@ -336,7 +389,7 @@ pub(crate) fn calibration_input(
         return;
     };
     for event in events.try_iter() {
-        if event.instrument as u8 == calibration.selected as u8 {
+        if event.instrument.slot == calibration.selected {
             calibration.level = event.strength;
             calibration.peak = calibration.peak.max(event.strength);
             calibration.samples += 1;
@@ -347,15 +400,26 @@ pub(crate) fn calibration_input(
 
 pub(crate) fn calibration_display(
     calibration: Res<Calibration>,
+    selection: Res<DeviceSelection>,
     mut text: Query<&mut Text, With<CalibrationText>>,
     mut meter: Query<&mut Transform, With<CalibrationMeter>>,
 ) {
     let Ok(mut text) = text.single_mut() else {
         return;
     };
-    let instrument = instrument_name(calibration.selected);
-    let source = input_source(calibration.selected);
-    let tuner = bass_tuner_reading(calibration.selected, calibration.last_pitch_hz);
+    let slot_list = selection
+        .slots
+        .iter()
+        .enumerate()
+        .map(|(index, slot)| format!("[{}] {}", index + 1, slot.label()))
+        .collect::<Vec<_>>()
+        .join("   ");
+    let slot = selection.slots.get(calibration.selected);
+    let instrument = slot.map_or_else(|| "NONE CONFIGURED".into(), InstrumentSlot::label);
+    let tuner = slot.map_or_else(
+        || "TUNER: no instrument slots configured".into(),
+        |slot| bass_tuner_reading(slot.kind, slot.strings, calibration.last_pitch_hz),
+    );
     let status = if calibration.samples > 0 {
         "SIGNAL DETECTED"
     } else {
@@ -364,16 +428,14 @@ pub(crate) fn calibration_display(
     *text = Text::new(format!(
         concat!(
             "OPEN BAND  //  INPUT CALIBRATION\n\n",
-            "[1] GUITAR       [2] BASS 4-STRING\n",
-            "[3] BASS 5-STRING [4] MIDI DRUMS\n",
-            "[5] VOCALS\n\n",
-            "ACTIVE: {}\nSOURCE: {}\n\n",
+            "{}\n\n",
+            "ACTIVE: {}\n\n",
             "{}\n\n",
             "{}\nLEVEL  {:>3.0}%     PEAK  {:>3.0}%\n\n",
             "Play the selected instrument. Press ENTER when ready."
         ),
+        slot_list,
         instrument,
-        source,
         tuner,
         status,
         calibration.level * 100.0,
@@ -400,36 +462,22 @@ pub(crate) fn cleanup_calibration(
     }
 }
 
-pub(crate) fn bass_tuner_reading(instrument: Instrument, pitch_hz: Option<f32>) -> String {
-    if !matches!(instrument, Instrument::Bass4 | Instrument::Bass5) {
-        return "TUNER: select a bass input with [2] or [3]".into();
+pub(crate) fn bass_tuner_reading(kind: InstrumentKind, strings: u8, pitch_hz: Option<f32>) -> String {
+    if kind != InstrumentKind::Strings {
+        return format!("TUNER: not applicable to {}", instrument_name(kind, strings));
     }
     let Some(pitch_hz) = pitch_hz else {
-        return "BASS TUNER\nPlay an open string to begin tuning.".into();
+        return "STRING TUNER\nPlay an open string to begin tuning.".into();
     };
-    let targets = if matches!(instrument, Instrument::Bass5) {
-        [
-            (30.87, "B"),
-            (41.20, "E"),
-            (55.00, "A"),
-            (73.42, "D"),
-            (98.00, "G"),
-        ]
-    } else {
-        [
-            (41.20, "E"),
-            (55.00, "A"),
-            (73.42, "D"),
-            (98.00, "G"),
-            (98.00, "G"),
-        ]
-    };
-    let (target, note) = targets
-        .into_iter()
-        .min_by(|(left, _), (right, _)| {
-            (pitch_hz - left).abs().total_cmp(&(pitch_hz - right).abs())
+    let targets = standard_open_frequencies(strings);
+    let (index, target) = targets
+        .iter()
+        .enumerate()
+        .min_by(|(_, left), (_, right)| {
+            (pitch_hz - *left).abs().total_cmp(&(pitch_hz - *right).abs())
         })
-        .unwrap();
+        .map(|(index, target)| (index, *target))
+        .unwrap_or((0, pitch_hz));
     let cents = 1200.0 * (pitch_hz / target).log2();
     let verdict = if cents.abs() < 5.0 {
         "IN TUNE"
@@ -439,21 +487,15 @@ pub(crate) fn bass_tuner_reading(instrument: Instrument, pitch_hz: Option<f32>) 
         "TUNE DOWN"
     };
     format!(
-        "BASS TUNER\nNOTE  {note}\nPITCH  {pitch_hz:>6.2} Hz\nOFFSET {cents:>+6.1} cents   {verdict}"
+        "STRING TUNER\nSTRING  {}\nPITCH   {pitch_hz:>6.2} Hz\nOFFSET  {cents:>+6.1} cents   {verdict}",
+        index + 1
     )
 }
 
-pub(crate) fn instrument_name(instrument: Instrument) -> &'static str {
-    match instrument {
-        Instrument::Guitar => "GUITAR",
-        Instrument::Bass4 => "BASS 4-STRING",
-        Instrument::Bass5 => "BASS 5-STRING",
-        Instrument::Drums => "MIDI DRUMS",
-        Instrument::Vocals => "VOCALS",
+pub(crate) fn instrument_name(kind: InstrumentKind, strings: u8) -> String {
+    match kind {
+        InstrumentKind::Strings => format!("STRINGS ({strings}-STRING)"),
+        InstrumentKind::Percussion => "PERCUSSION (MIDI)".into(),
+        InstrumentKind::Voice => "VOICE".into(),
     }
-}
-
-pub(crate) fn input_source(instrument: Instrument) -> String {
-    let _ = instrument;
-    "selected in device dialog".into()
 }
