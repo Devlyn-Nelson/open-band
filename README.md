@@ -194,7 +194,7 @@ Audio callbacks stay real-time safe: they downmix samples and enqueue bounded au
 
 ## Source Documentation
 
-`src/main.rs` uses Rustdoc comments for application states, resources, components, and functions. Short inline comments identify the larger blocks inside systems, such as device enumeration, worker startup, pitch estimation, event consumption, and screen cleanup.
+`src/main.rs` is the crate entry point. `src/app.rs` owns Bevy app construction and system registration. `src/state.rs` owns top-level application states. `src/domain.rs` owns chart data, chart screen state, and chart UI markers. `src/audio.rs` owns pure pitch estimation and pitch-to-lane mapping. `src/detector.rs` owns stateful audio detectors. `src/input.rs` owns worker lifecycle and device callbacks. `src/settings.rs` owns persisted settings and device enumeration. `src/setup.rs` owns device selection and calibration. `src/navigation.rs` owns instrument-driven navigation. `src/chart.rs` owns chart screens. `src/menu.rs` owns Home and Set Up menus. `src/gameplay.rs` owns live-session rendering, diagnostics, note motion, and scoring. `AGENTS.md` is the concise contributor map with ownership boundaries and validation commands.
 
 ## Current Limitations
 
