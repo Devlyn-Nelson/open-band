@@ -8,26 +8,26 @@ The current project is an input and gameplay prototype. It proves the real-time 
 
 - Bevy `0.20.0-rc.1` application and state management.
 - Dedicated instrument worker thread separate from the Bevy gameplay thread.
-- CPAL audio input for:
-  - Electric guitar through a 1/4-inch-to-USB audio interface.
-  - Electric bass through a 1/4-inch-to-USB audio interface.
+- CPAL audio input for any number of configured `Strings`/`Voice` instrument slots:
+  - Electric guitar or bass through a 1/4-inch-to-USB audio interface.
   - Vocal microphones.
-- Configurable four-string or five-string bass mode.
-- MIDI input for electronic drums.
+- Any number of `Strings` slots with a configurable string count and detector profile
+  (polyphonic for chords, per-string for bass-style physical strings).
+- MIDI input for electronic drums, with any number of `Percussion` slots.
 - Audio onset detection with normalized YIN-style pitch estimation.
-- Polyphonic FFT pitch tracking for guitar and bass, with up to six simultaneous notes.
+- Polyphonic FFT pitch tracking, with up to six simultaneous notes.
 - Monophonic YIN-style tracking retained for vocals, with note start, sustain, and release events.
-- Note-duration events report elapsed playing time in seconds for tracked guitar and bass notes.
+- Note-duration events report elapsed playing time in seconds for tracked notes.
 - Adaptive low-level onset gating for quieter plucks.
 - Confidence-gated pitch estimation: low-confidence YIN reads are rejected instead of reported as notes.
-- A dedicated per-string energy tracker for bass open-string navigation (menu/song selection), independent from the general pitch detector, so a fresh pluck registers even while another string is still ringing. This tracker is menu-navigation only; chart gameplay and fretted notes still use the general YIN detector.
-- Pitch-to-lane mapping for guitar and vocals, plus physical-string mapping for bass.
+- A dedicated per-string energy tracker for open-string navigation (menu/song selection), independent from the general pitch detector, so a fresh pluck registers even while another string is still ringing. This tracker is menu-navigation only; chart gameplay and fretted notes still use the general YIN detector.
+- Pitch-to-lane mapping for strings and vocals.
 - MIDI drum note mapping to gameplay lanes.
-- Bass tuner with string, frequency, and cents-offset feedback.
-- Timing calibration screen with a moving beat target before bass gameplay.
+- String tuner with string, frequency, and cents-offset feedback.
+- Timing calibration screen with a moving beat target before chart gameplay.
 - Home screen with direct access to the live session and setup tools.
 - Persistent setup settings stored in `open-band-settings/settings.json`.
-- Toggleable live-session input debug window with pitch, bass string, note, lane, and signal data.
+- Toggleable live-session input debug window with pitch, string, note, lane, and signal data.
 - Basic falling-note highway and keyboard fallback controls.
 
 ## Running
@@ -44,8 +44,9 @@ Then run:
 cargo run
 ```
 
-To feed a WAV recording through the bass detector instead of a hardware input, set
-`BAND_HERO_RECORDING` to a recording path:
+To feed a WAV recording through the detector instead of a hardware input, set
+`BAND_HERO_RECORDING` to a recording path (fed through the first configured `Strings`
+slot, or a 4-string default if none is configured):
 
 ```bash
 BAND_HERO_RECORDING=recordings/open-gdeab.wav BAND_HERO_BASS_STRINGS=5 cargo run
@@ -119,60 +120,70 @@ Each setup tool returns to Set Up when accepted or exited. Returning to Input Se
 
 ## Saved Settings
 
-When Input Setup is accepted, Open Band saves stable device identifiers and bass string mode. Audio settings use CPAL device IDs such as `alsa:...`; MIDI settings use a deterministic `midi:<index>` port key. The setup screen shows both the friendly device name and concrete identifier. The settings file is created in the working directory at `open-band-settings/settings.json` and is loaded on the next launch. Existing name-based settings and environment variables remain supported as fallback defaults when no saved identifier matches.
+When Input Setup is accepted, Open Band saves the full list of configured instrument
+slots (kind, device, string count, detector profile). Audio settings use CPAL device IDs
+such as `alsa:...`; MIDI settings use a deterministic `midi:<index>` port key. The setup
+screen shows both the friendly device name and concrete identifier. The settings file is
+created in the working directory at `open-band-settings/settings.json` and is loaded on
+the next launch. Environment variables remain supported as first-run defaults for the
+starter slot list when no settings file exists yet.
 
 The gameplay prototype also supports `A S D F G` as lane controls.
 
 ## Chart Format
 
-Charts are versioned JSON songs with a shared timeline and one or more instrument tracks. At startup, Open Band loads every `*.json` file in the working directory's `charts/` folder in sorted filename order. Invalid files are reported and skipped. If no charts can be loaded, the embedded starter chart is used as a fallback. The included starter chart is
+Charts are versioned JSON songs with a shared timeline and one or more instrument tracks.
+At startup, Open Band loads every `*.json` file in the working directory's `charts/`
+folder in sorted filename order. Invalid files are reported and skipped. If no charts can
+be loaded, the embedded starter chart is used as a fallback. The included starter chart is
 `charts/open-strings.json`:
 
 ```json
 {
   "version": 1,
   "title": "Open Strings Study",
-  "bpm": 90.0,
-  "time_signature": [4, 4],
+  "resolution": 960,
+  "tempo_map": [{ "start": 0, "bpm": 90.0 }],
+  "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
   "tracks": [
     {
       "name": "Bass",
-      "instrument": "bass5",
-      "tuning": "standard_bass_5",
-      "notes": [{
-        "start_beat": 1.5,
-        "duration_beats": 0.75,
-        "midi_note": 23,
-        "preferred_string": 0
-      }]
-    },
-    {
-      "name": "Lead Vocal",
-      "instrument": "vocals",
-      "phrases": [{
-        "start_beat": 4.0,
-        "duration_beats": 2.0,
-        "text": "Hello",
-        "notes": [{ "start_beat": 4.0, "duration_beats": 2.0, "midi_note": 60 }]
-      }]
+      "kind": "strings",
+      "tuning": { "strings": ["B0", "E1", "A1", "D2", "G2"] },
+      "notes": [
+        { "start": 1440, "length": 8, "dots": 1, "note": 23, "ps": 0 }
+      ]
     }
   ]
 }
 ```
 
-`start_beat` and `duration_beats` are musical beats from the song timeline. Each event
-must define either `midi_note` or a readable `note` such as `C4`; both forms are
-normalized to the internal MIDI representation during parsing. If both are supplied,
-they must agree. Note names and frequencies are derived at runtime. For fretted
-instruments, `tuning` and optional `preferred_string` are used to derive a playable
-string/fret position. The current label mode is configured by `CHART_NOTE_DISPLAY` in
-`src/domain.rs` and supports `Fret`, `Note`, or `Both`.
+Event positions and durations are integer **ticks** against the chart's `resolution`
+(ticks per quarter note), not raw beats — this supports exact tempo/time-signature
+changes mid-song via `tempo_map`/`time_signature_map` (each keyed by `start` tick, with a
+tick-0 entry expected). A note's notated duration is `length` (`1`/`2`/`4`/`8`/`16` for
+whole/half/quarter/eighth/sixteenth) plus optional `dots`; `tied: true` continues the
+duration into the next event of the same pitch/piece.
 
-Songs can contain bass, guitar, drum, melodic, and vocal tracks. Vocal tracks use lyric
-phrases with nested pitch targets, allowing lyrics and melody to share the same timeline.
+Each track declares a `kind`: `strings`, `percussion`, or `voice`. `strings` tracks embed
+a `tuning` (ordered, low-string-first, octave-qualified open-string notes, e.g. `["B0",
+"E1", "A1", "D2", "G2"]`) covering any string count or tuning. `percussion` tracks embed a
+`kit` (a lane count plus named pieces, each on a `lane` or spanning all lanes via
+`lane_span`); percussion notes reference a piece by name (`"piece": "kick"`), optionally
+with `dynamics` (`accent`/`ghost`) or `roll` (`single_lane`/`double_lane`). Pitched events
+use `note` — either a raw MIDI number or a readable name like `"C4"` — and an optional
+`ps` (preferred string) hint. Any track can carry `star_power_phrases`, simple
+`{ start, duration_ticks }` range markers.
 
-Press `F3` during the live session to show or hide the input debug window. For bass, it reports the estimated frequency, nearest string, note, and cents offset.
-The panel also reports signal level, adaptive noise floor, lane, and event count. The noise-floor value is the detector's current estimate of the background input level.
+Songs can contain any number of `strings`, `percussion`, and `voice` tracks. `voice`
+tracks use lyric phrases with nested pitch targets, allowing lyrics and melody to share
+the same timeline. The current fret/note label mode is configured by `CHART_NOTE_DISPLAY`
+in `src/domain.rs` and supports `Fret`, `Note`, or `Both`.
+
+Press `F3` during the live session to show or hide the input debug window. For strings
+inputs, it reports the estimated frequency, nearest string, pitch, and cents offset.
+The panel also reports signal level, adaptive noise floor, lane, and event count. The
+noise-floor value is the detector's current estimate of the background input level.
 
 ## Input Device Configuration
 

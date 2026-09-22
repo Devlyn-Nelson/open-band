@@ -277,6 +277,111 @@ pub(crate) fn setup_chart_gameplay(mut commands: Commands, session: Res<ChartSes
                 ));
             });
     }
+    spawn_percussion_visuals(&mut commands, &session.chart);
+}
+
+/// Percussion tracks render as their own lane strip beside the string highway: a fixed
+/// lane count, shared-lane pieces tinted by `symbol`, and `lane_span` pieces (e.g. kick)
+/// as a full-width bar. Visual only for now — not yet wired to live hit detection/scoring.
+fn spawn_percussion_visuals(commands: &mut Commands, chart: &Chart) {
+    let percussion_notes = chart.percussion_notes();
+    if percussion_notes.is_empty() {
+        return;
+    }
+    let lanes = chart
+        .tracks
+        .iter()
+        .find(|track| track.kind == InstrumentKind::Percussion)
+        .and_then(|track| track.kit.as_ref())
+        .map_or(4, |kit| kit.lanes.max(1));
+    let lane_x = |lane: usize| 460.0 + lane.min(lanes.saturating_sub(1)) as f32 * 70.0;
+    let left_edge = lane_x(0) - 30.0;
+    let right_edge = lane_x(lanes.saturating_sub(1)) + 30.0;
+
+    for lane in 0..lanes {
+        commands.spawn((
+            Sprite {
+                color: Color::srgba(0.25, 0.3, 0.4, 0.5),
+                custom_size: Some(Vec2::new(3.0, 570.0)),
+                ..default()
+            },
+            Transform::from_xyz(lane_x(lane), 0.0, 0.0),
+            ChartEntity,
+        ));
+    }
+
+    for note in &percussion_notes {
+        let spans_lanes = note.lane_span_color.is_some();
+        let (x, width) = if spans_lanes {
+            ((left_edge + right_edge) / 2.0, right_edge - left_edge)
+        } else {
+            (lane_x(note.lane.unwrap_or(0)), 60.0)
+        };
+        let color = note
+            .lane_span_color
+            .as_deref()
+            .map(lane_span_color)
+            .unwrap_or_else(|| percussion_symbol_color(note.symbol.as_deref()));
+        commands.spawn((
+            Sprite {
+                color: color.with_alpha(0.95),
+                custom_size: Some(Vec2::new(width, 8.0)),
+                ..default()
+            },
+            Transform::from_xyz(x, 300.0, 3.0),
+            PercussionNoteVisual {
+                lane: note.lane,
+                spans_lanes,
+                start: note.start,
+                duration: note.duration,
+            },
+            ChartEntity,
+        ));
+    }
+}
+
+/// Named lane-span colors (e.g. a lane-spanning kick bar), matching the Clone Hero/Rock
+/// Band convention of a colored full-width bar. Unknown names fall back to a neutral tint.
+fn lane_span_color(name: &str) -> Color {
+    match name {
+        "yellow" => Color::srgb(0.95, 0.85, 0.2),
+        "orange" => Color::srgb(0.95, 0.55, 0.15),
+        "red" => Color::srgb(0.95, 0.2, 0.25),
+        "green" => Color::srgb(0.25, 0.85, 0.45),
+        "blue" => Color::srgb(0.25, 0.55, 1.0),
+        "purple" | "violet" => Color::srgb(0.8, 0.3, 0.95),
+        _ => Color::srgb(0.8, 0.8, 0.85),
+    }
+}
+
+/// Broad default symbol catalog for shared-lane percussion pieces (Decision 4 in
+/// todo.md); unrecognized symbols fall back to a generic tint rather than blocking on a
+/// missing shape.
+fn percussion_symbol_color(symbol: Option<&str>) -> Color {
+    match symbol {
+        Some("cymbal" | "crash" | "ride" | "hihat" | "china" | "splash") => {
+            Color::srgb(0.95, 0.85, 0.35)
+        }
+        Some("tom") => Color::srgb(0.55, 0.35, 0.2),
+        Some("cowbell") => Color::srgb(0.75, 0.65, 0.15),
+        Some("rim" | "cross-stick") => Color::srgb(0.7, 0.7, 0.75),
+        _ => Color::srgb(0.6, 0.65, 0.7),
+    }
+}
+
+pub(crate) fn percussion_note_motion(
+    time: Res<Time>,
+    session: Res<ChartSession>,
+    mut notes: Query<(&PercussionNoteVisual, &mut Transform, &mut Sprite)>,
+) {
+    let elapsed = time.elapsed_secs() - session.started_at;
+    for (note, mut transform, mut sprite) in &mut notes {
+        let head_y = CHART_HIT_LINE_Y + (note.start - elapsed) * CHART_NOTE_SPEED;
+        let height = (8.0 + note.duration * CHART_NOTE_SPEED).clamp(8.0, 360.0);
+        let width = sprite.custom_size.map_or(60.0, |size| size.x);
+        sprite.custom_size = Some(Vec2::new(width, height));
+        transform.translation.y = head_y + height * 0.5;
+    }
 }
 
 pub(crate) fn chart_gameplay_system(

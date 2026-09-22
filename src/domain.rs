@@ -155,6 +155,108 @@ impl Kit {
     }
 }
 
+/// A named `Tuning`/`Kit` an editor can offer for selection; presets are resolved and
+/// copied into the chart on save, so a saved chart never depends on this list (see
+/// todo.md Part A6). Not consumed by gameplay — editor convenience data only.
+pub(crate) struct TuningPreset {
+    pub(crate) name: &'static str,
+    pub(crate) tuning: Tuning,
+}
+
+pub(crate) struct KitPreset {
+    pub(crate) name: &'static str,
+    pub(crate) kit: Kit,
+}
+
+fn tuning_of(strings: &[&str]) -> Tuning {
+    Tuning {
+        strings: strings.iter().map(|note| note.to_string()).collect(),
+    }
+}
+
+/// Standard string tunings offered as editor presets.
+pub(crate) fn standard_tuning_presets() -> Vec<TuningPreset> {
+    vec![
+        TuningPreset {
+            name: "4-String Bass (EADG)",
+            tuning: tuning_of(&["E1", "A1", "D2", "G2"]),
+        },
+        TuningPreset {
+            name: "5-String Bass (BEADG)",
+            tuning: tuning_of(&["B0", "E1", "A1", "D2", "G2"]),
+        },
+        TuningPreset {
+            name: "Standard Guitar (EADGBE)",
+            tuning: tuning_of(&["E2", "A2", "D3", "G3", "B3", "E4"]),
+        },
+        TuningPreset {
+            name: "7-String Guitar (BEADGBE)",
+            tuning: tuning_of(&["B1", "E2", "A2", "D3", "G3", "B3", "E4"]),
+        },
+    ]
+}
+
+/// Standard percussion kits offered as editor presets.
+pub(crate) fn standard_kit_presets() -> Vec<KitPreset> {
+    vec![KitPreset {
+        name: "4-Lane Rock Kit",
+        kit: Kit {
+            lanes: 4,
+            pieces: vec![
+                KitPiece {
+                    name: "kick".into(),
+                    trigger: "midi:36".into(),
+                    lane: None,
+                    lane_span: Some("yellow".into()),
+                    symbol: None,
+                },
+                KitPiece {
+                    name: "snare".into(),
+                    trigger: "midi:38".into(),
+                    lane: Some(0),
+                    lane_span: None,
+                    symbol: Some("tom".into()),
+                },
+                KitPiece {
+                    name: "tom1".into(),
+                    trigger: "midi:48".into(),
+                    lane: Some(1),
+                    lane_span: None,
+                    symbol: Some("tom".into()),
+                },
+                KitPiece {
+                    name: "crash".into(),
+                    trigger: "midi:49".into(),
+                    lane: Some(1),
+                    lane_span: None,
+                    symbol: Some("cymbal".into()),
+                },
+                KitPiece {
+                    name: "tom2".into(),
+                    trigger: "midi:45".into(),
+                    lane: Some(2),
+                    lane_span: None,
+                    symbol: Some("tom".into()),
+                },
+                KitPiece {
+                    name: "ride".into(),
+                    trigger: "midi:51".into(),
+                    lane: Some(2),
+                    lane_span: None,
+                    symbol: Some("cymbal".into()),
+                },
+                KitPiece {
+                    name: "floor_tom".into(),
+                    trigger: "midi:41".into(),
+                    lane: Some(3),
+                    lane_span: None,
+                    symbol: Some("tom".into()),
+                },
+            ],
+        },
+    }]
+}
+
 /// Descriptive-only vocal range; does not gate playability or detection.
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct VocalRange {
@@ -658,6 +760,16 @@ pub(crate) struct ChartNoteVisual {
     pub(crate) matched: bool,
     pub(crate) missed: bool,
     pub(crate) sustain_observed: f32,
+}
+
+/// A percussion note rendered in the chart gameplay highway; visual only for now — hit
+/// detection/scoring against live MIDI input is not yet wired up (see todo.md A8).
+#[derive(Component)]
+pub(crate) struct PercussionNoteVisual {
+    pub(crate) lane: Option<usize>,
+    pub(crate) spans_lanes: bool,
+    pub(crate) start: f32,
+    pub(crate) duration: f32,
 }
 
 #[derive(Component)]

@@ -1,7 +1,8 @@
 use super::{
     AudioDetector, AudioOnsetDetector, Chart, DeviceChoice, DetectorProfile, Instrument,
     InstrumentKind, NoteDynamics, NotePhase, PolyphonicAudioDetector, RollKind, cents_error,
-    estimate_pitch, load_charts, pitch_to_lane, selected_device_index, string_lane,
+    estimate_pitch, load_charts, pitch_to_lane, selected_device_index, standard_kit_presets,
+    standard_tuning_presets, string_lane,
 };
 use std::f32::consts::TAU;
 use std::path::Path;
@@ -379,6 +380,40 @@ fn star_power_phrase_parses_as_a_range_marker() {
 
     assert_eq!(chart.tracks[0].star_power_phrases.len(), 1);
     assert_eq!(chart.tracks[0].star_power_phrases[0].duration_ticks, 3840);
+}
+
+#[test]
+/// Every standard tuning preset parses as valid note names, low string first.
+fn standard_tuning_presets_parse_and_are_nonempty() {
+    let presets = standard_tuning_presets();
+    assert!(!presets.is_empty());
+    for preset in &presets {
+        assert!(
+            !preset.tuning.strings.is_empty(),
+            "{} should list at least one string",
+            preset.name
+        );
+    }
+}
+
+#[test]
+/// The bundled kit preset's pieces all reference a valid lane or a lane-spanning color.
+fn standard_kit_presets_pieces_are_placed() {
+    let presets = standard_kit_presets();
+    assert!(!presets.is_empty());
+    for preset in &presets {
+        for piece in &preset.kit.pieces {
+            assert!(
+                piece.lane.is_some() != piece.lane_span.is_some(),
+                "{} piece {} should have exactly one of lane/lane_span",
+                preset.name,
+                piece.name
+            );
+            if let Some(lane) = piece.lane {
+                assert!(lane < preset.kit.lanes, "{} piece {} lane out of range", preset.name, piece.name);
+            }
+        }
+    }
 }
 
 #[test]
