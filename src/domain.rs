@@ -38,7 +38,7 @@ pub(crate) enum NoteValue {
 }
 
 impl NoteValue {
-    fn ticks(self, resolution: u32) -> u32 {
+    pub(crate) fn ticks(self, resolution: u32) -> u32 {
         match self {
             NoteValue::Whole => resolution * 4,
             NoteValue::Half => resolution * 2,
@@ -46,6 +46,23 @@ impl NoteValue {
             NoteValue::Eighth => resolution / 2,
             NoteValue::Sixteenth => resolution / 4,
         }
+    }
+}
+
+/// A snap/grid unit for note placement, shared by the sheet and tab editor views
+/// (todo.md B3). Reuses `NoteValue` directly since both are the same whole/half/quarter/
+/// eighth/sixteenth palette; snapping only needs `resolution`, not `bpm`, so it stays
+/// correct across tempo changes.
+pub(crate) type SnapInterval = NoteValue;
+
+/// Rounds a tick position to the nearest multiple of `interval`'s tick length.
+pub(crate) fn snap_tick(tick: u32, interval: SnapInterval, resolution: u32) -> u32 {
+    let step = interval.ticks(resolution).max(1);
+    let remainder = tick % step;
+    if remainder * 2 >= step {
+        tick - remainder + step
+    } else {
+        tick - remainder
     }
 }
 
@@ -67,7 +84,23 @@ impl<'de> Deserialize<'de> for NoteValue {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+impl Serialize for NoteValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value: u8 = match self {
+            NoteValue::Whole => 1,
+            NoteValue::Half => 2,
+            NoteValue::Quarter => 4,
+            NoteValue::Eighth => 8,
+            NoteValue::Sixteenth => 16,
+        };
+        serializer.serialize_u8(value)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum NoteDynamics {
     Normal,
@@ -81,7 +114,7 @@ impl Default for NoteDynamics {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RollKind {
     SingleLane,
@@ -89,21 +122,21 @@ pub(crate) enum RollKind {
 }
 
 /// A tempo change at a tick position; `tempo_map[0].start` should be `0`.
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub(crate) struct TempoChange {
     pub(crate) start: u32,
     pub(crate) bpm: f32,
 }
 
 /// A time-signature change at a tick position; `time_signature_map[0].start` should be `0`.
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub(crate) struct TimeSignatureChange {
     pub(crate) start: u32,
     pub(crate) numerator: u8,
     pub(crate) denominator: u8,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Chart {
     pub(crate) version: u8,
     pub(crate) title: String,
@@ -122,7 +155,7 @@ pub(crate) struct Tuning {
 }
 
 impl Tuning {
-    fn open_midi(&self) -> Result<Vec<u8>, String> {
+    pub(crate) fn open_midi(&self) -> Result<Vec<u8>, String> {
         self.strings.iter().map(|note| parse_note_name(note)).collect()
     }
 
@@ -300,7 +333,7 @@ pub(crate) fn load_kit_library() -> Vec<NamedKit> {
 }
 
 /// Descriptive-only vocal range; does not gate playability or detection.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct VocalRange {
     pub(crate) low: String,
     pub(crate) high: String,
@@ -308,13 +341,13 @@ pub(crate) struct VocalRange {
 
 /// A simple range marker; anything played during the span counts as part of the phrase.
 /// Used for both Star Power phrases and (via `VocalPhrase`) vocal lyric phrases.
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub(crate) struct Phrase {
     pub(crate) start: u32,
     pub(crate) duration_ticks: u32,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct ChartTrack {
     pub(crate) name: String,
     pub(crate) kind: InstrumentKind,
@@ -458,7 +491,61 @@ impl<'de> Deserialize<'de> for ChartEvent {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+impl Serialize for ChartEvent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        #[derive(Serialize)]
+        struct Fields<'a> {
+            start: u32,
+            length: NoteValue,
+            #[serde(skip_serializing_if = "is_zero")]
+            dots: u8,
+            #[serde(skip_serializing_if = "is_false")]
+            tied: bool,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            note: Option<u8>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            ps: Option<usize>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            piece: Option<&'a str>,
+            #[serde(skip_serializing_if = "is_normal")]
+            dynamics: NoteDynamics,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            roll: Option<RollKind>,
+        }
+        fn is_zero(value: &u8) -> bool {
+            *value == 0
+        }
+        fn is_false(value: &bool) -> bool {
+            !*value
+        }
+        fn is_normal(value: &NoteDynamics) -> bool {
+            matches!(value, NoteDynamics::Normal)
+        }
+        let (note, ps, piece, dynamics, roll) = match &self.content {
+            NoteContent::Pitched { note, ps } => (Some(*note), *ps, None, NoteDynamics::Normal, None),
+            NoteContent::Percussive { piece, dynamics, roll } => {
+                (None, None, Some(piece.as_str()), *dynamics, *roll)
+            }
+        };
+        Fields {
+            start: self.start,
+            length: self.length,
+            dots: self.dots,
+            tied: self.tied,
+            note,
+            ps,
+            piece,
+            dynamics,
+            roll,
+        }
+        .serialize(serializer)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct VocalPhrase {
     pub(crate) start: u32,
     pub(crate) duration_ticks: u32,
@@ -490,7 +577,7 @@ pub(crate) struct PercussionNoteData {
 }
 
 /// Sums the nominal duration of `events[index]` forward across a `tied` chain.
-fn resolved_duration_ticks(events: &[ChartEvent], index: usize, resolution: u32) -> u32 {
+pub(crate) fn resolved_duration_ticks(events: &[ChartEvent], index: usize, resolution: u32) -> u32 {
     let mut total = events[index].duration_ticks(resolution);
     let mut current = index;
     while events[current].tied {
@@ -677,6 +764,61 @@ impl Chart {
             })
             .max()
             .unwrap_or(0)
+    }
+
+    /// Human-readable warnings for problems that would otherwise be silently skipped at
+    /// load time (unplayable notes, missing tuning/kit, unknown percussion pieces).
+    /// Non-blocking: intended for the editor to surface before saving.
+    pub(crate) fn validate(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if !self.tempo_map.iter().any(|change| change.start == 0) {
+            warnings.push("tempo_map has no entry at tick 0; defaulting to 120 BPM".into());
+        }
+        if !self.time_signature_map.iter().any(|change| change.start == 0) {
+            warnings.push("time_signature_map has no entry at tick 0; defaulting to 4/4".into());
+        }
+        for track in &self.tracks {
+            match track.kind {
+                InstrumentKind::Strings => match track.tuning.as_ref() {
+                    None => warnings.push(format!("track \"{}\" is Strings but has no tuning", track.name)),
+                    Some(tuning) => match tuning.open_midi() {
+                        Err(error) => {
+                            warnings.push(format!("track \"{}\" tuning is invalid: {error}", track.name));
+                        }
+                        Ok(open_midi) => {
+                            for note in &track.notes {
+                                if let NoteContent::Pitched { note: pitch, ps } = &note.content
+                                    && best_string_fret(*pitch, &open_midi, *ps).is_none()
+                                {
+                                    warnings.push(format!(
+                                        "track \"{}\" has an unplayable note {}",
+                                        track.name,
+                                        midi_note_name(*pitch)
+                                    ));
+                                }
+                            }
+                        }
+                    },
+                },
+                InstrumentKind::Percussion => match track.kit.as_ref() {
+                    None => warnings.push(format!("track \"{}\" is Percussion but has no kit", track.name)),
+                    Some(kit) => {
+                        for note in &track.notes {
+                            if let NoteContent::Percussive { piece, .. } = &note.content
+                                && kit.piece(piece).is_none()
+                            {
+                                warnings.push(format!(
+                                    "track \"{}\" references unknown percussion piece \"{piece}\"",
+                                    track.name
+                                ));
+                            }
+                        }
+                    }
+                },
+                InstrumentKind::Voice => {}
+            }
+        }
+        warnings
     }
 }
 

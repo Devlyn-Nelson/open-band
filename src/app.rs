@@ -130,5 +130,31 @@ pub(crate) fn run() {
                 .run_if(in_state(AppState::Gameplay)),
         )
         .add_systems(OnExit(AppState::Gameplay), cleanup_gameplay)
+        .add_systems(OnEnter(AppState::Editor), setup_editor)
+        .add_systems(
+            Update,
+            editor_browse_input
+                .run_if(in_state(AppState::Editor))
+                .run_if(not(resource_exists::<EditorDocument>)),
+        )
+        .add_systems(
+            Update,
+            editor_browse_display
+                .run_if(in_state(AppState::Editor))
+                .run_if(not(resource_exists::<EditorDocument>)),
+        )
+        .add_systems(
+            Update,
+            editor_tracks_input
+                .run_if(in_state(AppState::Editor))
+                .run_if(resource_exists::<EditorDocument>),
+        )
+        .add_systems(
+            Update,
+            editor_tracks_display
+                .run_if(in_state(AppState::Editor))
+                .run_if(resource_exists::<EditorDocument>),
+        )
+        .add_systems(OnExit(AppState::Editor), cleanup_editor)
         .run();
 }

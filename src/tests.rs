@@ -1,8 +1,9 @@
 use super::{
-    AudioDetector, AudioOnsetDetector, Chart, DeviceChoice, DetectorProfile, Instrument,
-    InstrumentKind, NoteDynamics, NotePhase, PolyphonicAudioDetector, RollKind, cents_error,
-    estimate_pitch, load_charts, load_kit_library, load_tuning_library, pitch_to_lane,
-    selected_device_index, string_lane,
+    AudioDetector, AudioOnsetDetector, Chart, Clef, DeviceChoice, DetectorProfile, Instrument,
+    InstrumentKind, NoteDynamics, NotePhase, PolyphonicAudioDetector, RollKind, SnapInterval,
+    Tuning, cents_error, cycle_track_kit, cycle_track_tuning, default_clef, estimate_pitch,
+    layout_track, load_charts, load_kit_library, load_tuning_library, measures, new_track,
+    pitch_to_lane, selected_device_index, slugify, snap_tick, string_lane,
 };
 use std::f32::consts::TAU;
 use std::path::Path;
@@ -480,6 +481,224 @@ fn kit_library_pieces_are_placed_and_standard_kit_has_expected_pieces() {
             .any(|piece| piece.name == "kick" && piece.lane_span.is_some()),
         "expected a lane-spanning kick"
     );
+}
+
+#[test]
+/// Chart validation flags unplayable notes, missing tuning/kit, and unknown pieces.
+fn chart_validate_reports_expected_problems() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Broken Chart",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": [
+                {
+                    "name": "Bass",
+                    "kind": "strings",
+                    "tuning": { "strings": ["E1", "A1", "D2", "G2"] },
+                    "notes": [{ "start": 0, "length": 4, "note": 100 }]
+                },
+                {
+                    "name": "Drums",
+                    "kind": "percussion",
+                    "kit": { "lanes": 1, "pieces": [{ "name": "kick", "trigger": "midi:36", "lane": 0 }] },
+                    "notes": [{ "start": 0, "length": 4, "piece": "nonexistent" }]
+                }
+            ]
+        }
+        "#,
+    )
+    .expect("broken chart should still parse");
+
+    let warnings = chart.validate();
+    assert!(warnings.iter().any(|warning| warning.contains("unplayable note")));
+    assert!(warnings.iter().any(|warning| warning.contains("unknown percussion piece")));
+}
+
+#[test]
+/// New tracks default to a sensible tuning/kit for their kind, and none for others.
+fn new_track_has_expected_defaults_per_kind() {
+    let strings = new_track(InstrumentKind::Strings);
+    assert!(strings.tuning.is_some());
+    assert!(strings.kit.is_none());
+
+    let percussion = new_track(InstrumentKind::Percussion);
+    assert!(percussion.kit.is_some());
+    assert!(percussion.tuning.is_none());
+
+    let voice = new_track(InstrumentKind::Voice);
+    assert!(voice.tuning.is_none());
+    assert!(voice.kit.is_none());
+}
+
+#[test]
+/// Cycling a track's tuning/kit steps through the library and wraps around.
+fn cycle_track_tuning_and_kit_step_through_the_library() {
+    let tunings = load_tuning_library();
+    let mut track = new_track(InstrumentKind::Strings);
+    let first = track.tuning.clone();
+    cycle_track_tuning(&mut track, &tunings, 1);
+    assert_ne!(track.tuning, first, "cycling should change the tuning");
+    for _ in 0..tunings.len().saturating_sub(1) {
+        cycle_track_tuning(&mut track, &tunings, 1);
+    }
+    assert_eq!(track.tuning, first, "cycling all the way around should return to start");
+
+    let kits = load_kit_library();
+    let mut drum_track = new_track(InstrumentKind::Percussion);
+    let first_kit = drum_track.kit.clone();
+    cycle_track_kit(&mut drum_track, &kits, 1);
+    if kits.len() > 1 {
+        assert_ne!(drum_track.kit, first_kit);
+    }
+}
+
+#[test]
+/// Chart titles slugify into filesystem-safe, non-empty save filenames.
+fn slugify_produces_filesystem_safe_names() {
+    assert_eq!(slugify("Easy Band Jam"), "easy-band-jam");
+    assert_eq!(slugify("  Weird!! Title??  "), "weird-title");
+    assert_eq!(slugify(""), "untitled");
+}
+
+#[test]
+/// Rounds a tick position to the nearest snap-interval multiple, tempo-independent.
+fn snap_tick_rounds_to_the_nearest_interval() {
+    assert_eq!(snap_tick(100, SnapInterval::Quarter, 960), 0);
+    assert_eq!(snap_tick(500, SnapInterval::Quarter, 960), 960);
+    assert_eq!(snap_tick(960, SnapInterval::Quarter, 960), 960);
+    assert_eq!(snap_tick(240, SnapInterval::Sixteenth, 960), 240);
+}
+
+fn simple_chart(resolution: u32) -> Chart {
+    serde_json::from_str(&format!(
+        r#"{{
+            "version": 1,
+            "title": "Notation Test",
+            "resolution": {resolution},
+            "tempo_map": [{{ "start": 0, "bpm": 120.0 }}],
+            "time_signature_map": [{{ "start": 0, "numerator": 4, "denominator": 4 }}],
+            "tracks": []
+        }}"#
+    ))
+    .expect("simple chart should parse")
+}
+
+#[test]
+/// Builds sequential 4/4 measures covering the requested tick span.
+fn measures_covers_the_requested_span_in_4_4() {
+    let chart = simple_chart(960);
+    let built = measures(&chart, 7680);
+    assert_eq!(built.len(), 2);
+    assert_eq!(built[0].start_tick, 0);
+    assert_eq!(built[0].end_tick, 3840);
+    assert_eq!(built[1].start_tick, 3840);
+    assert_eq!(built[1].end_tick, 7680);
+}
+
+#[test]
+/// A tied pair of quarter notes forms one tie chain, and the rest of the measure is
+/// filled with inferred rests that don't cross the barline.
+fn layout_track_ties_notes_and_infers_rests() {
+    let mut chart = simple_chart(960);
+    chart.tracks = vec![new_track(InstrumentKind::Strings)];
+    chart.tracks[0].notes = serde_json::from_str(
+        r#"[
+            { "start": 0, "length": 4, "note": "E1", "tied": true },
+            { "start": 960, "length": 4, "note": "E1" }
+        ]"#,
+    )
+    .expect("notes should parse");
+
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert_eq!(layout.ties, vec![vec![0, 1]]);
+    // The tie chain occupies ticks 0..1920; the rest of the 3840-tick measure is silent.
+    let rest_ticks = layout.rests.iter().map(|rest| rest.value.ticks(960)).sum::<u32>();
+    assert_eq!(rest_ticks, 3840 - 1920);
+    assert!(layout.rests.iter().all(|rest| rest.start >= 1920));
+}
+
+#[test]
+/// Consecutive eighth notes within the same beat are grouped into one beam.
+fn layout_track_beams_eighth_notes_within_a_beat() {
+    let mut chart = simple_chart(960);
+    chart.tracks = vec![new_track(InstrumentKind::Strings)];
+    chart.tracks[0].notes = serde_json::from_str(
+        r#"[
+            { "start": 0, "length": 8, "note": "E1" },
+            { "start": 480, "length": 8, "note": "E1" },
+            { "start": 960, "length": 8, "note": "E1" },
+            { "start": 1440, "length": 8, "note": "E1" }
+        ]"#,
+    )
+    .expect("notes should parse");
+
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert_eq!(layout.beams, vec![vec![0, 1], vec![2, 3]]);
+}
+
+#[test]
+/// Bass tunings default to bass clef, guitar tunings (even 7-string) to treble, and
+/// percussion tracks have no clef at all.
+fn default_clef_distinguishes_bass_from_guitar_and_percussion() {
+    let mut bass = new_track(InstrumentKind::Strings);
+    bass.tuning = Some(Tuning {
+        strings: vec!["E1".into(), "A1".into(), "D2".into(), "G2".into()],
+    });
+    assert_eq!(default_clef(&bass), Some(Clef::Bass));
+
+    let mut guitar = new_track(InstrumentKind::Strings);
+    guitar.tuning = Some(Tuning {
+        strings: vec![
+            "B1".into(), "E2".into(), "A2".into(), "D3".into(), "G3".into(), "B3".into(), "E4".into(),
+        ],
+    });
+    assert_eq!(default_clef(&guitar), Some(Clef::Treble));
+
+    let percussion = new_track(InstrumentKind::Percussion);
+    assert_eq!(default_clef(&percussion), None);
+}
+
+#[test]
+/// A chart edited in memory round-trips through serialize/deserialize without losing
+/// pitched notes, percussive notes, dynamics, or ties.
+fn chart_round_trips_through_serialize_and_deserialize() {
+    let mut chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Round Trip",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": []
+        }
+        "#,
+    )
+    .expect("empty chart should parse");
+    chart.tracks.push(new_track(InstrumentKind::Strings));
+    chart.tracks.push(new_track(InstrumentKind::Percussion));
+    chart.tracks[0].notes.push(
+        serde_json::from_str(r#"{ "start": 0, "length": 4, "dots": 1, "tied": true, "note": "E1", "ps": 0 }"#)
+            .unwrap(),
+    );
+    chart.tracks[1].notes.push(
+        serde_json::from_str(r#"{ "start": 0, "length": 8, "piece": "kick", "dynamics": "accent" }"#)
+            .unwrap(),
+    );
+
+    let serialized = serde_json::to_string(&chart).expect("chart should serialize");
+    let reloaded: Chart = serde_json::from_str(&serialized).expect("serialized chart should reparse");
+
+    assert_eq!(reloaded.title, "Round Trip");
+    assert_eq!(reloaded.tracks.len(), 2);
+    assert_eq!(reloaded.tracks[0].notes[0].note(), Some(28));
+    assert_eq!(reloaded.tracks[0].notes[0].dots, 1);
+    assert!(reloaded.tracks[0].notes[0].tied);
+    assert_eq!(reloaded.tracks[1].kind, InstrumentKind::Percussion);
 }
 
 #[test]

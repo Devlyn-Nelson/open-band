@@ -1,5 +1,5 @@
 use super::{
-    AudioDetector, DetectorProfile, InputConfig, Instrument, InstrumentEvent, InstrumentKind,
+    AudioDetector, InputConfig, Instrument, InstrumentEvent, InstrumentKind,
     InstrumentSlot, Kit, LANES, NotePhase, RECORDING_ENVIRONMENT_VARIABLE, pitch_to_lane,
 };
 use bevy::prelude::*;

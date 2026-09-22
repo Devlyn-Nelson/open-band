@@ -9,6 +9,19 @@ This plan covers two sequential efforts:
 - **Part B — Chart Editor**: build the sheet-view and tab-view chart editor on top of the
   reworked schema.
 
+## Status
+
+- **Part A: done.** All of A1-A10 are implemented and tested, including two follow-on
+  refinements beyond the original plan: instrument input configuration (`InstrumentSlot`)
+  is fully dynamic (any number of slots of any kind, not a fixed 4-slot layout), and
+  tunings/kits are loaded from real `tunings/`/`kits/` library directories (not just
+  embedded Rust presets) with the live detection pipeline resolving lane assignment from
+  the actual configured tuning/kit instead of guessing from a string count.
+- **Part B: in progress.** B1-B4 are done (editor entry point, document/track management,
+  `SnapInterval`, and the `src/notation.rs` Notation Engine). B5-B10 (sheet view, tab view,
+  undo/redo, playback aids, multi-select/bulk edit, and broader manual QA) are not started.
+- **Part C and Part D:** not started.
+
 ## Decisions
 
 1. **Editor delivery shape**: the editor is a new screen/state inside the existing
@@ -39,7 +52,7 @@ This plan covers two sequential efforts:
 
 ## Part A — Instrument Model & Chart Schema Rework
 
-### A1. Define generic instrument kinds
+### A1. Define generic instrument kinds — DONE
 
 - Add an `InstrumentKind` enum: `Strings`, `Percussion`, `Voice`. This replaces the current
   free-text `instrument: String` field and the `"bass"`/`"guitar"` naming conventions used
@@ -47,7 +60,7 @@ This plan covers two sequential efforts:
 - `name` remains a free-text human-facing label only (e.g. "Lead Guitar", "Rhythm Guitar 2")
   and carries no logic.
 
-### A2. New chart schema types (`src/domain.rs`)
+### A2. New chart schema types (`src/domain.rs`) — DONE
 
 #### Tick-based timing (Decision 5)
 
@@ -138,7 +151,7 @@ This plan covers two sequential efforts:
   existing `VocalPhrase` style already in the schema (start/duration only, membership
   inferred by overlap) rather than requiring an explicit note list.
 
-### A3. Tuning/kit resolution logic
+### A3. Tuning/kit resolution logic — DONE
 
 - Replace the hardcoded `tuning_for()` match table and its `"standard_bass_4"` /
   `"standard_bass_5"` string matching with logic that reads the `Tuning` array directly off
@@ -149,7 +162,7 @@ This plan covers two sequential efforts:
   `piece` name, look up the piece in the track's `Kit` to get lane, symbol, or `lane_span`
   color for rendering.
 
-### A4. Update chart methods in `domain.rs`
+### A4. Update chart methods in `domain.rs` — DONE
 
 - Replace `Chart::bass_notes()` with a generic `Chart::string_notes()` (or similar) that
   works for any `Strings` track (former guitar/bass distinction disappears).
@@ -160,12 +173,18 @@ This plan covers two sequential efforts:
   any other cross-track helpers to account for the new event shape, `duration_ticks`, and
   the tempo/time-signature maps.
 
-### A5. Rewrite sample charts
+### A5. Rewrite sample charts — DONE
 
 - Migrate `charts/open-strings.json` and `charts/devs-test-song.json` to the new schema
   (`kind`, embedded `tuning`/`kit`/`vocal_range`, named-piece percussion notes).
 
-### A6. Instrument/tuning/kit preset library (editor convenience, not a chart dependency)
+### A6. Instrument/tuning/kit preset library (editor convenience, not a chart dependency) — DONE (extended)
+
+- Went further than originally planned: tunings and kits are loaded from real `tunings/`
+  and `kits/` library directories at runtime (`load_tuning_library()`, `load_kit_library()`),
+  not just an embedded Rust table, with an embedded fallback if the directory is missing.
+  Kit presets remain an embedded Rust table (`standard_kit_presets()`); only tunings/kits
+  used by Input Setup and the editor were moved to files.
 
 - Add a small library of standard presets (e.g. "Standard Guitar", "4-String Bass",
   "5-String Bass", "4-Lane Rock Kit") that the editor can offer for selection.
@@ -175,7 +194,14 @@ This plan covers two sequential efforts:
   `charts/`, or an embedded Rust table) — either works since it's editor-only convenience
   data, not game-runtime chart data.
 
-### A7. Detection system rework
+### A7. Detection system rework — DONE (extended)
+
+- Went further than originally planned: `InstrumentSlot` (formerly a fixed 4-slot layout)
+  is now a fully dynamic `Vec<InstrumentSlot>` — any number of slots of any kind
+  (`Strings`/`Percussion`/`Voice`) can be configured in Input Setup, each with its own
+  device, tuning/kit, and detector profile. Live detection (`pitch_to_lane`, `string_lane`,
+  `AudioDetector`, the MIDI-to-lane mapping) resolves lane assignment from the slot's
+  actual configured tuning/kit, not a guessed string-count table.
 
 - Update `src/settings.rs` / `src/setup.rs` / `src/input.rs` / `src/detector.rs` /
   `src/audio.rs` to key off the generic `Strings` kind instead of hardcoded
@@ -191,19 +217,22 @@ This plan covers two sequential efforts:
   different tunings (e.g. via per-tuning or per-kind detector profile data if algorithmic
   differences still apply).
 
-### A8. Gameplay rendering updates
+### A8. Gameplay rendering updates — DONE
+
+- Percussion rendering is visual-only for now (no hit detection/scoring wired up for
+  percussion in chart gameplay yet — flagged in code comments as a follow-up).
 
 - Update `src/chart.rs` / `src/gameplay.rs` to render percussion tracks: fixed lane count,
   shared-lane symbol distinction (tom vs. cymbal in the same column), and full-width
   colored bar for `lane_span` pieces (kick).
 
-### A9. Tests (`src/tests.rs`)
+### A9. Tests (`src/tests.rs`) — DONE
 
 - Update/add tests for: new schema parsing (`Strings`/`Percussion`/`Voice` tracks), tuning
   resolution from embedded data (no hardcoded table), percussion piece-name resolution,
   round-trip parsing of the rewritten sample charts, and vocal range parsing.
 
-### A10. Documentation
+### A10. Documentation — DONE
 
 - Update `README.md`'s "Chart Format" section and instrument terminology to match the new
   schema and generic instrument kinds.
@@ -214,13 +243,16 @@ This plan covers two sequential efforts:
 
 Depends on Part A being complete and merged.
 
-### B1. Editor entry point
+### B1. Editor entry point — DONE
 
 - Resolve Open Decision 1 (in-app state vs. separate binary) and scaffold accordingly.
 - Add navigation entry point (e.g. a "Chart Editor" option from Home, alongside `Live
   Session`, `Songs`, `Set Up`).
 
-### B2. Document/track management
+### B2. Document/track management — DONE
+
+- Custom hand-entry of tuning/kit (as opposed to picking from the library) is not
+  implemented; only library presets can be selected for now.
 
 - New chart creation (title, initial tempo, initial time signature — written as the
   required tick-0 entries in `tempo_map`/`time_signature_map`) and existing chart loading
@@ -233,14 +265,26 @@ Depends on Part A being complete and merged.
   unplayable notes flagged in the editor instead of silently skipped with `eprintln!` at
   runtime).
 
-### B3. Shared snapping model
+### B3. Shared snapping model — DONE
+
+- Implemented as `SnapInterval` (a type alias for `NoteValue`, since both are the same
+  whole/half/quarter/eighth/sixteenth palette) plus `snap_tick()` in `src/domain.rs`. Not
+  yet consumed by any UI since B5/B6 (the actual note-placement views) aren't built yet.
 
 - Implement a single `SnapInterval` concept (whole/half/quarter/eighth/sixteenth, mapped to
   exact tick fractions via the chart's `resolution`) shared by both sheet view and tab
   view, rather than two separate implementations. Snapping is tempo-independent — it only
   needs `resolution` and the active `time_signature_map` entry, not `bpm`.
 
-### B4. Notation engine (`src/notation.rs`, shared with Part C)
+### B4. Notation engine (`src/notation.rs`, shared with Part C) — DONE
+
+- Implemented: measure layout, tie-chain grouping, beam grouping, and greedy rest
+  inference (largest-value-first, split at measure boundaries), plus a per-track default
+  clef heuristic (pitch-threshold based, since `Strings` no longer distinguishes guitar
+  from bass). Not yet wired into any renderer — B5 (sheet view) and Part C (gameplay
+  overlay) are the two future consumers. Rest inference does not yet handle dotted rests
+  or non-power-of-two leftover ticks (no tuplet support anywhere in the schema, so this
+  hasn't come up in practice).
 
 - New module owning sheet-music layout logic, independent of the editor and gameplay UI so
   both can reuse it:

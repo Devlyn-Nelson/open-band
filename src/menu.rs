@@ -48,16 +48,21 @@ pub(crate) fn home_input(
     mut menu: ResMut<MenuSelection>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    // Home routes only to Live Session or Set Up.
+    // Home routes to Live Session, Songs, Editor, or Set Up.
     if keyboard.just_pressed(KeyCode::ArrowUp) {
-        menu.home_selected = menu.home_selected.checked_sub(1).unwrap_or(2);
+        menu.home_selected = menu.home_selected.checked_sub(1).unwrap_or(3);
     }
     if keyboard.just_pressed(KeyCode::ArrowDown) {
-        menu.home_selected = (menu.home_selected + 1) % 3;
+        menu.home_selected = (menu.home_selected + 1) % 4;
     }
-    for (index, key) in [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3]
-        .into_iter()
-        .enumerate()
+    for (index, key) in [
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+    ]
+    .into_iter()
+    .enumerate()
     {
         if keyboard.just_pressed(key) {
             menu.home_selected = index;
@@ -67,6 +72,7 @@ pub(crate) fn home_input(
         next_state.set(match menu.home_selected {
             0 => AppState::Gameplay,
             1 => AppState::Songs,
+            2 => AppState::Editor,
             _ => AppState::Setup,
         });
     }
@@ -89,11 +95,13 @@ pub(crate) fn home_display(menu: Res<MenuSelection>, mut text: Query<&mut Text, 
         "OPEN BAND  //  HOME\n\n\
         {} [1] LIVE SESSION\n\
         {} [2] SONGS\n\
-        {} [3] SET UP\n\n\
+        {} [3] EDITOR\n\
+        {} [4] SET UP\n\n\
         Up/Down: navigate     Enter: open",
         marker(0),
         marker(1),
         marker(2),
+        marker(3),
     ));
 }
 

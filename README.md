@@ -104,7 +104,7 @@ Calibration lists the currently configured slots; press the number key matching 
 
 ### Home and Setup Navigation
 
-The Home screen has three options: `Live Session`, `Songs`, and `Set Up`. Choose with `Up` / `Down` or `1`, `2`, or `3`, then press `Enter`.
+The Home screen has four options: `Live Session`, `Songs`, `Editor`, and `Set Up`. Choose with `Up` / `Down` or `1`-`4`, then press `Enter`.
 
 Songs opens the chart browser. Select a chart with `Up` / `Down` and press `Enter`; a five-second count-in starts the chart-driven string highway. Press `Esc` to return to the Songs menu.
 
@@ -118,6 +118,33 @@ Set Up contains the following options:
 | `4` | Back to Home |
 
 Each setup tool returns to Set Up when accepted or exited. Returning to Input Setup stops the current input worker before reconnecting the newly selected devices. Press `Esc` from Set Up to return Home, and press `Esc` from the live session to return Home.
+
+### Chart Editor
+
+The Editor opens a chart picker listing every chart in `charts/`.
+
+| Key | Action |
+| --- | --- |
+| `Up` / `Down` | Select a chart |
+| `Enter` | Open the selected chart for editing |
+| `N` | Create a new, empty chart |
+| `Esc` | Back to Home |
+
+Once a chart is open, its track list is shown:
+
+| Key | Action |
+| --- | --- |
+| `Up` / `Down` | Focus a track |
+| `N` | Add a new track (defaults to `Strings`) |
+| `X` | Remove the focused track |
+| `K` | Cycle the focused track's kind (`Strings` -> `Percussion` -> `Voice`) |
+| `[` / `]` | Cycle the focused track's tuning (`Strings`, from `tunings/`) or kit (`Percussion`, from `kits/`) |
+| `,` / `.` | Move the focused track up/down in the list |
+| `R` | Rename the focused track (type the new name, `Enter` to confirm, `Esc` to cancel) |
+| `S` | Save the chart (writes to its original file, or `charts/<slugified-title>.json` for a new chart) |
+| `Esc` | Back to the chart picker |
+
+Saving runs validation (unplayable notes, missing tuning/kit, unknown percussion pieces) and reports any warnings in the status line without blocking the save. Note placement (sheet/tab views) is not yet implemented — the editor currently manages chart metadata and tracks only.
 
 ## Saved Settings
 

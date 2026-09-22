@@ -14,4 +14,5 @@ pub(crate) enum AppState {
     ChartGameplay,
     ChartReview,
     Gameplay,
+    Editor,
 }

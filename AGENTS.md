@@ -15,7 +15,11 @@
 - `src/menu.rs`: Home and Set Up menu systems.
 - `src/gameplay.rs`: live-session rendering, event consumption, diagnostics, note motion, and scoring.
 - `src/domain.rs`: chart data, chart gameplay state, screen states, and chart UI marker components.
+- `src/editor.rs`: in-app chart editor (chart browse/create/load, track list add/remove/rename/reorder, tuning/kit cycling, save).
+- `src/notation.rs`: framework-agnostic sheet-music layout (measures, ties, beaming, rest inference, clef selection); consumed by the chart editor's future sheet view and the future live gameplay notation overlay.
 - `charts/`: built-in chart data loaded at compile time.
+- `tunings/`: named string tunings loaded at runtime for Input Setup and the chart editor (embedded fallback if missing).
+- `kits/`: named percussion kits loaded at runtime for Input Setup and the chart editor (embedded fallback if missing).
 - `recordings/`: optional WAV fixtures used only by ignored detector tests.
 - `README.md`: user-facing controls, device setup, chart format, and current limitations.
 
@@ -38,6 +42,8 @@ The worker performs detection off the Bevy thread. Bevy owns state transitions, 
 - Pitch estimation and pitch-to-lane mapping belong in `src/audio.rs`; stateful detector implementations belong in `src/detector.rs`.
 - Input lifecycle resources and CPAL/MIDI setup belong in `src/input.rs`.
 - Device selection and persisted settings belong in `src/settings.rs` and `src/setup.rs`.
+- Chart editing (document/track management) belongs in `src/editor.rs`; it reads the same chart schema as `src/domain.rs` and the same tuning/kit libraries as `src/settings.rs`, but owns no gameplay or input-device state.
+- Sheet-music layout logic (measures, ties, beaming, rests, clef) belongs in `src/notation.rs`, independent of any rendering framework or UI; it must not depend on `src/editor.rs` or `src/gameplay.rs` so both can consume it.
 - Bevy systems should consume normalized `InstrumentEvent` values rather than reaching into audio callbacks.
 - Keep constants local to the module that owns the behavior; avoid adding new global configuration without a user-facing need.
 
