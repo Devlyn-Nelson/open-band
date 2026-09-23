@@ -121,6 +121,7 @@ pub(crate) fn new_track(kind: InstrumentKind) -> ChartTrack {
         slurs: Vec::new(),
         phrases: Vec::new(),
         star_power_phrases: Vec::new(),
+        lyric_verses: Vec::new(),
     }
 }
 

@@ -412,7 +412,7 @@ fn instrument_notation_metadata_round_trips() {
     )
     .expect("instrument notation chart should parse");
     assert_eq!(chart.tracks[0].capo, Some(3));
-    assert_eq!(chart.tracks[0].notes[0].grace.unwrap().kind, GraceKind::Acciaccatura);
+    assert_eq!(chart.tracks[0].notes[0].grace.as_ref().unwrap().kind, GraceKind::Acciaccatura);
     let guitar_hints = chart.tracks[0].notes[0].performance.as_ref().unwrap();
     assert_eq!(guitar_hints.harmonic, Some(HarmonicKind::Natural));
     assert!(guitar_hints.palm_mute);

@@ -238,7 +238,8 @@ also inferred by the notation engine.
 
 Events may specify `voice` and `staff` as one-based notation contexts. They default to
 `voice: 1` and `staff: 1` when omitted. `chord` is an optional identifier shared by
-simultaneous events for notation and editor grouping.
+simultaneous events for notation and editor grouping; chord members are validated to share
+onset, duration, voice, and staff. `stem` may be `up`, `down`, or `auto`.
 
 Any event may also use a shared `dynamic` (`ppp`, `pp`, `mp`, `mf`, `f`, `ff`, or `fff`)
 and an `articulations` array containing `staccato`, `tenuto`, `marcato`, `accent`,
@@ -293,12 +294,18 @@ MIDI value, so `C#4` and `Db4` remain distinct notation even though both sound a
 MIDI-only notes have no explicit spelling and use renderer defaults. The chart system uses
 the tuning and pitch to derive the playable string and fret.
 
-String events may also describe notation and intended articulation:
+String events may also describe notation and intended performance guidance:
 
 ```json
 {
   "start": 1440,
   "length": 8,
+  "grace": {
+    "kind": "acciaccatura",
+    "slash": true,
+    "principal": "note-42",
+    "order": 0
+  },
   "note": "E2",
   "performance": {
     "preferred_string": 0,
@@ -328,6 +335,10 @@ String events may also describe notation and intended articulation:
   The simple form may also use `semitones` and `release: true` to return toward the
   original pitch.
 - `performance.motion`: currently supports `trill`, alternating the current note and its `target`.
+- `stem`: optional written stem direction, `up`, `down`, or `auto`.
+- `grace`: `acciaccatura` or `appoggiatura`, optionally slashed, linked to a principal event
+  ID and ordered within a grace group. Grace events are pre-beat notation data and do not
+  consume ordinary beat duration.
 
 These fields preserve `note` as the event's pitch and are ready for notation rendering.
 Gameplay playback and scoring for the techniques are not implemented yet. The current
@@ -345,7 +356,8 @@ Additional string notation/performance metadata includes:
 These fields describe the written/tab part and optional playing guidance only; gameplay and
 visual rendering are deferred.
 
-Voice and staff numbers can be included alongside these fields when a track contains
+The track-level `capo` applies to tablature display and score interpretation; it does not
+alter the stored sounding pitch. Voice and staff numbers can be included alongside these fields when a track contains
 independent notation voices or multiple staves:
 
 ```json
@@ -383,6 +395,9 @@ and `articulations` fields described above, in addition to percussion-specific h
 - `performance.sticking`: `right` or `left`.
 - `performance.hi_hat`: `open`, `closed`, or `pedal`.
 
+The kit's `symbol` metadata determines notation roles such as tom, cymbal, hi-hat, and
+cross-stick independently of gameplay lanes.
+
 `performance.roll` and `performance.droll` are mutually exclusive and must reference pieces
 in the track's kit.
 Roll rendering, hit generation, and scoring are not implemented yet.
@@ -396,9 +411,9 @@ Voice tracks may include a descriptive `vocal_range`:
 ```
 
 Lyrics and melody are grouped into `phrases`. Each phrase has a start tick, duration,
-display text, optional `syllable` boundary (`single`, `begin`, `middle`, or `end`), an
-optional `melisma: true` marker when one syllable spans multiple notes, and optional nested
-pitched events:
+display text, optional `syllable` boundary (`single`, `begin`, `middle`, or `end`),
+`hyphen_after`, `breath_after`, and an optional `melisma: true` marker when one syllable
+spans multiple notes. Tracks may also provide `lyric_verses` with numbered verse phrases.
 
 ```json
 {
@@ -406,11 +421,19 @@ pitched events:
   "duration_ticks": 1920,
   "text": "Hello",
   "syllable": "single",
+  "hyphen_after": false,
+  "breath_after": false,
   "melisma": false,
   "notes": [
     { "start": 1920, "length": 2, "note": "C4" }
   ]
 }
+```
+
+```json
+"lyric_verses": [
+  { "number": 1, "label": "Verse 1", "phrases": [] }
+]
 ```
 
 The range is descriptive only, and vocal pitch comparison against phrase targets is not

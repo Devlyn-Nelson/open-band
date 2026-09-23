@@ -166,11 +166,23 @@ pub(crate) enum GraceKind {
     Appoggiatura,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct GraceSpec {
     pub(crate) kind: GraceKind,
     #[serde(default)]
     pub(crate) slash: bool,
+    #[serde(default)]
+    pub(crate) principal: Option<String>,
+    #[serde(default)]
+    pub(crate) order: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StemDirection {
+    Up,
+    Down,
+    Auto,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -611,6 +623,14 @@ pub(crate) struct VocalRange {
     pub(crate) high: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct LyricVerse {
+    pub(crate) number: u16,
+    #[serde(default)]
+    pub(crate) label: Option<String>,
+    pub(crate) phrases: Vec<VocalPhrase>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SyllableKind {
@@ -661,6 +681,8 @@ pub(crate) struct ChartTrack {
     pub(crate) phrases: Vec<VocalPhrase>,
     #[serde(default)]
     pub(crate) star_power_phrases: Vec<Phrase>,
+    #[serde(default)]
+    pub(crate) lyric_verses: Vec<LyricVerse>,
 }
 
 #[derive(Clone, Debug)]
@@ -689,6 +711,7 @@ pub(crate) struct ChartEvent {
     pub(crate) chord: Option<String>,
     pub(crate) dynamic: Option<DynamicLevel>,
     pub(crate) articulations: Vec<Articulation>,
+    pub(crate) stem: Option<StemDirection>,
     pub(crate) grace: Option<GraceSpec>,
     pub(crate) performance: Option<PerformanceHints>,
     pub(crate) content: NoteContent,
@@ -790,6 +813,8 @@ struct ChartEventFields {
     dynamic: Option<DynamicLevel>,
     #[serde(default)]
     articulations: Vec<Articulation>,
+    #[serde(default)]
+    stem: Option<StemDirection>,
     #[serde(default)]
     grace: Option<GraceSpec>,
     #[serde(default)]
@@ -968,6 +993,7 @@ impl<'de> Deserialize<'de> for ChartEvent {
             chord: fields.chord,
             dynamic: fields.dynamic,
             articulations: fields.articulations,
+            stem: fields.stem,
             grace: fields.grace,
             performance,
             content,
@@ -1002,6 +1028,8 @@ impl Serialize for ChartEvent {
             dynamic: Option<DynamicLevel>,
             #[serde(skip_serializing_if = "slice_is_empty")]
             articulations: &'a [Articulation],
+            #[serde(skip_serializing_if = "Option::is_none")]
+            stem: Option<StemDirection>,
             #[serde(skip_serializing_if = "Option::is_none")]
             grace: Option<GraceSpec>,
             #[serde(skip_serializing_if = "Option::is_none")]
@@ -1047,7 +1075,8 @@ impl Serialize for ChartEvent {
             chord: self.chord.as_deref(),
             dynamic: self.dynamic,
             articulations: &self.articulations,
-            grace: self.grace,
+            stem: self.stem,
+            grace: self.grace.clone(),
             performance: self.performance.as_ref(),
             note,
             spelling,
@@ -1067,6 +1096,10 @@ pub(crate) struct VocalPhrase {
     pub(crate) syllable: Option<SyllableKind>,
     #[serde(default)]
     pub(crate) melisma: bool,
+    #[serde(default)]
+    pub(crate) hyphen_after: bool,
+    #[serde(default)]
+    pub(crate) breath_after: bool,
     #[serde(default)]
     pub(crate) notes: Vec<ChartEvent>,
 }
@@ -1488,6 +1521,19 @@ impl Chart {
                         "track \"{}\" rest {index} cannot be a grace event",
                         track.name
                     ));
+                }
+                if let Some(grace) = &event.grace {
+                    match grace.principal.as_deref() {
+                        Some(principal) if !event_ids.contains(&principal) => warnings.push(format!(
+                            "track \"{}\" grace note {index} references an unknown principal event",
+                            track.name
+                        )),
+                        None => warnings.push(format!(
+                            "track \"{}\" grace note {index} has no principal event",
+                            track.name
+                        )),
+                        _ => {}
+                    }
                 }
                 if let Some(id) = event.id.as_deref() {
                     if id.is_empty() {

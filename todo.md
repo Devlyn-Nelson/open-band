@@ -11,8 +11,8 @@ This plan covers a score-authoring pipeline followed by runtime compilation:
 
 ## Status
 
-- **Part A:** in progress. The score schema foundation is complete; engraving semantics for
-  voices, staves, grace events, tabs, percussion, and lyrics are next.
+- **Part A:** complete. The score schema and engraving semantics are modeled and validated;
+  editor rendering and runtime interpretation remain in Parts B and C.
 - **Part B:** in progress. The editor foundation and notation engine exist; score rendering
   and full score-document editing remain.
 - **Parts C-E:** not started.
@@ -25,10 +25,10 @@ dynamics, articulations, grace notes, lyrics, score navigation, tempo expression
 kits, and separate Open Band `performance` hints. Runtime expansion and rendering are tracked
 in Parts B-D below.
 
-### Part A2 — Engraving semantics and notation data
+### Part A2 — Engraving semantics and notation data — COMPLETE
 
-This phase extends the score model without implementing rendering or gameplay. Each item needs
-schema types, validation, serialization coverage, and focused tests before Part B consumes it.
+This phase extends the score model without implementing rendering or gameplay. Schema types,
+validation, serialization coverage, and focused tests are complete; Part B now consumes them.
 
 - **Voice-aware rhythm:** add voice-local beam groups, stem directions, and rests. Validate
   that beams, tuplets, ties, and chord groups do not cross voices.
