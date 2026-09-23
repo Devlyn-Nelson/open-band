@@ -179,34 +179,137 @@ be loaded, the embedded starter chart is used as a fallback. The included starte
       "kind": "strings",
       "tuning": { "strings": ["B0", "E1", "A1", "D2", "G2"] },
       "notes": [
-        { "start": 1440, "length": 8, "dots": 1, "note": 23, "ps": 0 }
+        {
+          "start": 1440,
+          "length": 8,
+          "dots": 1,
+          "note": 23,
+          "ps": 0,
+          "attack": "pluck"
+        }
       ]
     }
   ]
 }
 ```
 
-Event positions and durations are integer **ticks** against the chart's `resolution`
-(ticks per quarter note), not raw beats — this supports exact tempo/time-signature
-changes mid-song via `tempo_map`/`time_signature_map` (each keyed by `start` tick, with a
-tick-0 entry expected). A note's notated duration is `length` (`1`/`2`/`4`/`8`/`16` for
-whole/half/quarter/eighth/sixteenth) plus optional `dots`; `tied: true` continues the
-duration into the next event of the same pitch/piece.
+### Shared chart rules
 
-Each track declares a `kind`: `strings`, `percussion`, or `voice`. `strings` tracks embed
-a `tuning` (ordered, low-string-first, octave-qualified open-string notes, e.g. `["B0",
-"E1", "A1", "D2", "G2"]`) covering any string count or tuning. `percussion` tracks embed a
-`kit` (a lane count plus named pieces, each on a `lane` or spanning all lanes via
-`lane_span`); percussion notes reference a piece by name (`"piece": "kick"`), optionally
-with `dynamics` (`accent`/`ghost`) or `roll` (`single_lane`/`double_lane`). Pitched events
-use `note` — either a raw MIDI number or a readable name like `"C4"` — and an optional
-`ps` (preferred string) hint. Any track can carry `star_power_phrases`, simple
-`{ start, duration_ticks }` range markers.
+Each track declares a `kind`: `strings`, `percussion`, or `voice`. A song can contain any
+number of tracks and any combination of instrument kinds. Event positions and durations
+are integer **ticks** against the chart's `resolution` (ticks per quarter note), not raw
+beats. Tempo and time-signature changes are keyed by `start` ticks, with a tick-0 entry
+expected.
 
-Songs can contain any number of `strings`, `percussion`, and `voice` tracks. `voice`
-tracks use lyric phrases with nested pitch targets, allowing lyrics and melody to share
-the same timeline. The current fret/note label mode is configured by `CHART_NOTE_DISPLAY`
-in `src/domain.rs` and supports `Fret`, `Note`, or `Both`.
+Every event uses `length` (`1`/`2`/`4`/`8`/`16` for whole, half, quarter, eighth, or
+sixteenth) and may use `dots`. `tied: true` continues the duration into the next event of
+the same pitch or piece. Rests are not stored; they are inferred from gaps between events.
+
+Any track may contain `star_power_phrases`, represented as simple
+`{ "start": 0, "duration_ticks": 3840 }` range markers.
+
+```json
+{
+    "version": 1,
+    "title": "Star Power",
+    "resolution": 960,
+    "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+    "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+    "tracks": [{
+        "name": "Bass",
+        "kind": "strings",
+        "tuning": { "strings": ["E1", "A1", "D2", "G2"] },
+        "notes": [],
+        "star_power_phrases": [{ "start": 0, "duration_ticks": 3840 }]
+    }]
+}
+```
+
+### Strings
+
+Strings tracks embed a `tuning` with ordered, low-string-first, octave-qualified open-string
+notes. Any string count or tuning is supported:
+
+```json
+"tuning": { "strings": ["B0", "E1", "A1", "D2", "G2"] }
+```
+
+Pitched events use `note`, either a raw MIDI number or a readable name such as `"C4"`.
+`ps` is an optional preferred-string index, counted from zero in the tuning array. The
+chart system uses the tuning and pitch to derive the playable string and fret.
+
+String events may also describe notation and intended articulation:
+
+```json
+{
+  "start": 1440,
+  "length": 8,
+  "note": "E2",
+  "ps": 0,
+  "attack": "pluck",
+  "transition": "slide",
+  "bend": { "semitones": 2.0, "release": true },
+  "motion": { "kind": "trill", "target": "F#2" }
+}
+```
+
+- `attack`: `pluck` or `tap`; describes how the note starts.
+- `transition`: `hammer_on`, `pull_off`, or `slide`; describes how the note connects
+  from the preceding note.
+- `bend`: a bend amount in semitones, with optional `release: true` to return toward the
+  original pitch.
+- `motion`: currently supports `trill`, alternating the current note and its `target`.
+
+These fields preserve `note` as the event's pitch and are ready for notation rendering.
+Gameplay playback and scoring for the techniques are not implemented yet. The current
+fret/note label mode is configured by `CHART_NOTE_DISPLAY` in `src/domain.rs` and supports
+`Fret`, `Note`, or `Both`.
+
+### Percussion
+
+Percussion tracks embed a `kit` with a lane count and named pieces. Each piece has a
+`trigger`, plus either a shared `lane` or a full-width `lane_span` color. `symbol`
+distinguishes pieces sharing a lane, such as a tom and cymbal.
+
+Percussion events reference a kit piece by name:
+
+```json
+{ "start": 960, "length": 4, "piece": "snare", "dynamics": "accent" }
+```
+
+- `dynamics`: optional `accent` or `ghost` modifier; normal is the default.
+- `roll`: names the ending piece for a single-lane roll. The event's `piece` is the
+  starting piece; using the same name describes a same-piece roll.
+- `droll`: names the second piece for an alternating double-lane roll between `piece` and
+  `droll`.
+
+`roll` and `droll` are mutually exclusive and must reference pieces in the track's kit.
+Roll rendering, hit generation, and scoring are not implemented yet.
+
+### Voice
+
+Voice tracks may include a descriptive `vocal_range`:
+
+```json
+"vocal_range": { "low": "A2", "high": "A4" }
+```
+
+Lyrics and melody are grouped into `phrases`. Each phrase has a start tick, duration,
+display text, and optional nested pitched events:
+
+```json
+{
+  "start": 1920,
+  "duration_ticks": 1920,
+  "text": "Hello",
+  "notes": [
+    { "start": 1920, "length": 2, "note": "C4" }
+  ]
+}
+```
+
+The range is descriptive only, and vocal pitch comparison against phrase targets is not
+implemented yet.
 
 Press `F3` during the live session to show or hide the input debug window. For strings
 inputs, it reports the estimated frequency, nearest string, pitch, and cents offset.

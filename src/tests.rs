@@ -1,6 +1,7 @@
 use super::{
-    AudioDetector, AudioOnsetDetector, Chart, Clef, DeviceChoice, DetectorProfile, Instrument,
-    InstrumentKind, NoteDynamics, NotePhase, PolyphonicAudioDetector, RollKind, SnapInterval,
+    AudioDetector, AudioOnsetDetector, Chart, ChartEvent, Clef, DeviceChoice, DetectorProfile,
+    BendSpec, Instrument, InstrumentKind, MotionKind, NoteAttack, NoteContent, NoteDynamics,
+    NotePhase, NoteTransition, PolyphonicAudioDetector, SnapInterval,
     Tuning, cents_error, cycle_track_kit, cycle_track_tuning, default_clef, estimate_pitch,
     layout_track, load_charts, load_kit_library, load_tuning_library, measures, new_track,
     pitch_to_lane, selected_device_index, slugify, snap_tick, string_lane,
@@ -229,6 +230,50 @@ fn bass_projection_falls_back_when_preferred_string_cannot_play_note() {
 }
 
 #[test]
+fn string_techniques_parse_resolve_and_round_trip() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Techniques",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": [{
+                "name": "Bass",
+                "kind": "strings",
+                "tuning": { "strings": ["E1", "A1", "D2", "G2"] },
+                "notes": [{
+                    "start": 0,
+                    "length": 4,
+                    "note": "E2",
+                    "ps": 0,
+                    "attack": "tap",
+                    "transition": "slide",
+                    "bend": { "semitones": 2.0, "release": true },
+                    "motion": { "kind": "trill", "target": "F#2" }
+                }]
+            }]
+        }
+        "#,
+    )
+    .expect("string techniques chart should parse");
+
+    let notes = chart.string_notes();
+    assert_eq!(notes[0].attack, Some(NoteAttack::Tap));
+    assert_eq!(notes[0].transition, Some(NoteTransition::Slide));
+    assert_eq!(notes[0].bend, Some(BendSpec { semitones: 2.0, release: true }));
+    assert_eq!(notes[0].motion.as_ref().map(|motion| motion.kind), Some(MotionKind::Trill));
+    assert_eq!(notes[0].motion.as_ref().map(|motion| motion.target), Some(42));
+
+    let serialized = serde_json::to_string(&chart).expect("techniques chart should serialize");
+    assert!(serialized.contains("\"attack\":\"tap\""));
+    assert!(serialized.contains("\"transition\":\"slide\""));
+    assert!(serialized.contains("\"target\":42"));
+    serde_json::from_str::<Chart>(&serialized).expect("serialized techniques chart should reparse");
+}
+
+#[test]
 fn chart_directory_loads_all_valid_charts() {
     let charts = load_charts();
     assert!(
@@ -349,7 +394,8 @@ fn percussion_track_resolves_pieces_by_name() {
                 "notes": [
                     { "start": 0, "length": 4, "piece": "kick" },
                     { "start": 960, "length": 4, "piece": "snare", "dynamics": "accent" },
-                    { "start": 1920, "length": 4, "piece": "crash", "roll": "single_lane" }
+                    { "start": 1920, "length": 4, "piece": "crash", "roll": "crash" },
+                    { "start": 2880, "length": 4, "piece": "snare", "droll": "crash" }
                 ]
             }]
         }
@@ -358,13 +404,26 @@ fn percussion_track_resolves_pieces_by_name() {
     .expect("percussion chart should parse");
 
     let notes = chart.percussion_notes();
-    assert_eq!(notes.len(), 3);
+    assert_eq!(notes.len(), 4);
     assert_eq!(notes[0].piece, "kick");
     assert_eq!(notes[0].lane_span_color.as_deref(), Some("yellow"));
     assert_eq!(notes[1].dynamics, NoteDynamics::Accent);
     assert_eq!(notes[1].symbol.as_deref(), Some("tom"));
     assert_eq!(notes[2].symbol.as_deref(), Some("cymbal"));
-    assert_eq!(notes[2].roll, Some(RollKind::SingleLane));
+    assert_eq!(notes[2].roll.as_deref(), Some("crash"));
+    assert_eq!(notes[2].droll, None);
+    assert_eq!(notes[3].roll, None);
+    assert_eq!(notes[3].droll.as_deref(), Some("crash"));
+}
+
+#[test]
+fn chart_rejects_conflicting_or_pitched_roll_fields() {
+    for json in [
+        r#"{ "start": 0, "length": 4, "piece": "kick", "roll": "snare", "droll": "tom1" }"#,
+        r#"{ "start": 0, "length": 4, "note": "E2", "roll": "snare" }"#,
+    ] {
+        assert!(serde_json::from_str::<ChartEvent>(json).is_err(), "expected rejection: {json}");
+    }
 }
 
 #[test]
@@ -505,7 +564,7 @@ fn chart_validate_reports_expected_problems() {
                     "name": "Drums",
                     "kind": "percussion",
                     "kit": { "lanes": 1, "pieces": [{ "name": "kick", "trigger": "midi:36", "lane": 0 }] },
-                    "notes": [{ "start": 0, "length": 4, "piece": "nonexistent" }]
+                    "notes": [{ "start": 0, "length": 4, "piece": "kick", "droll": "nonexistent" }]
                 }
             ]
         }
@@ -515,7 +574,7 @@ fn chart_validate_reports_expected_problems() {
 
     let warnings = chart.validate();
     assert!(warnings.iter().any(|warning| warning.contains("unplayable note")));
-    assert!(warnings.iter().any(|warning| warning.contains("unknown percussion piece")));
+    assert!(warnings.iter().any(|warning| warning.contains("unknown percussion roll target")));
 }
 
 #[test]
@@ -686,7 +745,7 @@ fn chart_round_trips_through_serialize_and_deserialize() {
             .unwrap(),
     );
     chart.tracks[1].notes.push(
-        serde_json::from_str(r#"{ "start": 0, "length": 8, "piece": "kick", "dynamics": "accent" }"#)
+        serde_json::from_str(r#"{ "start": 0, "length": 8, "piece": "kick", "dynamics": "accent", "droll": "snare" }"#)
             .unwrap(),
     );
 
@@ -699,6 +758,10 @@ fn chart_round_trips_through_serialize_and_deserialize() {
     assert_eq!(reloaded.tracks[0].notes[0].dots, 1);
     assert!(reloaded.tracks[0].notes[0].tied);
     assert_eq!(reloaded.tracks[1].kind, InstrumentKind::Percussion);
+    let NoteContent::Percussive { droll, .. } = &reloaded.tracks[1].notes[0].content else {
+        panic!("expected a percussive event");
+    };
+    assert_eq!(droll.as_deref(), Some("snare"));
 }
 
 #[test]

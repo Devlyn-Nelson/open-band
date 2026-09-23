@@ -129,8 +129,8 @@ This plan covers two sequential efforts:
 - `ChartEvent` needs to represent both pitched (strings/voice) and percussive (percussion)
   content, and both need full rhythmic notation data since sheet view is a real notation
   editor and both kinds get staff/rhythm rendering. Split into a tagged representation:
-  - `Pitched { start_tick, note_value, dots, tied, midi_note, preferred_string }`
-    (strings/voice)
+  - `Pitched { start_tick, note_value, dots, tied, midi_note, preferred_string, attack,
+    transition, bend, motion }` (strings/voice)
   - `Percussive { start_tick, note_value, dots, tied, piece, dynamics, roll }`
     (percussion, piece = kit piece name)
   - `note_value`: an enum (`Whole`, `Half`, `Quarter`, `Eighth`, `Sixteenth`) — the same
@@ -150,10 +150,27 @@ This plan covers two sequential efforts:
     defaults to `Normal`. Matches Clone Hero's accent/ghost modifiers directly (see
     Part D). A future continuous velocity value is a possible later extension but isn't
     needed for parity with existing formats.
-  - `roll` (percussion only): `Option<RollKind>` where `RollKind` is `SingleLane` or
-    `DoubleLane` — marks a note as part of a drum roll/cymbal swell run rather than a
-    discrete hit, matching Clone Hero's roll-lane mechanic. Which lane(s) the roll covers
-    is derived from the notes underneath it, not stored separately.
+  - Drum roll fields (percussion only):
+    - `roll: Option<String>` names the ending piece for a single-lane roll or piece
+      transition. The event's `piece` is the starting piece; using the same name for both
+      represents a same-piece roll.
+    - `droll: Option<String>` names the second piece for a double-lane roll, alternating
+      between the event's `piece` and `droll` for the event duration.
+    - Both fields use kit piece names and are mutually exclusive. The roll duration comes
+      from the event's `note_value`/`dots` and any tie chain; the hit subdivision/rate is a
+      gameplay rule rather than additional chart data.
+    - This replaces the former `RollKind::SingleLane`/`DoubleLane` marker.
+  - String technique fields (strings/voice pitched events only):
+    - `attack: Option<NoteAttack>` is `pluck` or `tap` and describes how the note starts.
+    - `transition: Option<NoteTransition>` is `hammer_on`, `pull_off`, or `slide` and
+      describes how the note connects from the preceding event.
+    - `bend: Option<BendSpec>` stores a bend amount in semitones plus an optional
+      `release: true` return toward the original pitch.
+    - `motion: Option<PitchMotion>` currently supports a `trill` target pitch for repeated
+      movement between the current note and the target. Note names and MIDI numbers are
+      accepted for pitch targets.
+    - These fields preserve `note` as the event's pitch and are chart/notation data only;
+      gameplay interpretation is deferred.
 - `star_power_phrases: Vec<Phrase>` on `ChartTrack` (any instrument kind), where
   `Phrase { start_tick, duration_ticks }` — a simple range marker with no nested note
   list. Anything played during that span counts as part of the phrase; this mirrors the
@@ -234,6 +251,25 @@ This plan covers two sequential efforts:
 - Update `src/chart.rs` / `src/gameplay.rs` to render percussion tracks: fixed lane count,
   shared-lane symbol distinction (tom vs. cymbal in the same column), and full-width
   colored bar for `lane_span` pieces (kick).
+
+### A8.1. Drum roll and string technique chart schema — DONE
+
+- Implement `roll` and `droll` as named percussion-piece fields with parser,
+  serialization, kit-resolution, mutual-exclusion, and validation support.
+- Implement string/voice pitched-event `attack`, `transition`, `bend`, and `motion` fields,
+  including note-name/MIDI target resolution and round-trip tests.
+
+### A8.2. Roll and string-technique gameplay — NOT STARTED
+
+- Resolve `roll` events into timed hit targets for playback and scoring. A `roll` repeats or
+  transitions across the starting and ending pieces; a `droll` alternates between the two
+  pieces at the selected gameplay subdivision.
+- Render roll targets across their complete duration, including lane changes and shared
+  lane symbols, instead of rendering one sustained bar.
+- Implement live interpretation and scoring for plucks, taps, hammer-ons, pull-offs, slides,
+  bends, and trill motion without changing their chart representation.
+- Add gameplay tests for roll timing, roll transitions, double-lane alternation, and string
+  technique hit/scoring behavior.
 
 ### A9. Tests (`src/tests.rs`) — DONE
 

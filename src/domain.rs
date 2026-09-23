@@ -116,9 +116,36 @@ impl Default for NoteDynamics {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum RollKind {
-    SingleLane,
-    DoubleLane,
+pub(crate) enum NoteAttack {
+    Pluck,
+    Tap,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NoteTransition {
+    HammerOn,
+    PullOff,
+    Slide,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct BendSpec {
+    pub(crate) semitones: f32,
+    #[serde(default)]
+    pub(crate) release: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MotionKind {
+    Trill,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct PitchMotion {
+    pub(crate) kind: MotionKind,
+    pub(crate) target: u8,
 }
 
 /// A tempo change at a tick position; `tempo_map[0].start` should be `0`.
@@ -370,11 +397,16 @@ pub(crate) enum NoteContent {
     Pitched {
         note: u8,
         ps: Option<usize>,
+        attack: Option<NoteAttack>,
+        transition: Option<NoteTransition>,
+        bend: Option<BendSpec>,
+        motion: Option<PitchMotion>,
     },
     Percussive {
         piece: String,
         dynamics: NoteDynamics,
-        roll: Option<RollKind>,
+        roll: Option<String>,
+        droll: Option<String>,
     },
 }
 
@@ -438,11 +470,27 @@ struct ChartEventFields {
     #[serde(default)]
     ps: Option<usize>,
     #[serde(default)]
+    attack: Option<NoteAttack>,
+    #[serde(default)]
+    transition: Option<NoteTransition>,
+    #[serde(default)]
+    bend: Option<BendSpec>,
+    #[serde(default)]
+    motion: Option<PitchMotionInput>,
+    #[serde(default)]
     piece: Option<String>,
     #[serde(default)]
     dynamics: Option<NoteDynamics>,
     #[serde(default)]
-    roll: Option<RollKind>,
+    roll: Option<String>,
+    #[serde(default)]
+    droll: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PitchMotionInput {
+    kind: MotionKind,
+    target: NoteInput,
 }
 
 impl<'de> Deserialize<'de> for ChartEvent {
@@ -455,21 +503,56 @@ impl<'de> Deserialize<'de> for ChartEvent {
         let is_percussive = fields.piece.is_some();
         let content = match (is_pitched, is_percussive) {
             (true, false) => {
+                if fields.roll.is_some() || fields.droll.is_some() {
+                    return Err(de::Error::custom(
+                        "pitched chart events cannot contain roll or droll",
+                    ));
+                }
                 let note = fields
                     .note
                     .expect("checked by is_pitched")
                     .resolve()
                     .map_err(de::Error::custom)?;
+                let motion = fields
+                    .motion
+                    .map(|motion| {
+                        Ok(PitchMotion {
+                            kind: motion.kind,
+                            target: motion.target.resolve().map_err(de::Error::custom)?,
+                        })
+                    })
+                    .transpose()?;
                 NoteContent::Pitched {
                     note,
                     ps: fields.ps,
+                    attack: fields.attack,
+                    transition: fields.transition,
+                    bend: fields.bend,
+                    motion,
                 }
             }
-            (false, true) => NoteContent::Percussive {
-                piece: fields.piece.expect("checked by is_percussive"),
-                dynamics: fields.dynamics.unwrap_or_default(),
-                roll: fields.roll,
-            },
+            (false, true) => {
+                if fields.attack.is_some()
+                    || fields.transition.is_some()
+                    || fields.bend.is_some()
+                    || fields.motion.is_some()
+                {
+                    return Err(de::Error::custom(
+                        "percussive chart events cannot contain string techniques",
+                    ));
+                }
+                if fields.roll.is_some() && fields.droll.is_some() {
+                    return Err(de::Error::custom(
+                        "percussive chart events cannot contain both roll and droll",
+                    ));
+                }
+                NoteContent::Percussive {
+                    piece: fields.piece.expect("checked by is_percussive"),
+                    dynamics: fields.dynamics.unwrap_or_default(),
+                    roll: fields.roll,
+                    droll: fields.droll,
+                }
+            }
             (true, true) => {
                 return Err(de::Error::custom(
                     "chart event cannot mix pitched (note) and percussive (piece) fields",
@@ -509,11 +592,26 @@ impl Serialize for ChartEvent {
             #[serde(skip_serializing_if = "Option::is_none")]
             ps: Option<usize>,
             #[serde(skip_serializing_if = "Option::is_none")]
+            attack: Option<NoteAttack>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            transition: Option<NoteTransition>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            bend: Option<&'a BendSpec>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            motion: Option<PitchMotionOutput>,
+            #[serde(skip_serializing_if = "Option::is_none")]
             piece: Option<&'a str>,
             #[serde(skip_serializing_if = "is_normal")]
             dynamics: NoteDynamics,
             #[serde(skip_serializing_if = "Option::is_none")]
-            roll: Option<RollKind>,
+            roll: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            droll: Option<&'a str>,
+        }
+        #[derive(Serialize)]
+        struct PitchMotionOutput {
+            kind: MotionKind,
+            target: u8,
         }
         fn is_zero(value: &u8) -> bool {
             *value == 0
@@ -524,10 +622,51 @@ impl Serialize for ChartEvent {
         fn is_normal(value: &NoteDynamics) -> bool {
             matches!(value, NoteDynamics::Normal)
         }
-        let (note, ps, piece, dynamics, roll) = match &self.content {
-            NoteContent::Pitched { note, ps } => (Some(*note), *ps, None, NoteDynamics::Normal, None),
-            NoteContent::Percussive { piece, dynamics, roll } => {
-                (None, None, Some(piece.as_str()), *dynamics, *roll)
+        let (note, ps, attack, transition, bend, motion, piece, dynamics, roll, droll) =
+            match &self.content {
+            NoteContent::Pitched {
+                note,
+                ps,
+                attack,
+                transition,
+                bend,
+                motion,
+            } => {
+                let motion = motion.as_ref().map(|motion| PitchMotionOutput {
+                    kind: motion.kind,
+                    target: motion.target,
+                });
+                (
+                    Some(*note),
+                    *ps,
+                    *attack,
+                    *transition,
+                    bend.as_ref(),
+                    motion,
+                    None,
+                    NoteDynamics::Normal,
+                    None,
+                    None,
+                )
+            }
+            NoteContent::Percussive {
+                piece,
+                dynamics,
+                roll,
+                droll,
+            } => {
+                (
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(piece.as_str()),
+                    *dynamics,
+                    roll.as_deref(),
+                    droll.as_deref(),
+                )
             }
         };
         Fields {
@@ -537,9 +676,14 @@ impl Serialize for ChartEvent {
             tied: self.tied,
             note,
             ps,
+            attack,
+            transition,
+            bend,
+            motion,
             piece,
             dynamics,
             roll,
+            droll,
         }
         .serialize(serializer)
     }
@@ -562,6 +706,10 @@ pub(crate) struct ChartNoteData {
     pub(crate) fret: u8,
     pub(crate) note: String,
     pub(crate) pitch_hz: f32,
+    pub(crate) attack: Option<NoteAttack>,
+    pub(crate) transition: Option<NoteTransition>,
+    pub(crate) bend: Option<BendSpec>,
+    pub(crate) motion: Option<PitchMotion>,
 }
 
 #[derive(Clone, Debug)]
@@ -573,7 +721,8 @@ pub(crate) struct PercussionNoteData {
     pub(crate) lane_span_color: Option<String>,
     pub(crate) symbol: Option<String>,
     pub(crate) dynamics: NoteDynamics,
-    pub(crate) roll: Option<RollKind>,
+    pub(crate) roll: Option<String>,
+    pub(crate) droll: Option<String>,
 }
 
 /// Sums the nominal duration of `events[index]` forward across a `tied` chain.
@@ -657,7 +806,15 @@ impl Chart {
             .iter()
             .enumerate()
             .filter_map(|(index, event)| {
-                let NoteContent::Pitched { note, ps } = &event.content else {
+                let NoteContent::Pitched {
+                    note,
+                    ps,
+                    attack,
+                    transition,
+                    bend,
+                    motion,
+                } = &event.content
+                else {
                     return None;
                 };
                 let Some((string, fret)) = best_string_fret(*note, &open_midi, *ps) else {
@@ -677,6 +834,10 @@ impl Chart {
                     fret,
                     note: midi_note_name(*note),
                     pitch_hz: midi_to_frequency(*note),
+                    attack: *attack,
+                    transition: *transition,
+                    bend: bend.clone(),
+                    motion: motion.clone(),
                 })
             })
             .collect()
@@ -704,6 +865,7 @@ impl Chart {
                     piece,
                     dynamics,
                     roll,
+                    droll,
                 } = &event.content
                 else {
                     return None;
@@ -715,6 +877,15 @@ impl Chart {
                     );
                     return None;
                 };
+                for target in roll.iter().chain(droll.iter()) {
+                    if kit.piece(target).is_none() {
+                        eprintln!(
+                            "Skipping {target} roll target on track {}: unknown percussion piece",
+                            track.name
+                        );
+                        return None;
+                    }
+                }
                 let duration_ticks = resolved_duration_ticks(&track.notes, index, self.resolution);
                 let start = self.tick_to_seconds(event.start);
                 let duration = self.tick_to_seconds(event.start + duration_ticks) - start;
@@ -726,7 +897,8 @@ impl Chart {
                     lane_span_color: kit_piece.lane_span.clone(),
                     symbol: kit_piece.symbol.clone(),
                     dynamics: *dynamics,
-                    roll: *roll,
+                    roll: roll.clone(),
+                    droll: droll.clone(),
                 })
             })
             .collect()
@@ -767,7 +939,8 @@ impl Chart {
     }
 
     /// Human-readable warnings for problems that would otherwise be silently skipped at
-    /// load time (unplayable notes, missing tuning/kit, unknown percussion pieces).
+    /// load time (unplayable notes, missing tuning/kit, or unknown percussion pieces and
+    /// roll targets).
     /// Non-blocking: intended for the editor to surface before saving.
     pub(crate) fn validate(&self) -> Vec<String> {
         let mut warnings = Vec::new();
@@ -787,7 +960,7 @@ impl Chart {
                         }
                         Ok(open_midi) => {
                             for note in &track.notes {
-                                if let NoteContent::Pitched { note: pitch, ps } = &note.content
+                                if let NoteContent::Pitched { note: pitch, ps, .. } = &note.content
                                     && best_string_fret(*pitch, &open_midi, *ps).is_none()
                                 {
                                     warnings.push(format!(
@@ -804,13 +977,27 @@ impl Chart {
                     None => warnings.push(format!("track \"{}\" is Percussion but has no kit", track.name)),
                     Some(kit) => {
                         for note in &track.notes {
-                            if let NoteContent::Percussive { piece, .. } = &note.content
-                                && kit.piece(piece).is_none()
+                            if let NoteContent::Percussive {
+                                piece,
+                                roll,
+                                droll,
+                                ..
+                            } = &note.content
                             {
-                                warnings.push(format!(
-                                    "track \"{}\" references unknown percussion piece \"{piece}\"",
-                                    track.name
-                                ));
+                                if kit.piece(piece).is_none() {
+                                    warnings.push(format!(
+                                        "track \"{}\" references unknown percussion piece \"{piece}\"",
+                                        track.name
+                                    ));
+                                }
+                                for target in roll.iter().chain(droll.iter()) {
+                                    if kit.piece(target).is_none() {
+                                        warnings.push(format!(
+                                            "track \"{}\" references unknown percussion roll target \"{target}\"",
+                                            track.name
+                                        ));
+                                    }
+                                }
                             }
                         }
                     }
