@@ -151,6 +151,12 @@ fn tie_chains(notes: &[ChartEvent]) -> Vec<Vec<usize>> {
     let mut chains = Vec::new();
     let mut current = Vec::new();
     for (index, note) in notes.iter().enumerate() {
+        if matches!(note.content, NoteContent::Rest) {
+            if !current.is_empty() {
+                chains.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
         current.push(index);
         if !note.tied {
             chains.push(std::mem::take(&mut current));
@@ -257,20 +263,31 @@ pub(crate) fn layout_track(chart: &Chart, track: &ChartTrack) -> NotationLayout 
     let beams = beam_groups(&notes, chart.resolution, &measures);
     let tuplets = tuplet_groups(&notes);
 
-    // Only the first event of each tie chain starts a sounding note; rests fill the gaps
-    // between where one chain ends and the next begins.
+    // Sounding tie chains and authored rests occupy ranges; infer silence only between them.
+    let mut occupied = Vec::new();
+    for chain in &ties {
+        let Some(&first) = chain.first() else { continue };
+        let end = notes[first].start + resolved_duration_ticks(&notes, first, chart.resolution);
+        occupied.push((notes[first].start, end, None));
+    }
+    for note in &notes {
+        if matches!(note.content, NoteContent::Rest) {
+            occupied.push((
+                note.start,
+                note.start + note.duration_ticks(chart.resolution),
+                Some(Rest { start: note.start, value: note.length }),
+            ));
+        }
+    }
+    occupied.sort_by_key(|(start, _, _)| *start);
     let mut rests = Vec::new();
     let mut cursor = measures.first().map_or(0, |measure| measure.start_tick);
-    for chain in &ties {
-        let Some(&first) = chain.first() else {
-            continue;
-        };
-        let Some(&last) = chain.last() else { continue };
-        let start = notes[first].start;
-        let end = start + resolved_duration_ticks(&notes, first, chart.resolution);
-        debug_assert!(last >= first);
+    for (start, end, explicit_rest) in occupied {
         rests.extend(infer_rests(cursor, start, chart.resolution, &measures));
-        cursor = end;
+        if let Some(rest) = explicit_rest {
+            rests.push(rest);
+        }
+        cursor = cursor.max(end);
     }
     if let Some(last_measure) = measures.last() {
         rests.extend(infer_rests(

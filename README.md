@@ -184,8 +184,10 @@ be loaded, the embedded starter chart is used as a fallback. The included starte
           "length": 8,
           "dots": 1,
           "note": 23,
-          "ps": 0,
-          "attack": "pluck"
+          "performance": {
+            "preferred_string": 0,
+            "attack": "pluck"
+          }
         }
       ]
     }
@@ -201,13 +203,38 @@ are integer **ticks** against the chart's `resolution` (ticks per quarter note),
 beats. Tempo and time-signature changes are keyed by `start` ticks, with a tick-0 entry
 expected.
 
+Written tempo text and expressive score ranges are stored separately from the resolved
+tempo map:
+
+```json
+"tempo_text": [{ "tick": 0, "text": "Andante", "bpm": 80.0 }],
+"expressions": [
+  {
+    "type": "accelerando",
+    "start": 0,
+    "duration_ticks": 1920,
+    "from_bpm": 80.0,
+    "to_bpm": 120.0
+  },
+  { "type": "crescendo", "start": 0, "duration_ticks": 1920 }
+]
+```
+
+Supported tempo expressions are `accelerando` and `ritardando`; supported dynamic
+expressions are `crescendo` and `diminuendo`. Runtime tempo-curve expansion is planned for
+Part C, while the score and editor preserve the written markings.
+
 Every event uses `length` (`1`/`2`/`4`/`8`/`16` for whole, half, quarter, eighth, or
 sixteenth) and may use `dots`. `tuplet` supports irregular subdivisions such as triplets:
 `{ "actual": 3, "normal": 2 }` means three written events in the time of two. `tied: true`
 continues the duration into the next event of the same pitch or piece; validation checks
-that the next event starts at the expected end and keeps the same pitch or piece. Explicit
-rest events are planned for the score-centric schema; the current format infers rests from
-gaps between events.
+that the next event starts at the expected end and keeps the same pitch or piece. Written
+silence can be represented explicitly with `rest: true`; gaps without authored rests are
+also inferred by the notation engine.
+
+```json
+{ "start": 960, "length": 4, "voice": 1, "staff": 1, "rest": true }
+```
 
 Events may specify `voice` and `staff` as one-based notation contexts. They default to
 `voice: 1` and `staff: 1` when omitted. `chord` is an optional identifier shared by
@@ -219,6 +246,11 @@ and an `articulations` array containing `staccato`, `tenuto`, `marcato`, `accent
 
 Any track may contain `star_power_phrases`, represented as simple
 `{ "start": 0, "duration_ticks": 3840 }` range markers.
+
+Score navigation is stored at chart level in `structure`. Markers include `repeat_start`,
+`repeat_end` with `times`, numbered `ending_start`/`ending_end`, `segno`, `coda`, `fine`,
+`da_capo`, `dal_segno`, and `rehearsal` with a label. The editor preserves these written
+markers; runtime repeat and ending expansion is deferred to Part C.
 
 ```json
 {
@@ -258,9 +290,8 @@ and its mode:
 Pitched events use `note`, either a raw MIDI number or a readable name such as `"C4"`.
 When a note name is used, its written spelling is preserved separately from the sounding
 MIDI value, so `C#4` and `Db4` remain distinct notation even though both sound as MIDI 61.
-MIDI-only notes have no explicit spelling and use renderer defaults. `ps` is an optional
-preferred-string index, counted from zero in the tuning array. The chart system uses the
-tuning and pitch to derive the playable string and fret.
+MIDI-only notes have no explicit spelling and use renderer defaults. The chart system uses
+the tuning and pitch to derive the playable string and fret.
 
 String events may also describe notation and intended articulation:
 
@@ -269,18 +300,21 @@ String events may also describe notation and intended articulation:
   "start": 1440,
   "length": 8,
   "note": "E2",
-  "ps": 0,
-  "attack": "pluck",
-  "transition": "slide",
-  "bend": { "semitones": 2.0, "release": true },
-  "motion": { "kind": "trill", "target": "F#2" }
+  "performance": {
+    "preferred_string": 0,
+    "attack": "pluck",
+    "transition": "slide",
+    "bend": { "semitones": 2.0, "release": true },
+    "motion": { "kind": "trill", "target": "F#2" }
+  }
 }
 ```
 
-- `attack`: `pluck` or `tap`; describes how the note starts.
-- `transition`: `hammer_on`, `pull_off`, or `slide`; describes how the note connects
+- `performance.preferred_string`: optional zero-based preferred-string index.
+- `performance.attack`: `pluck` or `tap`; describes how the note starts.
+- `performance.transition`: `hammer_on`, `pull_off`, or `slide`; describes how the note connects
   from the preceding note.
-- `bend`: a simple bend amount in semitones, or a time-shaped curve. Curve points use a
+- `performance.bend`: a simple bend amount in semitones, or a time-shaped curve. Curve points use a
   normalized `offset` from `0.0` to `1.0`:
 
   ```json
@@ -293,12 +327,23 @@ String events may also describe notation and intended articulation:
 
   The simple form may also use `semitones` and `release: true` to return toward the
   original pitch.
-- `motion`: currently supports `trill`, alternating the current note and its `target`.
+- `performance.motion`: currently supports `trill`, alternating the current note and its `target`.
 
 These fields preserve `note` as the event's pitch and are ready for notation rendering.
 Gameplay playback and scoring for the techniques are not implemented yet. The current
 fret/note label mode is configured by `CHART_NOTE_DISPLAY` in `src/domain.rs` and supports
 `Fret`, `Note`, or `Both`.
+
+Additional string notation/performance metadata includes:
+
+- `grace`: `{ "kind": "acciaccatura" | "appoggiatura", "slash": true | false }`.
+- Track-level `capo`: a fret number from `0` through `24`.
+- `performance.harmonic`: `natural`, `artificial`, or `pinch`.
+- `performance.palm_mute`: boolean.
+- `performance.vibrato`: `normal`, `wide`, or `narrow`.
+
+These fields describe the written/tab part and optional playing guidance only; gameplay and
+visual rendering are deferred.
 
 Voice and staff numbers can be included alongside these fields when a track contains
 independent notation voices or multiple staves:
@@ -320,20 +365,26 @@ Percussion tracks embed a `kit` with a lane count and named pieces. Each piece h
 distinguishes pieces sharing a lane, such as a tom and cymbal.
 
 Percussion events reference a kit piece by name. They can also use the shared `dynamic`
-and `articulations` fields described above, in addition to the percussion-specific
-`dynamics` modifier:
+and `articulations` fields described above, in addition to percussion-specific hints inside
+`performance`:
 
 ```json
-{ "start": 960, "length": 4, "piece": "snare", "dynamics": "accent" }
+{ "start": 960, "length": 4, "piece": "snare",
+  "performance": { "percussion_dynamics": "accent" } }
 ```
 
-- `dynamics`: optional kit-specific `accent`, `ghost`, or `normal` modifier.
-- `roll`: names the ending piece for a single-lane roll. The event's `piece` is the
+- `performance.percussion_dynamics`: optional kit-specific `normal`, `accent`, or `ghost`.
+- `performance.roll`: names the ending piece for a single-lane roll. The event's `piece` is the
   starting piece; using the same name describes a same-piece roll.
-- `droll`: names the second piece for an alternating double-lane roll between `piece` and
+- `performance.droll`: names the second piece for an alternating double-lane roll between `piece` and
   `droll`.
+- `performance.percussion_grace`: `flam` or `drag`.
+- `performance.percussion_technique`: `buzz` or `cymbal_choke`.
+- `performance.sticking`: `right` or `left`.
+- `performance.hi_hat`: `open`, `closed`, or `pedal`.
 
-`roll` and `droll` are mutually exclusive and must reference pieces in the track's kit.
+`performance.roll` and `performance.droll` are mutually exclusive and must reference pieces
+in the track's kit.
 Roll rendering, hit generation, and scoring are not implemented yet.
 
 ### Voice
