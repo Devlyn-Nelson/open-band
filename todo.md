@@ -242,7 +242,7 @@ This plan covers a score-authoring pipeline followed by runtime compilation:
   any other cross-track helpers to account for the new event shape, `duration_ticks`, and
   the tempo/time-signature maps.
 
-### A5. Rewrite sample charts — DONE
+### A5. Rewrite sample charts — NOT STARTED
 
 - Migrate `charts/open-strings.json` and `charts/devs-test-song.json` to the new schema
   (`kind`, embedded `tuning`/`kit`/`vocal_range`, named-piece percussion notes).
@@ -629,27 +629,80 @@ gameplay systems do not read authored score JSON directly.
 - Test tuning-menu decisions separately from conversion so choosing a runtime preset does not
   alter the score's embedded tuning.
 
+### C7. Dynamic instrument highway model
+
+- Build the gameplay presentation from the compiled runtime instrument bindings rather than
+  hardcoding one string highway plus a side-mounted drum strip.
+- Create one highway model per active non-vocal instrument track or runtime player part.
+  The number of highways is dynamic and must support one instrument, multiple string parts,
+  multiple percussion parts, and mixed string/percussion sessions.
+- Give every highway the same construction pipeline: runtime targets determine lane count,
+  lane semantics, colors, labels, hit line, note shapes, sustain treatment, input feedback,
+  and source-track identity. Instrument-specific differences should be data supplied to the
+  shared builder, not separate layout implementations.
+- Derive the required lane count from the bound runtime part. Examples include one lane per
+  playable string, kit lanes plus lane-spanning kick pieces, and future controller-specific
+  lane layouts. Do not assume five string lanes or four drum lanes globally.
+- Define a layout policy for multiple highways: available screen width, minimum lane width,
+  stacking or tiling, focus/player emphasis, and a readable fallback when too many parts are
+  active. Preserve stable lane geometry so notes and labels never resize during play.
+- Keep highway identity linked to the runtime binding and source score track so feedback can
+  identify the instrument, tuning/kit conversion, and originating chart event.
+- Add runtime tests for one, many, mixed, and zero active instrument bindings, including lane
+  counts that differ from the default guitar/bass/drum layouts.
+
 ## Part D — Live Notation Overlay (Gameplay Integration)
 
 Depends on the Notation Engine (B4). Adds the read-only, in-gameplay sheet-music view
 called out in Decision 2.
 
-### D1. Overlay toggle
+### D1. Dynamic score overlays
 
-- Add a setting/keybind to show or hide a sheet-music strip docked at the bottom of the
-  screen during `Live Session` / chart gameplay (`src/gameplay.rs`, `src/chart.rs`).
+- Add a setting/keybind to show or hide score overlays during `Live Session` / chart gameplay
+  (`src/gameplay.rs`, `src/chart.rs`).
+- Create one sheet/tab overlay per active score track or player part, using the same dynamic
+  runtime binding list as the highways. Overlays must appear, disappear, and reorder safely
+  when the active instrument set changes.
+- Use the track's notation layout, clef, key, voice, and score structure rather than rebuilding
+  notation from gameplay lanes.
 - Off by default unless there's an existing preference precedent to follow; persisted in
   `open-band-settings/settings.json` alongside other display preferences.
 
 ### D2. Read-only rendering
 
 - Reuse the Notation Engine (`src/notation.rs`) layout output to render the currently
-  playing track's staff, scrolling in sync with the chart playhead — no editing
+  playing tracks' staves, scrolling in sync with the compiled runtime playhead — no editing
   interactions, just a moving "you are here" indicator for learning purposes.
-- Support switching which track's notation is displayed when a chart has multiple tracks
-  (e.g. a bass player wants the bass staff, not the vocal staff).
+- Place the vocal overlay above the instrument highway/overlay stack so lyrics and vocal pitch
+  targets remain visible without competing with instrument lanes.
+- Support switching focus, collapsing overlays, and selecting which instrument part is shown
+  when a chart has multiple tracks; the underlying runtime can still contain all parts.
 
-### D3. Performance
+### D3. Shared highway construction and lane adaptation
+
+- Use the same highway geometry and note-construction logic for strings and percussion, with
+  instrument data supplying lane count, lane labels, colors, shapes, and hit semantics.
+- Keep score overlays and highways synchronized through compiled source-event IDs, but allow
+  each view to render the representation appropriate to its purpose.
+- Ensure lane-spanning percussion pieces, chords, sustains, rolls, and simultaneous parts do
+  not change the highway's dimensions or cause visual overlap.
+
+### D4. Future 3D highway presentation
+
+- Replace the current 2D falling-note prototypes with perspective 3D highways inspired by
+  Rock Band and Clone Hero: notes begin far down the highway, travel toward a fixed hit line,
+  and expose a larger upcoming-note field.
+- Use a camera/frustum and highway coordinate system that supports multiple instrument
+  highways while maintaining a shared song clock and hit-line timing.
+- Keep lane geometry stable in world space; adapt viewport placement and camera framing to
+  the number of active highways instead of changing note semantics.
+- Design the 3D renderer as a presentation layer over runtime events. The score model and
+  score-to-performance compiler must remain independent of Bevy entities, meshes, cameras,
+  and screen coordinates.
+- Add staged validation: first verify dynamic 2D highway construction, then perspective
+  motion, camera framing, multi-highway readability, mobile/window resizing, and performance.
+
+### D5. Performance
 
 - Confirm the overlay's rendering cost is acceptable alongside the existing real-time
   detection pipeline; layout should be computed ahead of time (or incrementally) rather
@@ -677,7 +730,7 @@ Band chart JSON); there's no requirement to export back to `.chart`.
   discard the rest, matching Open Band's preference for one deterministic chart rather
   than tiered difficulties.
 
-### D2. Drums import
+### E2. Drums import
 
 - Detect track type (standard 4-lane / 4-lane Pro / 5-lane) via `song.ini` tags
   (`pro_drums`, `five_lane_drums`) first, falling back to note-based heuristics (cymbal
@@ -697,7 +750,7 @@ Band chart JSON); there's no requirement to export back to `.chart`.
 - Drop anything with no equivalent: Star Power activation phrase (`64`), BRE/`coda`
   events, and other RB-specific stem/mix event metadata.
 
-### D3. Guitar/bass import
+### E3. Guitar/bass import
 
 - CH's 5 fixed fret lanes have no reliable mapping to an arbitrary `Strings` tuning, so
   import uses a simple, explicitly approximate rule: lane *N* → open string *N* (fret 0),
@@ -710,14 +763,14 @@ Band chart JSON); there's no requirement to export back to `.chart`.
 - HOPO/strum-flip/open-note/forced-note markers (5-fret-specific mechanics) have no
   equivalent in the tab model and are dropped.
 
-### D4. Vocals import
+### E4. Vocals import
 
 - `.chart`'s text format doesn't typically carry vocal/lyric data (that's more common in
   the `.mid`-based Rock Band format) — if a source chart has no vocal track, this step is
   simply skipped. Treat full vocal import as a candidate for a future `.mid` importer
   rather than blocking on it here.
 
-### D5. Testing
+### E5. Testing
 
 - Round-trip a small hand-authored `.chart` fixture (drums + guitar, including a tempo
   change, a cymbal modifier, an accent, and a Star Power phrase) through the importer and
