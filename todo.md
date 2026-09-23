@@ -18,8 +18,10 @@ This plan covers two sequential efforts:
   embedded Rust presets) with the live detection pipeline resolving lane assignment from
   the actual configured tuning/kit instead of guessing from a string count.
 - **Part B: in progress.** B1-B4 are done (editor entry point, document/track management,
-  `SnapInterval`, and the `src/notation.rs` Notation Engine). B5-B10 (sheet view, tab view,
-  undo/redo, playback aids, multi-select/bulk edit, and broader manual QA) are not started.
+  `SnapInterval`, and the `src/notation.rs` Notation Engine). The multi-track view approach
+  is now decided (Decision 6) but not yet implemented. B5-B11 (track focus/view toggle,
+  sheet view, tab view, undo/redo, playback aids, multi-select/bulk edit, and broader
+  manual QA) are not started.
 - **Part C and Part D:** not started.
 
 ## Decisions
@@ -47,6 +49,13 @@ This plan covers two sequential efforts:
    Clone Hero import exact rather than lossy (see A2). The editor UI and this document
    still *talk* in beats/measures/note values for authoring — ticks are the internal,
    exact storage encoding underneath that, not a user-facing concept.
+6. **Multi-track editor view**: sheet/tab view shows one **focused track** at a time
+   (Option A), switched via a keybind, with the tick position/playhead shared across the
+   whole document so switching tracks doesn't lose your place in time. Sheet vs. tab is a
+   **single global toggle**, not a per-track setting. Rendering the other tracks as
+   collapsed, non-interactive reference lanes (Option C) is a planned future enhancement,
+   not part of the first implementation; a full synced multi-staff score view (Option B)
+   is a longer-term stretch goal only (see B5).
 
 ---
 
@@ -269,7 +278,7 @@ Depends on Part A being complete and merged.
 
 - Implemented as `SnapInterval` (a type alias for `NoteValue`, since both are the same
   whole/half/quarter/eighth/sixteenth palette) plus `snap_tick()` in `src/domain.rs`. Not
-  yet consumed by any UI since B5/B6 (the actual note-placement views) aren't built yet.
+  yet consumed by any UI since B6/B7 (the actual note-placement views) aren't built yet.
 
 - Implement a single `SnapInterval` concept (whole/half/quarter/eighth/sixteenth, mapped to
   exact tick fractions via the chart's `resolution`) shared by both sheet view and tab
@@ -281,7 +290,7 @@ Depends on Part A being complete and merged.
 - Implemented: measure layout, tie-chain grouping, beam grouping, and greedy rest
   inference (largest-value-first, split at measure boundaries), plus a per-track default
   clef heuristic (pitch-threshold based, since `Strings` no longer distinguishes guitar
-  from bass). Not yet wired into any renderer — B5 (sheet view) and Part C (gameplay
+  from bass). Not yet wired into any renderer — B6 (sheet view) and Part C (gameplay
   overlay) are the two future consumers. Rest inference does not yet handle dotted rests
   or non-power-of-two leftover ticks (no tuplet support anywhere in the schema, so this
   hasn't come up in practice).
@@ -305,23 +314,45 @@ Depends on Part A being complete and merged.
     description (positions, symbol types) that both the editor's sheet view and the
     gameplay overlay (Part C) render.
 
-### B5. Sheet view (editor)
+### B5. Multi-track editor view: track focus and sheet/tab toggle
+
+- A chart can have any number of tracks, but sheet/tab view can only show one track's full
+  detail readably at a time. First implementation (**Option A**): the view always shows
+  exactly one **focused track**, full-size and fully editable, with its name/kind/tuning
+  shown in the header.
+- A keybind switches the focused track (e.g. `PageUp`/`PageDown`), cycling through the
+  document's track list in order.
+- The current tick position (playhead/scroll position) is shared document-wide, not
+  per-track — switching the focused track does not lose your place in time, only the
+  vertical (pitch/lane) axis changes.
+- Sheet vs. tab is a **single global toggle**, not a per-track setting, applying to
+  whichever track is currently focused, so switching between the two views is quick
+  regardless of which track you're on.
+- **Future enhancement (Option C, not part of this first pass)**: render the other
+  tracks as thin, non-interactive reference lanes (note positions only, no pitch/fret
+  detail) above/below the focused staff, for timing context when composing against other
+  parts. A full synced multi-staff score view (every track fully rendered at once) is a
+  longer-term stretch goal, not currently planned.
+
+### B6. Sheet view (editor)
 
 - Toolbar: note-duration palette (whole/half/quarter/eighth/sixteenth, plus a dot toggle
   and tie toggle) and a tool-mode selector (Place Note / Remove Note).
-- Staff rendering per track kind, using the Notation Engine (B4): pitched staff for
-  `Strings`/`Voice` tracks; a rhythm staff (one line per lane, no pitch) for `Percussion`
-  tracks. Rests are rendered automatically wherever the Notation Engine infers a gap — there
-  is no "Place Silence" tool, since rests are inferred rather than authored (Decision 3).
+- Staff rendering for the focused track (B5), using the Notation Engine (B4): pitched
+  staff for `Strings`/`Voice` tracks; a rhythm staff (one line per lane, no pitch) for
+  `Percussion` tracks. Rests are rendered automatically wherever the Notation Engine infers
+  a gap — there is no "Place Silence" tool, since rests are inferred rather than authored
+  (Decision 3).
 - Clicking a line/space places a note at that pitch/beat position (snapped via
   `SnapInterval`) using the active duration/dot/tie state and tool mode.
 - Same-beat stacking: clicking an occupied beat position with an unoccupied
   line/space adds a stacked note (chord) rather than replacing the existing note. "Remove
   Note" removes only the specific note at the clicked pitch, not the whole beat position.
 
-### B6. Tab view
+### B7. Tab view
 
-- Vertical, top-to-bottom layout mirroring gameplay rendering, with beat markers.
+- Vertical, top-to-bottom layout mirroring gameplay rendering, with beat markers, for the
+  focused track (B5).
 - Scroll wheel traverses time; add a separate zoom control (beats-per-screen) so traversal
   and zoom aren't conflated.
 - Toolbar dropdown selects the active hint/snap interval (reusing `SnapInterval` from B3).
@@ -331,7 +362,7 @@ Depends on Part A being complete and merged.
   - `Percussion` tracks: if the lane hosts multiple pieces (shared lane), prompt for which
     piece (e.g. tom vs. cymbal); if unambiguous, place directly. Kick-style `lane_span`
     pieces are placed via a distinct full-width control, not a per-lane click.
-- Same-beat chord stacking rules match B5.
+- Same-beat chord stacking rules match B6.
 - Duration editing: dragging the top edge of a placed note upward extends its duration to
   the nearest snapped beat marker. Placing a duration that spans past the current
   `note_value` palette's single-symbol limit sets the `tied` flag automatically
@@ -339,18 +370,18 @@ Depends on Part A being complete and merged.
   behavior (extension is capped at the start of the next note on the same
   string/lane/piece) and a minimum duration.
 
-### B7. Undo/redo
+### B8. Undo/redo
 
 - Undo/redo stack covering note placement, removal, duration edits, and track/document
   structural edits.
 
-### B8. Playback aids
+### B9. Playback aids
 
 - Metronome/click track playback aligned to the `tempo_map`/`time_signature_map` (correctly
   speeding up/slowing down through tempo changes rather than assuming one fixed `bpm`).
 - A playhead that follows the current scroll/cursor position in tab view for audio preview.
 
-### B9. Multi-select and bulk edit
+### B10. Multi-select and bulk edit
 
 - Multi-select notes across a tick/beat range in tab view.
 - **Bulk reassignment**: with a selection active, reassign all selected notes to a new
@@ -360,14 +391,16 @@ Depends on Part A being complete and merged.
   reassignment, so this should land before or alongside Part D.
 - Copy/paste within or across tracks of the same kind (stretch, can follow later).
 
-### B10. Testing
+### B11. Testing
 
 - Unit tests for snapping math, fret/piece resolution in the dialogs, round-trip
-  save/load fidelity (author a chart in the editor, reload it, assert equality), and the
+  save/load fidelity (author a chart in the editor, reload it, assert equality), the
   Notation Engine's rest-inference/beaming/tie layout (B4) against hand-picked beat
-  patterns including syncopation and multi-measure silence.
+  patterns including syncopation and multi-measure silence, and track-focus switching
+  (B5) preserving the shared playhead position across tracks of different kinds.
 - Manual QA: `cargo run` through creating a multi-track chart (strings + percussion +
-  voice), placing chords, editing durations, and reloading it in the normal chart browser.
+  voice), placing chords, editing durations, switching the focused track and the
+  sheet/tab toggle, and reloading it in the normal chart browser.
 
 ---
 
@@ -401,7 +434,7 @@ called out in Decision 2.
 
 ## Part D — Clone Hero (`.chart`) Import
 
-Depends on Part A (tick-based timing, dynamics/roll/star-power fields) and on B9's bulk
+Depends on Part A (tick-based timing, dynamics/roll/star-power fields) and on B10's bulk
 reassignment tool for practical guitar/bass cleanup. Import is one-way (`.chart` → Open
 Band chart JSON); there's no requirement to export back to `.chart`.
 
@@ -446,7 +479,7 @@ Band chart JSON); there's no requirement to export back to `.chart`.
   up to the track's string count (for a 4-string `Strings` track, decide how to fold the
   5th lane in — e.g. merge into the adjacent string — during implementation).
 - This intentionally produces a musically arbitrary starting point. The expected workflow
-  is to import, then use the tab editor's multi-select + bulk reassignment tool (B9) to
+  is to import, then use the tab editor's multi-select + bulk reassignment tool (B10) to
   correct runs of notes to their real string/fret positions.
 - Star Power phrases import the same way as drums (D2).
 - HOPO/strum-flip/open-note/forced-note markers (5-fret-specific mechanics) have no
