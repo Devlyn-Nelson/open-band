@@ -1,66 +1,72 @@
 # Chart Editor Project Plan
 
-This plan covers two sequential efforts:
+This plan covers a score-authoring pipeline followed by runtime compilation:
 
-- **Part A — Instrument Model & Chart Schema Rework**: replace the current bass-specific,
-  hardcoded tuning system with a generic, data-driven model (`Strings` / `Percussion` /
-  `Voice`), and update the detection systems and sample charts accordingly. This is a
-  breaking change and must land before Part B.
-- **Part B — Chart Editor**: build the sheet-view and tab-view chart editor on top of the
-  reworked schema.
+- **Part A — Score-Centric Chart Schema**: define the authoritative music-sheet JSON model.
+  It stores written music, notation relationships, instrument definitions, and optional
+  Open Band performance hints. Backward compatibility is intentionally out of scope while
+  the application is still experimental.
+- **Part B — Chart Editor**: build sheet and tab editing directly on the score model.
+- **Part C — Score-to-Performance Compilation**: convert authored score data into a separate
+  runtime model by expanding repeats, endings, tempo expressions, and gameplay hints.
+- **Part D — Live Notation Overlay**: display the score model during gameplay.
+- **Part E — Clone Hero Import**: import external chart data into the score model.
 
 ## Status
 
-- **Part A: done.** All of A1-A10 are implemented and tested, including two follow-on
-  refinements beyond the original plan: instrument input configuration (`InstrumentSlot`)
-  is fully dynamic (any number of slots of any kind, not a fixed 4-slot layout), and
-  tunings/kits are loaded from real `tunings/`/`kits/` library directories (not just
-  embedded Rust presets) with the live detection pipeline resolving lane assignment from
-  the actual configured tuning/kit instead of guessing from a string count.
+- **Part A: in progress.** The generic instrument infrastructure and initial notation fields
+  exist, but the score-centric schema redesign, explicit score structure, written rests,
+  voices, relationships, and performance-hint separation are not complete.
 - **Part B: in progress.** B1-B4 are done (editor entry point, document/track management,
-  `SnapInterval`, and the `src/notation.rs` Notation Engine). The multi-track view approach
-  is now decided (Decision 6) but not yet implemented. B5-B11 (track focus/view toggle,
-  sheet view, tab view, undo/redo, playback aids, multi-select/bulk edit, and broader
-  manual QA) are not started.
-- **Part C and Part D:** not started.
+  `SnapInterval`, and the `src/notation.rs` Notation Engine). The score-centric editor work
+  and multi-track view are not complete.
+- **Part C, Part D, and Part E:** not started.
 
 ## Decisions
 
 1. **Editor delivery shape**: the editor is a new screen/state inside the existing
    `open-band` app. Home gains an `Editor` option alongside `Live Session`, `Songs`, and
    `Set Up`.
-2. **Sheet view notation fidelity**: sheet view is a full notation editor (ties, dotted
-  notes, tuplets, beaming, measure-aware layout, clefs, and key signatures) — not a simplified
-  grid. It doubles as an optional
+2. **Sheet view notation fidelity**: sheet view is a full notation editor (notes, rests,
+  voices, ties, dotted notes, tuplets, beaming, measure-aware layout, clefs, key signatures,
+  articulations, dynamics, and score navigation) — not a simplified grid. It doubles as an optional
    read-only overlay at the bottom of the screen during live gameplay for learning purposes
-   (see Part C). This requires chart events to carry explicit rhythmic notation data, not
+  (see Part D). This requires chart events to carry explicit rhythmic notation data, not
    just a raw `duration_beats` float (see A2).
-3. **Rest/silence representation**: rests are **not** stored in chart data. They're
-   inferred at render time from the gaps between notes, using a beat/measure-aware
-   quantization algorithm shared by the sheet editor and the live overlay (see B4/Notation
-   Engine).
-4. **Percussion lane symbol set**: `symbol` is an open-ended, data-driven string, not a
+3. **Score versus runtime model**: the chart JSON is the authoritative written score. The
+  editor reads and writes it directly. Gameplay never consumes it directly; Part C compiles
+  it into a runtime-specific event sequence.
+4. **Rest/silence representation**: explicit rests are first-class score events. Inferred
+  rests may still be a convenience for empty gaps, but explicit written rests take precedence.
+5. **Percussion lane symbol set**: `symbol` is an open-ended, data-driven string, not a
    fixed closed enum — new kit pieces (cowbell, splash, china, rim/cross-stick, etc.)
    should never require a code change to define. The renderer ships a broad default symbol
    catalog and falls back to a generic glyph for unrecognized symbols (see A2/B4).
-5. **Timing representation**: chart event positions and chart-level tempo/time signature
+6. **Timing representation**: chart event positions and chart-level tempo/time signature
    are stored as integer **ticks** against a chart-level `resolution` (ticks per quarter
    note), with a tempo map and time-signature map replacing the old single scalar `bpm`/
    `time_signature` fields — this supports tempo/time-signature changes mid-song and makes
    Clone Hero import exact rather than lossy (see A2). The editor UI and this document
    still *talk* in beats/measures/note values for authoring — ticks are the internal,
    exact storage encoding underneath that, not a user-facing concept.
-6. **Multi-track editor view**: sheet/tab view shows one **focused track** at a time
+7. **Multi-track editor view**: sheet/tab view shows one **focused track** at a time
    (Option A), switched via a keybind, with the tick position/playhead shared across the
    whole document so switching tracks doesn't lose your place in time. Sheet vs. tab is a
    **single global toggle**, not a per-track setting. Rendering the other tracks as
    collapsed, non-interactive reference lanes (Option C) is a planned future enhancement,
    not part of the first implementation; a full synced multi-staff score view (Option B)
    is a longer-term stretch goal only (see B5).
+8. **Score semantics versus performance hints**: written pitch, rhythm, spelling, dynamics,
+  articulations, phrasing, and structure belong to the score. Optional `performance` data
+  describes Open Band teaching and input preferences such as string/fret, attack, lane,
+  roll, droll, and difficulty. These hints never replace written notation.
+9. **Instrument definitions**: tunings and kits belong in the score because they define how
+  the part is notated and interpreted. Runtime device selection remains in settings and is
+  resolved separately when compiling a playable session.
 
 ---
 
-## Part A — Instrument Model & Chart Schema Rework
+## Part A — Score-Centric Chart Schema
 
 ### A1. Define generic instrument kinds — DONE
 
@@ -70,7 +76,7 @@ This plan covers two sequential efforts:
 - `name` remains a free-text human-facing label only (e.g. "Lead Guitar", "Rhythm Guitar 2")
   and carries no logic.
 
-### A2. New chart schema types (`src/domain.rs`) — DONE
+### A2. New chart schema types (`src/domain.rs`) — IN PROGRESS
 
 #### Tick-based timing (Decision 5)
 
@@ -96,7 +102,7 @@ This plan covers two sequential efforts:
 - This also makes Clone Hero `.chart` import lossless for position/tempo/time-signature
   data: ticks map directly, rescaled only if the source and target `resolution` differ
   (`target_tick = source_tick * target_resolution / source_resolution`), with no lossy
-  float round-trip (see Part D).
+  float round-trip (see Part E).
 
 #### Instrument/kit types
 
@@ -130,10 +136,10 @@ This plan covers two sequential efforts:
 - `ChartEvent` needs to represent both pitched (strings/voice) and percussive (percussion)
   content, and both need full rhythmic notation data since sheet view is a real notation
   editor and both kinds get staff/rhythm rendering. Split into a tagged representation:
-  - `Pitched { start_tick, note_value, dots, tied, tuplet, chord, dynamic, articulations,
-    midi_note, preferred_string, attack, transition, bend, motion }` (strings/voice)
-  - `Percussive { start_tick, note_value, dots, tied, tuplet, chord, dynamic, articulations,
-    piece, dynamics, roll, droll }`
+  - Score events contain written pitch/rest, start, duration, voice, staff, chord group,
+    dynamics, articulations, and notation relationships.
+  - Optional `performance` data contains Open Band-specific string/fret, attack, transition,
+    bend, motion, percussion piece/lane, `roll`, `droll`, and difficulty hints.
     (percussion, piece = kit piece name)
   - `note_value`: an enum (`Whole`, `Half`, `Quarter`, `Eighth`, `Sixteenth`) — the same
     palette the sheet-view toolbar exposes. This is the source of truth for rhythmic
@@ -152,12 +158,12 @@ This plan covers two sequential efforts:
     `resolution`, summed across a tie chain. Follow the existing `midi_note`/`note`
     pattern in `ChartEventFields` (custom `Deserialize` with cross-validation) if an
     explicit `duration_ticks` override is also accepted for hand-authored charts.
-  - No `Rest` variant: silences are inferred at render time from gaps between notes (see
-    Decision 3 and the Notation Engine task in Part B).
-  - `dynamics` (percussion only): an enum `Normal | Accent | Ghost`, covering both
+  - Add first-class `Rest` events with written duration, voice, and optional chord/staff
+    context. Empty gaps may still be inferred when no explicit rest is authored.
+  - `dynamics` (percussion performance hint): an enum `Normal | Accent | Ghost`, covering both
     "accents" and "hit strength" — a louder or quieter hit than normal. Optional,
     defaults to `Normal`. Matches Clone Hero's accent/ghost modifiers directly (see
-    Part D). A future continuous velocity value is a possible later extension but isn't
+    Part E). A future continuous velocity value is a possible later extension but isn't
     needed for parity with existing formats.
   - `dynamic` (all event kinds): standard written levels `ppp`, `pp`, `mp`, `mf`, `f`,
     `ff`, and `fff`.
@@ -172,20 +178,15 @@ This plan covers two sequential efforts:
     - Both fields use kit piece names and are mutually exclusive. The roll duration comes
       from the event's `note_value`/`dots` and any tie chain; the hit subdivision/rate is a
       gameplay rule rather than additional chart data.
-    - This replaces the former `RollKind::SingleLane`/`DoubleLane` marker.
-  - String technique fields (strings/voice pitched events only):
-    - `attack: Option<NoteAttack>` is `pluck` or `tap` and describes how the note starts.
-    - `transition: Option<NoteTransition>` is `hammer_on`, `pull_off`, or `slide` and
-      describes how the note connects from the preceding event.
-    - `bend: Option<BendSpec>` stores a bend amount in semitones plus an optional
-      `release: true` return toward the original pitch.
-    - `motion: Option<PitchMotion>` currently supports a `trill` target pitch for repeated
-      movement between the current note and the target. Note names and MIDI numbers are
-      accepted for pitch targets.
-    - These fields preserve `note` as the event's pitch and are chart/notation data only;
-      gameplay interpretation is deferred.
-  - `bend.points` optionally describes a normalized time curve of semitone offsets, allowing
-    bend-release and other shaped bends; the simple `semitones`/`release` form remains valid.
+    - These are named score/performance hints, not a closed roll-kind enum.
+  - String technique hints (strings/voice performance data only):
+    - `attack` is `pluck` or `tap` and describes how the note starts.
+    - `transition` is `hammer_on`, `pull_off`, or `slide` and describes how the note connects
+      from the preceding note.
+    - `bend` stores a bend amount in semitones plus an optional release or normalized curve.
+    - `motion` currently supports a `trill` target pitch for repeated movement.
+    - These hints preserve written pitch as the score's source of truth and are interpreted
+      only by the Part C runtime compiler.
 - Track notation metadata:
   - `clef` optionally overrides inferred `treble`, `bass`, `alto`, or `tenor`.
   - `key_signature` stores `{ fifths: -7..7, mode: major | minor }`.
@@ -196,6 +197,28 @@ This plan covers two sequential efforts:
   list. Anything played during that span counts as part of the phrase; this mirrors the
   existing `VocalPhrase` style already in the schema (start/duration only, membership
   inferred by overlap) rather than requiring an explicit note list.
+
+#### A2.1. Score-centric schema redesign — NOT STARTED
+
+- Replace raw MIDI-only pitch storage with a written `Pitch` containing MIDI value plus
+  enharmonic spelling (`step`, `alter`, and `octave`) so `C#4` and `Db4` remain distinct.
+- Add explicit `voice` and `staff` identifiers to events. Tuplets, beams, rests, and ties
+  must be grouped within a voice rather than across the whole track.
+- Move ties and slurs into relationship collections keyed by stable event IDs. Keep
+  hammer-ons, pull-offs, and slides as optional performance hints rather than confusing
+  them with written ties or slurs.
+- Add explicit `performance` objects for Open Band hints: preferred string/fret, attack,
+  transition, bend interpretation, percussion lane/piece, `roll`, `droll`, and difficulty.
+  The score remains valid when these hints are absent.
+- Add score-level structure markers: repeat starts/ends, numbered endings, segno, coda,
+  da capo, dal segno, fine, and rehearsal marks. These describe the written score and are
+  expanded only by the runtime compiler.
+- Add tempo text and expressive ranges for accelerando, ritardando, crescendo, and
+  diminuendo without replacing the resolved tempo map used for playback.
+- Keep tunings and kits in the score as embedded, versioned instrument definitions. Runtime
+  device selection remains outside the chart.
+- Increment the chart schema version deliberately; compatibility with the current prototype
+  format is not required.
 
 ### A3. Tuning/kit resolution logic — DONE
 
@@ -291,16 +314,21 @@ This plan covers two sequential efforts:
 - Add gameplay tests for roll timing, roll transitions, double-lane alternation, and string
   technique hit/scoring behavior.
 
-### A9. Tests (`src/tests.rs`) — DONE
+### A9. Tests (`src/tests.rs`) — IN PROGRESS
 
 - Update/add tests for: new schema parsing (`Strings`/`Percussion`/`Voice` tracks), tuning
   resolution from embedded data (no hardcoded table), percussion piece-name resolution,
   round-trip parsing of the rewritten sample charts, and vocal range parsing.
+- Add score-model tests for explicit rests, written pitch spelling, voices, tuplets, chord
+  groups, ties/slurs, score navigation, dynamics/articulations, tempo expressions, and
+  separation of score data from `performance` hints.
 
-### A10. Documentation — DONE
+### A10. Documentation — IN PROGRESS
 
 - Update `README.md`'s "Chart Format" section and instrument terminology to match the new
   schema and generic instrument kinds.
+- Document the score-centric JSON model, embedded tunings/kits, optional performance hints,
+  runtime compilation boundary, and schema versioning policy.
 
 ---
 
@@ -330,6 +358,15 @@ Depends on Part A being complete and merged.
   unplayable notes flagged in the editor instead of silently skipped with `eprintln!` at
   runtime).
 
+#### B2.1. Score document management — NOT STARTED
+
+- Replace event-only document assumptions with score documents containing measures, staves,
+  voices, explicit rests, score structure markers, and stable event IDs.
+- Edit clef, key signature, tuning/kit definitions, tempo text, rehearsal marks, and other
+  score metadata directly in the editor.
+- Keep `performance` hints visible as optional instrument guidance without making them the
+  source of notation truth.
+
 ### B3. Shared snapping model — DONE
 
 - Implemented as `SnapInterval` (a type alias for `NoteValue`, since both are the same
@@ -341,15 +378,11 @@ Depends on Part A being complete and merged.
   view, rather than two separate implementations. Snapping is tempo-independent — it only
   needs `resolution` and the active `time_signature_map` entry, not `bpm`.
 
-### B4. Notation engine (`src/notation.rs`, shared with Part C) — DONE
+### B4. Notation engine (`src/notation.rs`, shared with Part D) — DONE
 
-- Implemented: measure layout, tie-chain grouping, beam grouping, and greedy rest
-  inference (largest-value-first, split at measure boundaries), plus a per-track default
-  clef heuristic (pitch-threshold based, since `Strings` no longer distinguishes guitar
-  from bass). Not yet wired into any renderer — B6 (sheet view) and Part C (gameplay
-  overlay) are the two future consumers. Rest inference does not yet handle dotted rests
-  or non-power-of-two leftover ticks (no tuplet support anywhere in the schema, so this
-  hasn't come up in practice).
+- Implemented: measure layout, tie-chain grouping, beam grouping, tuplet grouping, explicit
+  key-signature propagation, and greedy rest inference. Not yet wired into any renderer —
+  B6 (sheet view) and Part D (gameplay overlay) are the future consumers.
 
 - New module owning sheet-music layout logic, independent of the editor and gameplay UI so
   both can reuse it:
@@ -361,14 +394,13 @@ Depends on Part A being complete and merged.
   - Clef selection per track kind (e.g. treble for guitar/vocals, bass clef for bass —
     decide the exact kind→clef default mapping during implementation; allow a per-track
     override since `Strings` no longer distinguishes guitar from bass).
-  - **Rest inference**: given the known, unambiguous gaps between notes (derived from each
-    note's explicit `note_value`/`dots`/`tied` chain — see A2), fill silence with a minimal
-    set of standard rest symbols using beat/measure-aware subdivision rules (e.g. prefer a
-    single rest spanning a beat over several small ones; split correctly across beat and
-    measure boundaries; use repeated whole-measure rests for multi-measure silence).
+  - **Rest layout**: render authored rests exactly, and infer only unoccupied gaps that have
+    no explicit rest. Support dotted rests, tuplets, and repeated whole-measure rests.
+  - Relationship layout: render ties, slurs, phrase spans, chord groups, dynamics, and
+    articulations without confusing score relationships with performance hints.
   - This module has no rendering-framework dependency of its own — it produces a layout
     description (positions, symbol types) that both the editor's sheet view and the
-    gameplay overlay (Part C) render.
+    gameplay overlay (Part D) render.
 
 ### B5. Multi-track editor view: track focus and sheet/tab toggle
 
@@ -392,15 +424,15 @@ Depends on Part A being complete and merged.
 
 ### B6. Sheet view (editor)
 
-- Toolbar: note-duration palette (whole/half/quarter/eighth/sixteenth, plus a dot toggle
-  and tie toggle) and a tool-mode selector (Place Note / Remove Note).
+- Toolbar: note-duration palette (whole/half/quarter/eighth/sixteenth, tuplets, dot/rest/
+  tie controls, dynamics, articulations, and a Place/Remove tool selector).
 - Staff rendering for the focused track (B5), using the Notation Engine (B4): pitched
   staff for `Strings`/`Voice` tracks; a rhythm staff (one line per lane, no pitch) for
-  `Percussion` tracks. Rests are rendered automatically wherever the Notation Engine infers
-  a gap — there is no "Place Silence" tool, since rests are inferred rather than authored
-  (Decision 3).
-- Clicking a line/space places a note at that pitch/beat position (snapped via
-  `SnapInterval`) using the active duration/dot/tie state and tool mode.
+  `Percussion` tracks. Explicit rests are rendered exactly; inferred rests fill only gaps
+  without an authored rest.
+- Clicking a line/space places a score note or rest at that pitch/beat position (snapped via
+  `SnapInterval`) using the active duration, tuplet, dot, voice, relationship, and notation
+  state.
 - Same-beat stacking: clicking an occupied beat position with an unoccupied
   line/space adds a stacked note (chord) rather than replacing the existing note. "Remove
   Note" removes only the specific note at the clicked pitch, not the whole beat position.
@@ -426,6 +458,16 @@ Depends on Part A being complete and merged.
   behavior (extension is capped at the start of the next note on the same
   string/lane/piece) and a minimum duration.
 
+### B7.1. Score relationships and navigation editing
+
+- Edit enharmonic spelling independently from sounding MIDI pitch.
+- Create and edit ties, slurs, phrase spans, chord groups, tuplets, grace notes, and
+  articulation/dynamic markings.
+- Add repeat bars, numbered endings, segno/coda navigation, fine markers, and rehearsal
+  marks without changing the authored event timeline.
+- Edit Open Band `performance` hints separately from score notation, including preferred
+  string/fret, attacks, transitions, percussion mapping, rolls, and drolls.
+
 ### B8. Undo/redo
 
 - Undo/redo stack covering note placement, removal, duration edits, and track/document
@@ -442,9 +484,9 @@ Depends on Part A being complete and merged.
 - Multi-select notes across a tick/beat range in tab view.
 - **Bulk reassignment**: with a selection active, reassign all selected notes to a new
   string/fret (or pitch/piece) in a single action. This is needed as a core capability, not
-  a stretch item — Part D's guitar/bass import produces musically arbitrary
+  a stretch item — Part E's guitar/bass import produces musically arbitrary
   lane-to-open-string placements that are only practical to correct with bulk
-  reassignment, so this should land before or alongside Part D.
+  reassignment, so this should land before or alongside Part E.
 - Copy/paste within or across tracks of the same kind (stretch, can follow later).
 
 ### B11. Testing
@@ -460,19 +502,146 @@ Depends on Part A being complete and merged.
 
 ---
 
-## Part C — Live Notation Overlay (Gameplay Integration)
+## Part C — Score-to-Performance Compilation
+
+Depends on the score-centric Part A schema. This part creates a runtime-specific model;
+gameplay systems do not read authored score JSON directly.
+
+### C1. Runtime model
+
+- Add a `performance`/compiler module with runtime event types for absolute time, duration,
+  target pitch/string/fret, percussion piece/lane, vocal target, input rule, and source score
+  event ID.
+- Preserve source references so runtime hits and diagnostics can point back to score events.
+- Keep authored spelling, notation relationships, and score structure out of runtime events
+  unless they affect the compiled performance behavior.
+
+### C2. Score expansion
+
+- Expand repeat bars, repeat counts, first/second endings, segno, coda, da capo, dal segno,
+  fine, and rehearsal sections into a linear runtime timeline.
+- Detect malformed or cyclic navigation and report editor validation errors instead of
+  producing an unbounded runtime sequence.
+- Resolve explicit rests, voices, chords, ties, tuplets, grace notes, and phrase spans into
+  runtime timing without changing the authored score.
+
+### C3. Tempo and expression compilation
+
+- Convert tempo text, accelerando, and ritardando ranges into the runtime tempo curve.
+- Add an optional performance tempo scale without modifying the authored score. A player can
+  slow down or speed up the compiled runtime while preserving the score's written tempo
+  markings and beat/tick positions.
+- Add an optional performance key transposition in semitones. The score keeps its original
+  written key and spelling; the runtime compiler applies the selected interval to pitches,
+  vocal targets, string targets, and compatible percussion pitch mappings where applicable.
+- Keep score-level key signatures separate from runtime transposition so the editor displays
+  the original sheet music while gameplay can present a player-friendly key.
+- Carry dynamics, articulations, and expressive ranges into runtime input/scoring hints only
+  where gameplay needs them.
+- Keep the score's written tempo markings and dynamic markings available to the editor.
+
+### C4. Instrument performance hints
+
+- Resolve embedded score tunings and kits into playable string/fret and percussion targets.
+- Apply optional `performance` hints for preferred string/fret, attack, transition, bend,
+  roll, droll, lane, difficulty, and required/optional status.
+- Define deterministic defaults when hints are absent, based on pitch, tuning, kit, and
+  instrument kind.
+
+### C4.1. Chart-track to runtime-instrument binding
+
+- Add an explicit runtime binding step from each score track to an `InstrumentSlot`; gameplay
+  must never guess a device solely from a track name.
+- Match candidates by instrument kind, explicit track role/ID, and compatible tuning or kit.
+- Report missing, ambiguous, or incompatible bindings before gameplay starts, including the
+  expected score tuning/kit and the available runtime slots.
+- Allow the player to override a binding when multiple compatible instruments are configured,
+  while retaining the score's expected tuning/kit as the conversion target.
+- Keep physical device identity, detector profile, and input calibration in runtime settings;
+  do not write them into the score chart.
+
+### C4.2. Best-effort tuning conversion
+
+- Treat the score tuning as the intended instrument setup, not as a requirement that the
+  player owns that exact tuning.
+- Compare the score tuning with the selected runtime tuning and calculate a compatibility
+  report: playable notes, notes requiring alternate strings/frets, notes outside the target
+  range, and notes requiring transposition.
+- For a song authored in a tuning such as five-string A0-D1-G1-C2-F2, provide a best-effort
+  conversion to a standard tuning such as B0-E1-A1-D2-G2. Preserve the sounding pitch when
+  the target tuning can play it; otherwise choose the nearest playable octave/pitch and
+  report the deviation rather than silently changing it.
+- Prefer a deterministic optimization over ad hoc per-note guesses: minimize total pitch
+  deviation first, then fret displacement, then unnecessary string changes. Preserve
+  explicit performance string/fret hints when they remain playable.
+- Keep the original score pitches and tuning unchanged. Store conversion decisions only in
+  the compiled runtime chart, with source-event references and a user-visible warning list.
+- Support a user-selected global transposition as a fallback when the target tuning cannot
+  cover the score's range. Choose the smallest semitone shift that maximizes playable notes,
+  then allow the player to accept or adjust it.
+- Make conversion policy configurable: exact-pitch preference, octave-preserving preference,
+  or maximum-playability preference. The default should favor preserving sounding pitch.
+
+### C4.3. Optional tuning-change workflow
+
+- Add an optional pre-play tuning menu when the score tuning and selected runtime tuning are
+  incompatible. Show the expected tuning, current runtime tuning, compatibility summary, and
+  proposed transposition/conversion.
+- Let the player continue without changing physical tuning, accept the best-effort runtime
+  conversion, or choose a compatible tuning preset when the instrument supports it.
+- Do not require this menu for compatible tunings; it should be an opt-in setup step rather
+  than an interruption for every song.
+- Distinguish a real physical retuning from a software conversion. Open Band can recommend or
+  record a tuning choice, but it must not assume the application can retune a physical string.
+- Add a later hardware integration point for automatic tuners or MIDI-controlled instruments
+  without coupling the score format to a specific device.
+
+### C5. Gameplay feature integration
+
+- Notes and rests: emit playable targets only for notes; preserve rests as intentional gaps
+  in the runtime timeline.
+- Tuplets and voices: compile exact event times per voice without flattening written rhythm
+  incorrectly.
+- Chords: emit grouped simultaneous runtime targets with one source group ID.
+- Ties and slurs: sustain or connect runtime targets according to score relationships;
+  do not treat a slur as a gameplay attack by itself.
+- Dynamics and articulations: map only the markings that affect teaching or scoring, while
+  preserving all written markings for notation.
+- Strings: convert written pitches plus optional performance hints into string/fret targets,
+  then apply pluck, tap, hammer-on, pull-off, slide, bend, and trill rules.
+- Percussion: convert named kit pieces into lanes and apply `roll`, `droll`, grace-note,
+  sticking, and cymbal/hi-hat hints when those schema features are available.
+- Voice: convert lyric phrase notes, syllable boundaries, melismas, and vocal targets into
+  runtime singing prompts.
+- Score navigation: expand repeats and endings before hit windows are calculated so gameplay
+  timing follows the performed order rather than the unexpanded score order.
+
+### C6. Tests
+
+- Test repeat and ending expansion, navigation errors, tempo curves, tuplets, voices, rests,
+  chord timing, score-to-runtime source references, and hint fallback behavior.
+- Test key transposition and tempo scaling without mutating the authored score.
+- Test score-track/runtime-slot binding for compatible, ambiguous, missing, and incompatible
+  instruments.
+- Test tuning conversion with A0-D1-G1-C2-F2 to B0-E1-A1-D2-G2, including exact playable
+  notes, octave fallback, pitch-deviation reporting, global transposition, and preservation
+  of source-event references.
+- Test tuning-menu decisions separately from conversion so choosing a runtime preset does not
+  alter the score's embedded tuning.
+
+## Part D — Live Notation Overlay (Gameplay Integration)
 
 Depends on the Notation Engine (B4). Adds the read-only, in-gameplay sheet-music view
 called out in Decision 2.
 
-### C1. Overlay toggle
+### D1. Overlay toggle
 
 - Add a setting/keybind to show or hide a sheet-music strip docked at the bottom of the
   screen during `Live Session` / chart gameplay (`src/gameplay.rs`, `src/chart.rs`).
 - Off by default unless there's an existing preference precedent to follow; persisted in
   `open-band-settings/settings.json` alongside other display preferences.
 
-### C2. Read-only rendering
+### D2. Read-only rendering
 
 - Reuse the Notation Engine (`src/notation.rs`) layout output to render the currently
   playing track's staff, scrolling in sync with the chart playhead — no editing
@@ -480,7 +649,7 @@ called out in Decision 2.
 - Support switching which track's notation is displayed when a chart has multiple tracks
   (e.g. a bass player wants the bass staff, not the vocal staff).
 
-### C3. Performance
+### D3. Performance
 
 - Confirm the overlay's rendering cost is acceptable alongside the existing real-time
   detection pipeline; layout should be computed ahead of time (or incrementally) rather
@@ -488,13 +657,13 @@ called out in Decision 2.
 
 ---
 
-## Part D — Clone Hero (`.chart`) Import
+## Part E — Clone Hero (`.chart`) Import
 
-Depends on Part A (tick-based timing, dynamics/roll/star-power fields) and on B10's bulk
+Depends on Part A's score schema and Part C's compiler, plus B10's bulk
 reassignment tool for practical guitar/bass cleanup. Import is one-way (`.chart` → Open
 Band chart JSON); there's no requirement to export back to `.chart`.
 
-### D1. Parser and top-level mapping
+### E1. Parser and top-level mapping
 
 - Parse `.chart`'s section/key-value/track-event syntax (`[Song]`, `[SyncTrack]`,
   `[Events]`, per-difficulty instrument sections).
