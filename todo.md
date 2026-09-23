@@ -198,8 +198,17 @@ This plan covers a score-authoring pipeline followed by runtime compilation:
   existing `VocalPhrase` style already in the schema (start/duration only, membership
   inferred by overlap) rather than requiring an explicit note list.
 
-#### A2.1. Score-centric schema redesign — NOT STARTED
+#### A2.1. Score-centric schema redesign — IN PROGRESS
 
+- Initial foundation completed: pitched events now preserve written enharmonic spelling
+  separately from MIDI pitch, and all events carry explicit voice/staff context.
+- Stable event IDs and track-level tie/slur relationship collections are now supported;
+  validation rejects duplicate IDs and dangling relationship references. The legacy `tied`
+  field remains available until relationship editing is complete.
+- An explicit optional `performance` namespace now supports preferred string, attack,
+  transition, bend, motion, percussion dynamics, `roll`, and `droll` hints. Resolvers prefer
+  structured hints over legacy top-level fields while the remaining fixture/editor migration
+  is completed.
 - Replace raw MIDI-only pitch storage with a written `Pitch` containing MIDI value plus
   enharmonic spelling (`step`, `alter`, and `octave`) so `C#4` and `Db4` remain distinct.
 - Add explicit `voice` and `staff` identifiers to events. Tuplets, beams, rests, and ties

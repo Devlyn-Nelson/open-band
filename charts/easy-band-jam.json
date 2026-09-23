@@ -9,6 +9,8 @@
       "name": "Bass",
       "kind": "strings",
       "tuning": { "strings": ["E1", "A1", "D2", "G2"] },
+      "clef": "bass",
+      "key_signature": { "fifths": 0, "mode": "major" },
       "notes": [
         { "start": 0, "length": 4, "note": "E1" },
         { "start": 1920, "length": 4, "note": "E1" },
@@ -38,6 +40,8 @@
       "name": "Guitar",
       "kind": "strings",
       "tuning": { "strings": ["E2", "A2", "D3", "G3", "B3", "E4"] },
+      "clef": "treble",
+      "key_signature": { "fifths": 0, "mode": "major" },
       "notes": [
         { "start": 0, "length": 2, "note": "E3" },
         { "start": 0, "length": 2, "note": "B3" },

@@ -9,20 +9,20 @@
       "name": "Bass",
       "kind": "strings",
       "tuning": { "strings": ["B0", "E1", "A1", "D2", "G2"] },
+      "clef": "bass",
+      "key_signature": { "fifths": 0, "mode": "major" },
       "notes": [
-        { "start": 1440, "length": 8, "dots": 1, "note": 23, "ps": 0 },
-        { "start": 2880, "length": 8, "dots": 1, "note": 28, "ps": 1 },
-        { "start": 4320, "length": 8, "dots": 1, "note": 33, "ps": 2 },
-        { "start": 5760, "length": 8, "dots": 1, "note": 38, "ps": 3 },
-        { "start": 7200, "length": 8, "dots": 1, "note": 43, "ps": 4 },
-        { "start": 8640, "length": 4, "dots": 1, "note": 26, "ps": 0 },
-        { "start": 10800, "length": 4, "dots": 1, "note": 33, "ps": 1 },
-        { "start": 12960, "length": 4, "dots": 1, "note": 40, "ps": 2 },
-        { "start": 15120, "length": 4, "dots": 1, "note": 43, "ps": 3 },
-        { "start": 17280, "length": 4, "dots": 1, "note": 45, "ps": 4 }
+        { "start": 1440, "length": 8, "dots": 1, "note": "B0", "ps": 0 },
+        { "start": 2880, "length": 8, "dots": 1, "note": "E1", "ps": 1 },
+        { "start": 4320, "length": 8, "dots": 1, "note": "A1", "ps": 2 },
+        { "start": 5760, "length": 8, "dots": 1, "note": "D2", "ps": 3 },
+        { "start": 7200, "length": 8, "dots": 1, "note": "G2", "ps": 4 },
+        { "start": 8640, "length": 4, "dots": 1, "note": "D1", "ps": 0 },
+        { "start": 10800, "length": 4, "dots": 1, "note": "A1", "ps": 1 },
+        { "start": 12960, "length": 4, "dots": 1, "note": "E2", "ps": 2 },
+        { "start": 15120, "length": 4, "dots": 1, "note": "G2", "ps": 3 },
+        { "start": 17280, "length": 4, "dots": 1, "note": "A2", "ps": 4 }
       ]
     }
   ]
 }
-
-

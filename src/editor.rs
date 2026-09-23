@@ -113,6 +113,8 @@ pub(crate) fn new_track(kind: InstrumentKind) -> ChartTrack {
         clef: None,
         key_signature: None,
         notes: Vec::new(),
+        ties: Vec::new(),
+        slurs: Vec::new(),
         phrases: Vec::new(),
         star_power_phrases: Vec::new(),
     }

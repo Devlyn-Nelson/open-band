@@ -205,12 +205,17 @@ Every event uses `length` (`1`/`2`/`4`/`8`/`16` for whole, half, quarter, eighth
 sixteenth) and may use `dots`. `tuplet` supports irregular subdivisions such as triplets:
 `{ "actual": 3, "normal": 2 }` means three written events in the time of two. `tied: true`
 continues the duration into the next event of the same pitch or piece; validation checks
-that the next event starts at the expected end and keeps the same pitch or piece. Rests are
-not stored; they are inferred from gaps between events.
+that the next event starts at the expected end and keeps the same pitch or piece. Explicit
+rest events are planned for the score-centric schema; the current format infers rests from
+gaps between events.
 
-Any event may also use `chord` to group simultaneous notes for notation and editing, a
-shared `dynamic` (`ppp`, `pp`, `mp`, `mf`, `f`, `ff`, or `fff`), and an `articulations`
-array containing `staccato`, `tenuto`, `marcato`, `accent`, `fermata`, or `grace`.
+Events may specify `voice` and `staff` as one-based notation contexts. They default to
+`voice: 1` and `staff: 1` when omitted. `chord` is an optional identifier shared by
+simultaneous events for notation and editor grouping.
+
+Any event may also use a shared `dynamic` (`ppp`, `pp`, `mp`, `mf`, `f`, `ff`, or `fff`)
+and an `articulations` array containing `staccato`, `tenuto`, `marcato`, `accent`,
+`fermata`, or `grace`.
 
 Any track may contain `star_power_phrases`, represented as simple
 `{ "start": 0, "duration_ticks": 3840 }` range markers.
@@ -242,7 +247,7 @@ notes. Any string count or tuning is supported:
 ```
 
 Use `clef` to override the inferred staff clef (`treble`, `bass`, `alto`, or `tenor`).
-`key_signature` stores the number of fifths as sharps (positive) or flats (negitive), from `-7` through `7`,
+`key_signature` stores the number of fifths as sharps (positive) or flats (negative), from `-7` through `7`,
 and its mode:
 
 ```json
@@ -251,8 +256,11 @@ and its mode:
 ```
 
 Pitched events use `note`, either a raw MIDI number or a readable name such as `"C4"`.
-`ps` is an optional preferred-string index, counted from zero in the tuning array. The
-chart system uses the tuning and pitch to derive the playable string and fret.
+When a note name is used, its written spelling is preserved separately from the sounding
+MIDI value, so `C#4` and `Db4` remain distinct notation even though both sound as MIDI 61.
+MIDI-only notes have no explicit spelling and use renderer defaults. `ps` is an optional
+preferred-string index, counted from zero in the tuning array. The chart system uses the
+tuning and pitch to derive the playable string and fret.
 
 String events may also describe notation and intended articulation:
 
@@ -291,6 +299,19 @@ These fields preserve `note` as the event's pitch and are ready for notation ren
 Gameplay playback and scoring for the techniques are not implemented yet. The current
 fret/note label mode is configured by `CHART_NOTE_DISPLAY` in `src/domain.rs` and supports
 `Fret`, `Note`, or `Both`.
+
+Voice and staff numbers can be included alongside these fields when a track contains
+independent notation voices or multiple staves:
+
+```json
+{
+  "start": 960,
+  "length": 8,
+  "voice": 2,
+  "staff": 1,
+  "note": "Db4"
+}
+```
 
 ### Percussion
 
