@@ -46,7 +46,10 @@ fn list_editable_charts() -> Vec<EditorChartEntry> {
         .into_iter()
         .flatten()
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
         .collect::<Vec<_>>();
     paths.sort();
     paths
@@ -68,7 +71,10 @@ fn new_chart_document() -> EditorDocument {
             version: 1,
             title: "New Chart".into(),
             resolution: 960,
-            tempo_map: vec![TempoChange { start: 0, bpm: 120.0 }],
+            tempo_map: vec![TempoChange {
+                start: 0,
+                bpm: 120.0,
+            }],
             time_signature_map: vec![TimeSignatureChange {
                 start: 0,
                 numerator: 4,
@@ -104,6 +110,8 @@ pub(crate) fn new_track(kind: InstrumentKind) -> ChartTrack {
         tuning: matches!(kind, InstrumentKind::Strings).then(Tuning::default),
         kit: matches!(kind, InstrumentKind::Percussion).then(Kit::default),
         vocal_range: None,
+        clef: None,
+        key_signature: None,
         notes: Vec::new(),
         phrases: Vec::new(),
         star_power_phrases: Vec::new(),
@@ -115,10 +123,24 @@ pub(crate) fn slugify(title: &str) -> String {
     let slug = title
         .to_lowercase()
         .chars()
-        .map(|character| if character.is_alphanumeric() { character } else { '-' })
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
         .collect::<String>();
-    let slug = slug.split('-').filter(|part| !part.is_empty()).collect::<Vec<_>>().join("-");
-    if slug.is_empty() { "untitled".into() } else { slug }
+    let slug = slug
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if slug.is_empty() {
+        "untitled".into()
+    } else {
+        slug
+    }
 }
 
 pub(crate) fn setup_editor(mut commands: Commands) {
@@ -232,7 +254,11 @@ pub(crate) fn cycle_track_tuning(track: &mut ChartTrack, library: &[NamedTuning]
     let current = track
         .tuning
         .as_ref()
-        .and_then(|tuning| library.iter().position(|named| named.strings == tuning.strings))
+        .and_then(|tuning| {
+            library
+                .iter()
+                .position(|named| named.strings == tuning.strings)
+        })
         .unwrap_or(0);
     let next = (current as i32 + delta).rem_euclid(library.len() as i32) as usize;
     track.tuning = Some(library[next].tuning());
@@ -299,21 +325,29 @@ pub(crate) fn editor_tracks_input(
     let track_count = document.chart.tracks.len();
     if track_count > 0 {
         if keyboard.just_pressed(KeyCode::ArrowUp) {
-            document.track_focus = document.track_focus.checked_sub(1).unwrap_or(track_count - 1);
+            document.track_focus = document
+                .track_focus
+                .checked_sub(1)
+                .unwrap_or(track_count - 1);
         }
         if keyboard.just_pressed(KeyCode::ArrowDown) {
             document.track_focus = (document.track_focus + 1) % track_count;
         }
     }
     if keyboard.just_pressed(KeyCode::KeyN) {
-        document.chart.tracks.push(new_track(InstrumentKind::Strings));
+        document
+            .chart
+            .tracks
+            .push(new_track(InstrumentKind::Strings));
         document.track_focus = document.chart.tracks.len() - 1;
         document.dirty = true;
     }
     if keyboard.just_pressed(KeyCode::KeyX) && track_count > 0 {
         let focus = document.track_focus;
         document.chart.tracks.remove(focus);
-        document.track_focus = document.track_focus.min(document.chart.tracks.len().saturating_sub(1));
+        document.track_focus = document
+            .track_focus
+            .min(document.chart.tracks.len().saturating_sub(1));
         document.dirty = true;
     }
     if keyboard.just_pressed(KeyCode::KeyK) {
@@ -379,7 +413,11 @@ pub(crate) fn editor_tracks_input(
                 document.status = if warnings.is_empty() {
                     "Saved".into()
                 } else {
-                    format!("Saved with {} warning(s): {}", warnings.len(), warnings.join("; "))
+                    format!(
+                        "Saved with {} warning(s): {}",
+                        warnings.len(),
+                        warnings.join("; ")
+                    )
                 };
             }
             Err(error) => document.status = format!("Save failed: {error}"),
@@ -404,16 +442,21 @@ pub(crate) fn editor_tracks_display(
             .iter()
             .enumerate()
             .map(|(index, track)| {
-                let marker = if document.track_focus == index { ">" } else { " " };
+                let marker = if document.track_focus == index {
+                    ">"
+                } else {
+                    " "
+                };
                 let detail = match track.kind {
                     InstrumentKind::Strings => track
                         .tuning
                         .as_ref()
                         .map_or("no tuning".into(), |tuning| tuning.strings.join("-")),
-                    InstrumentKind::Percussion => track
-                        .kit
-                        .as_ref()
-                        .map_or("no kit".into(), |kit| format!("{} pieces", kit.pieces.len())),
+                    InstrumentKind::Percussion => {
+                        track.kit.as_ref().map_or("no kit".into(), |kit| {
+                            format!("{} pieces", kit.pieces.len())
+                        })
+                    }
                     InstrumentKind::Voice => "voice".into(),
                 };
                 format!("{marker} {} — {:?} ({detail})", track.name, track.kind)
@@ -424,7 +467,9 @@ pub(crate) fn editor_tracks_display(
     let rename_line = document
         .renaming
         .as_ref()
-        .map_or_else(String::new, |buffer| format!("\n\nRENAME: {buffer}_\nEnter: confirm  Esc: cancel"));
+        .map_or_else(String::new, |buffer| {
+            format!("\n\nRENAME: {buffer}_\nEnter: confirm  Esc: cancel")
+        });
     *text = Text::new(format!(
         "OPEN BAND  //  CHART EDITOR  //  {}{dirty}\n\n{track_lines}{rename_line}\n\n\
         Up/Down: focus track     N: add     X: remove     K: cycle kind\n\

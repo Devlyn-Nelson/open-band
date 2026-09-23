@@ -26,6 +26,34 @@ pub(crate) enum InstrumentKind {
     Voice,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Clef {
+    Treble,
+    Bass,
+    Alto,
+    Tenor,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum KeyMode {
+    Major,
+    Minor,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct KeySignature {
+    /// Number of sharps (positive) or flats (negative), from -7 through 7.
+    pub(crate) fifths: i8,
+    #[serde(default = "default_key_mode")]
+    pub(crate) mode: KeyMode,
+}
+
+fn default_key_mode() -> KeyMode {
+    KeyMode::Major
+}
+
 /// The notated rhythmic value of an event, expressed the way musicians say it: `1` for a
 /// whole note, `2` for a half, `4` for a quarter, `8` for an eighth, `16` for a sixteenth.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,6 +136,41 @@ pub(crate) enum NoteDynamics {
     Ghost,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DynamicLevel {
+    Ppp,
+    Pp,
+    Mp,
+    Mf,
+    F,
+    Ff,
+    Fff,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Articulation {
+    Staccato,
+    Tenuto,
+    Marcato,
+    Accent,
+    Fermata,
+    Grace,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Tuplet {
+    pub(crate) actual: u16,
+    pub(crate) normal: u16,
+}
+
+impl Tuplet {
+    pub(crate) fn valid(self) -> bool {
+        self.actual > 0 && self.normal > 0 && self.actual != self.normal
+    }
+}
+
 impl Default for NoteDynamics {
     fn default() -> Self {
         NoteDynamics::Normal
@@ -131,9 +194,19 @@ pub(crate) enum NoteTransition {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct BendSpec {
+    #[serde(default)]
     pub(crate) semitones: f32,
     #[serde(default)]
     pub(crate) release: bool,
+    #[serde(default)]
+    pub(crate) points: Vec<BendPoint>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct BendPoint {
+    /// Normalized position through the event, from 0.0 to 1.0.
+    pub(crate) offset: f32,
+    pub(crate) semitones: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,13 +256,20 @@ pub(crate) struct Tuning {
 
 impl Tuning {
     pub(crate) fn open_midi(&self) -> Result<Vec<u8>, String> {
-        self.strings.iter().map(|note| parse_note_name(note)).collect()
+        self.strings
+            .iter()
+            .map(|note| parse_note_name(note))
+            .collect()
     }
 
     /// The real open-string frequencies for this tuning, used for lane assignment and
     /// per-string detection instead of guessing from a string count.
     pub(crate) fn open_frequencies(&self) -> Result<Vec<f32>, String> {
-        Ok(self.open_midi()?.into_iter().map(midi_to_frequency).collect())
+        Ok(self
+            .open_midi()?
+            .into_iter()
+            .map(midi_to_frequency)
+            .collect())
     }
 }
 
@@ -274,7 +354,10 @@ pub(crate) fn load_tuning_library() -> Vec<NamedTuning> {
         .into_iter()
         .flatten()
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
         .collect::<Vec<_>>();
     paths.sort();
 
@@ -333,7 +416,10 @@ pub(crate) fn load_kit_library() -> Vec<NamedKit> {
         .into_iter()
         .flatten()
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
         .collect::<Vec<_>>();
     paths.sort();
 
@@ -366,6 +452,15 @@ pub(crate) struct VocalRange {
     pub(crate) high: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SyllableKind {
+    Single,
+    Begin,
+    Middle,
+    End,
+}
+
 /// A simple range marker; anything played during the span counts as part of the phrase.
 /// Used for both Star Power phrases and (via `VocalPhrase`) vocal lyric phrases.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -384,6 +479,10 @@ pub(crate) struct ChartTrack {
     pub(crate) kit: Option<Kit>,
     #[serde(default)]
     pub(crate) vocal_range: Option<VocalRange>,
+    #[serde(default)]
+    pub(crate) clef: Option<Clef>,
+    #[serde(default)]
+    pub(crate) key_signature: Option<KeySignature>,
     #[serde(default)]
     pub(crate) notes: Vec<ChartEvent>,
     #[serde(default)]
@@ -416,6 +515,10 @@ pub(crate) struct ChartEvent {
     pub(crate) length: NoteValue,
     pub(crate) dots: u8,
     pub(crate) tied: bool,
+    pub(crate) tuplet: Option<Tuplet>,
+    pub(crate) chord: Option<String>,
+    pub(crate) dynamic: Option<DynamicLevel>,
+    pub(crate) articulations: Vec<Articulation>,
     pub(crate) content: NoteContent,
 }
 
@@ -429,7 +532,9 @@ impl ChartEvent {
             addition /= 2;
             total += addition;
         }
-        total
+        self.tuplet.map_or(total, |tuplet| {
+            total.saturating_mul(tuplet.normal as u32) / tuplet.actual.max(1) as u32
+        })
     }
 
     pub(crate) fn note(&self) -> Option<u8> {
@@ -465,6 +570,14 @@ struct ChartEventFields {
     dots: u8,
     #[serde(default)]
     tied: bool,
+    #[serde(default)]
+    tuplet: Option<Tuplet>,
+    #[serde(default)]
+    chord: Option<String>,
+    #[serde(default)]
+    dynamic: Option<DynamicLevel>,
+    #[serde(default)]
+    articulations: Vec<Articulation>,
     #[serde(default)]
     note: Option<NoteInput>,
     #[serde(default)]
@@ -503,9 +616,9 @@ impl<'de> Deserialize<'de> for ChartEvent {
         let is_percussive = fields.piece.is_some();
         let content = match (is_pitched, is_percussive) {
             (true, false) => {
-                if fields.roll.is_some() || fields.droll.is_some() {
+                if fields.roll.is_some() || fields.droll.is_some() || fields.dynamics.is_some() {
                     return Err(de::Error::custom(
-                        "pitched chart events cannot contain roll or droll",
+                        "pitched chart events cannot contain percussion-only fields",
                     ));
                 }
                 let note = fields
@@ -532,6 +645,11 @@ impl<'de> Deserialize<'de> for ChartEvent {
                 }
             }
             (false, true) => {
+                if fields.dynamic.is_some() || !fields.articulations.is_empty() {
+                    return Err(de::Error::custom(
+                        "percussive chart events must use dynamics for kit-specific modifiers",
+                    ));
+                }
                 if fields.attack.is_some()
                     || fields.transition.is_some()
                     || fields.bend.is_some()
@@ -569,6 +687,10 @@ impl<'de> Deserialize<'de> for ChartEvent {
             length: fields.length,
             dots: fields.dots,
             tied: fields.tied,
+            tuplet: fields.tuplet,
+            chord: fields.chord,
+            dynamic: fields.dynamic,
+            articulations: fields.articulations,
             content,
         })
     }
@@ -587,6 +709,14 @@ impl Serialize for ChartEvent {
             dots: u8,
             #[serde(skip_serializing_if = "is_false")]
             tied: bool,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            tuplet: Option<Tuplet>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            chord: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            dynamic: Option<DynamicLevel>,
+            #[serde(skip_serializing_if = "slice_is_empty")]
+            articulations: &'a [Articulation],
             #[serde(skip_serializing_if = "Option::is_none")]
             note: Option<u8>,
             #[serde(skip_serializing_if = "Option::is_none")]
@@ -622,40 +752,42 @@ impl Serialize for ChartEvent {
         fn is_normal(value: &NoteDynamics) -> bool {
             matches!(value, NoteDynamics::Normal)
         }
+        fn slice_is_empty(value: &&[Articulation]) -> bool {
+            value.is_empty()
+        }
         let (note, ps, attack, transition, bend, motion, piece, dynamics, roll, droll) =
             match &self.content {
-            NoteContent::Pitched {
-                note,
-                ps,
-                attack,
-                transition,
-                bend,
-                motion,
-            } => {
-                let motion = motion.as_ref().map(|motion| PitchMotionOutput {
-                    kind: motion.kind,
-                    target: motion.target,
-                });
-                (
-                    Some(*note),
-                    *ps,
-                    *attack,
-                    *transition,
-                    bend.as_ref(),
+                NoteContent::Pitched {
+                    note,
+                    ps,
+                    attack,
+                    transition,
+                    bend,
                     motion,
-                    None,
-                    NoteDynamics::Normal,
-                    None,
-                    None,
-                )
-            }
-            NoteContent::Percussive {
-                piece,
-                dynamics,
-                roll,
-                droll,
-            } => {
-                (
+                } => {
+                    let motion = motion.as_ref().map(|motion| PitchMotionOutput {
+                        kind: motion.kind,
+                        target: motion.target,
+                    });
+                    (
+                        Some(*note),
+                        *ps,
+                        *attack,
+                        *transition,
+                        bend.as_ref(),
+                        motion,
+                        None,
+                        NoteDynamics::Normal,
+                        None,
+                        None,
+                    )
+                }
+                NoteContent::Percussive {
+                    piece,
+                    dynamics,
+                    roll,
+                    droll,
+                } => (
                     None,
                     None,
                     None,
@@ -666,14 +798,17 @@ impl Serialize for ChartEvent {
                     *dynamics,
                     roll.as_deref(),
                     droll.as_deref(),
-                )
-            }
-        };
+                ),
+            };
         Fields {
             start: self.start,
             length: self.length,
             dots: self.dots,
             tied: self.tied,
+            tuplet: self.tuplet,
+            chord: self.chord.as_deref(),
+            dynamic: self.dynamic,
+            articulations: &self.articulations,
             note,
             ps,
             attack,
@@ -694,6 +829,10 @@ pub(crate) struct VocalPhrase {
     pub(crate) start: u32,
     pub(crate) duration_ticks: u32,
     pub(crate) text: String,
+    #[serde(default)]
+    pub(crate) syllable: Option<SyllableKind>,
+    #[serde(default)]
+    pub(crate) melisma: bool,
     #[serde(default)]
     pub(crate) notes: Vec<ChartEvent>,
 }
@@ -721,6 +860,8 @@ pub(crate) struct PercussionNoteData {
     pub(crate) lane_span_color: Option<String>,
     pub(crate) symbol: Option<String>,
     pub(crate) dynamics: NoteDynamics,
+    pub(crate) dynamic: Option<DynamicLevel>,
+    pub(crate) articulations: Vec<Articulation>,
     pub(crate) roll: Option<String>,
     pub(crate) droll: Option<String>,
 }
@@ -737,6 +878,19 @@ pub(crate) fn resolved_duration_ticks(events: &[ChartEvent], index: usize, resol
         current += 1;
     }
     total
+}
+
+fn tie_content_matches(left: &ChartEvent, right: &ChartEvent) -> bool {
+    match (&left.content, &right.content) {
+        (NoteContent::Pitched { note: left, .. }, NoteContent::Pitched { note: right, .. }) => {
+            left == right
+        }
+        (
+            NoteContent::Percussive { piece: left, .. },
+            NoteContent::Percussive { piece: right, .. },
+        ) => left == right,
+        _ => false,
+    }
 }
 
 impl Chart {
@@ -764,7 +918,13 @@ impl Chart {
         let mut changes = self.tempo_map.clone();
         changes.sort_by_key(|change| change.start);
         if changes.first().map_or(true, |first| first.start != 0) {
-            changes.insert(0, TempoChange { start: 0, bpm: 120.0 });
+            changes.insert(
+                0,
+                TempoChange {
+                    start: 0,
+                    bpm: 120.0,
+                },
+            );
         }
         let mut seconds = 0.0;
         let mut previous_tick = 0u32;
@@ -797,7 +957,10 @@ impl Chart {
         let open_midi = match tuning.open_midi() {
             Ok(open_midi) => open_midi,
             Err(error) => {
-                eprintln!("Strings track {} has an invalid tuning: {error}", track.name);
+                eprintln!(
+                    "Strings track {} has an invalid tuning: {error}",
+                    track.name
+                );
                 return Vec::new();
             }
         };
@@ -897,6 +1060,8 @@ impl Chart {
                     lane_span_color: kit_piece.lane_span.clone(),
                     symbol: kit_piece.symbol.clone(),
                     dynamics: *dynamics,
+                    dynamic: event.dynamic,
+                    articulations: event.articulations.clone(),
                     roll: roll.clone(),
                     droll: droll.clone(),
                 })
@@ -947,20 +1112,103 @@ impl Chart {
         if !self.tempo_map.iter().any(|change| change.start == 0) {
             warnings.push("tempo_map has no entry at tick 0; defaulting to 120 BPM".into());
         }
-        if !self.time_signature_map.iter().any(|change| change.start == 0) {
+        if !self
+            .time_signature_map
+            .iter()
+            .any(|change| change.start == 0)
+        {
             warnings.push("time_signature_map has no entry at tick 0; defaulting to 4/4".into());
         }
         for track in &self.tracks {
+            if let Some(key_signature) = track.key_signature
+                && !(-7..=7).contains(&key_signature.fifths)
+            {
+                warnings.push(format!(
+                    "track \"{}\" has a key signature outside the -7..7 range",
+                    track.name
+                ));
+            }
+            for (index, event) in track.notes.iter().enumerate() {
+                if let Some(tuplet) = event.tuplet
+                    && !tuplet.valid()
+                {
+                    warnings.push(format!(
+                        "track \"{}\" note {index} has an invalid tuplet ratio",
+                        track.name
+                    ));
+                }
+                if event.dots > 2 {
+                    warnings.push(format!(
+                        "track \"{}\" note {index} has more than two dots",
+                        track.name
+                    ));
+                }
+                if let NoteContent::Pitched {
+                    bend: Some(bend), ..
+                } = &event.content
+                {
+                    if bend.points.is_empty() && bend.semitones == 0.0 {
+                        warnings.push(format!(
+                            "track \"{}\" note {index} has an empty bend",
+                            track.name
+                        ));
+                    }
+                    if bend.points.windows(2).any(|points| {
+                        points[0].offset > points[1].offset
+                            || !points[0].offset.is_finite()
+                            || !points[1].offset.is_finite()
+                    }) || bend.points.iter().any(|point| {
+                        !(0.0..=1.0).contains(&point.offset) || !point.semitones.is_finite()
+                    }) {
+                        warnings.push(format!(
+                            "track \"{}\" note {index} has invalid bend curve points",
+                            track.name
+                        ));
+                    }
+                }
+                if event.tied {
+                    match track.notes.get(index + 1) {
+                        None => warnings.push(format!(
+                            "track \"{}\" note {index} starts a tie without a following event",
+                            track.name
+                        )),
+                        Some(next) => {
+                            let expected_start =
+                                event.start + event.duration_ticks(self.resolution);
+                            if next.start != expected_start {
+                                warnings.push(format!(
+                                    "track \"{}\" note {index} tie does not start at the previous note's end",
+                                    track.name
+                                ));
+                            }
+                            if !tie_content_matches(event, next) {
+                                warnings.push(format!(
+                                    "track \"{}\" note {index} tie changes pitch or piece",
+                                    track.name
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
             match track.kind {
                 InstrumentKind::Strings => match track.tuning.as_ref() {
-                    None => warnings.push(format!("track \"{}\" is Strings but has no tuning", track.name)),
+                    None => warnings.push(format!(
+                        "track \"{}\" is Strings but has no tuning",
+                        track.name
+                    )),
                     Some(tuning) => match tuning.open_midi() {
                         Err(error) => {
-                            warnings.push(format!("track \"{}\" tuning is invalid: {error}", track.name));
+                            warnings.push(format!(
+                                "track \"{}\" tuning is invalid: {error}",
+                                track.name
+                            ));
                         }
                         Ok(open_midi) => {
                             for note in &track.notes {
-                                if let NoteContent::Pitched { note: pitch, ps, .. } = &note.content
+                                if let NoteContent::Pitched {
+                                    note: pitch, ps, ..
+                                } = &note.content
                                     && best_string_fret(*pitch, &open_midi, *ps).is_none()
                                 {
                                     warnings.push(format!(
@@ -974,14 +1222,14 @@ impl Chart {
                     },
                 },
                 InstrumentKind::Percussion => match track.kit.as_ref() {
-                    None => warnings.push(format!("track \"{}\" is Percussion but has no kit", track.name)),
+                    None => warnings.push(format!(
+                        "track \"{}\" is Percussion but has no kit",
+                        track.name
+                    )),
                     Some(kit) => {
                         for note in &track.notes {
                             if let NoteContent::Percussive {
-                                piece,
-                                roll,
-                                droll,
-                                ..
+                                piece, roll, droll, ..
                             } = &note.content
                             {
                                 if kit.piece(piece).is_none() {
@@ -1084,7 +1332,6 @@ impl fmt::Display for ChartTrack {
         formatter.write_str(&self.name)
     }
 }
-
 
 #[derive(Resource)]
 pub(crate) struct SongMenuSelection {

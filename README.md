@@ -202,8 +202,15 @@ beats. Tempo and time-signature changes are keyed by `start` ticks, with a tick-
 expected.
 
 Every event uses `length` (`1`/`2`/`4`/`8`/`16` for whole, half, quarter, eighth, or
-sixteenth) and may use `dots`. `tied: true` continues the duration into the next event of
-the same pitch or piece. Rests are not stored; they are inferred from gaps between events.
+sixteenth) and may use `dots`. `tuplet` supports irregular subdivisions such as triplets:
+`{ "actual": 3, "normal": 2 }` means three written events in the time of two. `tied: true`
+continues the duration into the next event of the same pitch or piece; validation checks
+that the next event starts at the expected end and keeps the same pitch or piece. Rests are
+not stored; they are inferred from gaps between events.
+
+Any event may also use `chord` to group simultaneous notes for notation and editing, a
+shared `dynamic` (`ppp`, `pp`, `mp`, `mf`, `f`, `ff`, or `fff`), and an `articulations`
+array containing `staccato`, `tenuto`, `marcato`, `accent`, `fermata`, or `grace`.
 
 Any track may contain `star_power_phrases`, represented as simple
 `{ "start": 0, "duration_ticks": 3840 }` range markers.
@@ -234,6 +241,15 @@ notes. Any string count or tuning is supported:
 "tuning": { "strings": ["B0", "E1", "A1", "D2", "G2"] }
 ```
 
+Use `clef` to override the inferred staff clef (`treble`, `bass`, `alto`, or `tenor`).
+`key_signature` stores the number of fifths as sharps (positive) or flats (negitive), from `-7` through `7`,
+and its mode:
+
+```json
+"clef": "bass",
+"key_signature": { "fifths": -2, "mode": "major" }
+```
+
 Pitched events use `note`, either a raw MIDI number or a readable name such as `"C4"`.
 `ps` is an optional preferred-string index, counted from zero in the tuning array. The
 chart system uses the tuning and pitch to derive the playable string and fret.
@@ -256,7 +272,18 @@ String events may also describe notation and intended articulation:
 - `attack`: `pluck` or `tap`; describes how the note starts.
 - `transition`: `hammer_on`, `pull_off`, or `slide`; describes how the note connects
   from the preceding note.
-- `bend`: a bend amount in semitones, with optional `release: true` to return toward the
+- `bend`: a simple bend amount in semitones, or a time-shaped curve. Curve points use a
+  normalized `offset` from `0.0` to `1.0`:
+
+  ```json
+  "bend": { "points": [
+    { "offset": 0.0, "semitones": 0.0 },
+    { "offset": 0.5, "semitones": 2.0 },
+    { "offset": 1.0, "semitones": 0.0 }
+  ] }
+  ```
+
+  The simple form may also use `semitones` and `release: true` to return toward the
   original pitch.
 - `motion`: currently supports `trill`, alternating the current note and its `target`.
 
@@ -271,13 +298,15 @@ Percussion tracks embed a `kit` with a lane count and named pieces. Each piece h
 `trigger`, plus either a shared `lane` or a full-width `lane_span` color. `symbol`
 distinguishes pieces sharing a lane, such as a tom and cymbal.
 
-Percussion events reference a kit piece by name:
+Percussion events reference a kit piece by name. They can also use the shared `dynamic`
+and `articulations` fields described above, in addition to the percussion-specific
+`dynamics` modifier:
 
 ```json
 { "start": 960, "length": 4, "piece": "snare", "dynamics": "accent" }
 ```
 
-- `dynamics`: optional `accent` or `ghost` modifier; normal is the default.
+- `dynamics`: optional kit-specific `accent`, `ghost`, or `normal` modifier.
 - `roll`: names the ending piece for a single-lane roll. The event's `piece` is the
   starting piece; using the same name describes a same-piece roll.
 - `droll`: names the second piece for an alternating double-lane roll between `piece` and
@@ -295,13 +324,17 @@ Voice tracks may include a descriptive `vocal_range`:
 ```
 
 Lyrics and melody are grouped into `phrases`. Each phrase has a start tick, duration,
-display text, and optional nested pitched events:
+display text, optional `syllable` boundary (`single`, `begin`, `middle`, or `end`), an
+optional `melisma: true` marker when one syllable spans multiple notes, and optional nested
+pitched events:
 
 ```json
 {
   "start": 1920,
   "duration_ticks": 1920,
   "text": "Hello",
+  "syllable": "single",
+  "melisma": false,
   "notes": [
     { "start": 1920, "length": 2, "note": "C4" }
   ]

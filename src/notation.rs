@@ -1,12 +1,5 @@
 use super::*;
 
-/// A musical staff clef; percussion tracks use no clef (a rhythm staff instead).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Clef {
-    Treble,
-    Bass,
-}
-
 /// One measure's tick span and the time signature in effect for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Measure {
@@ -45,12 +38,15 @@ const REST_VALUES: [NoteValue; 5] = [
 /// and the gameplay overlay (Part C) both render from this same description.
 pub(crate) struct NotationLayout {
     pub(crate) clef: Option<Clef>,
+    pub(crate) key_signature: Option<KeySignature>,
     pub(crate) measures: Vec<Measure>,
     /// Each inner `Vec` is a chain of `track.notes` indices tied together in sequence.
     pub(crate) ties: Vec<Vec<usize>>,
     /// Each inner `Vec` is a run of `track.notes` indices (eighth/sixteenth) beamed
     /// together within one beat.
     pub(crate) beams: Vec<Vec<usize>>,
+    /// Runs of notes sharing the same tuplet ratio.
+    pub(crate) tuplets: Vec<Vec<usize>>,
     pub(crate) rests: Vec<Rest>,
 }
 
@@ -58,6 +54,9 @@ pub(crate) struct NotationLayout {
 /// pitch since `Strings` no longer distinguishes guitar from bass (see todo.md B4).
 /// Callers may override this per track once the editor exposes that as a setting.
 pub(crate) fn default_clef(track: &ChartTrack) -> Option<Clef> {
+    if track.clef.is_some() {
+        return track.clef;
+    }
     match track.kind {
         InstrumentKind::Percussion => None,
         InstrumentKind::Voice => Some(Clef::Treble),
@@ -77,6 +76,31 @@ pub(crate) fn default_clef(track: &ChartTrack) -> Option<Clef> {
             }
         }
     }
+}
+
+fn tuplet_groups(notes: &[ChartEvent]) -> Vec<Vec<usize>> {
+    let mut groups = Vec::new();
+    let mut current = Vec::new();
+    let mut ratio: Option<Tuplet> = None;
+    for (index, note) in notes.iter().enumerate() {
+        if note.tuplet.is_some() && note.tuplet == ratio {
+            current.push(index);
+            continue;
+        }
+        if current.len() > 1 {
+            groups.push(std::mem::take(&mut current));
+        } else {
+            current.clear();
+        }
+        ratio = note.tuplet;
+        if ratio.is_some() {
+            current.push(index);
+        }
+    }
+    if current.len() > 1 {
+        groups.push(current);
+    }
+    groups
 }
 
 /// Builds sequential measures from tick 0 through at least `end_tick`, using whichever
@@ -154,7 +178,10 @@ fn beam_groups(notes: &[ChartEvent], resolution: u32, measures: &[Measure]) -> V
     for (index, note) in notes.iter().enumerate() {
         let beamable = matches!(note.length, NoteValue::Eighth | NoteValue::Sixteenth);
         let beat = measure_containing(measures, note.start).map(|measure| {
-            (measure.index, (note.start - measure.start_tick) / measure.beat_ticks(resolution))
+            (
+                measure.index,
+                (note.start - measure.start_tick) / measure.beat_ticks(resolution),
+            )
         });
         let continues = beamable && beat.is_some() && beat == current_beat;
         if continues {
@@ -228,13 +255,16 @@ pub(crate) fn layout_track(chart: &Chart, track: &ChartTrack) -> NotationLayout 
 
     let ties = tie_chains(&notes);
     let beams = beam_groups(&notes, chart.resolution, &measures);
+    let tuplets = tuplet_groups(&notes);
 
     // Only the first event of each tie chain starts a sounding note; rests fill the gaps
     // between where one chain ends and the next begins.
     let mut rests = Vec::new();
     let mut cursor = measures.first().map_or(0, |measure| measure.start_tick);
     for chain in &ties {
-        let Some(&first) = chain.first() else { continue };
+        let Some(&first) = chain.first() else {
+            continue;
+        };
         let Some(&last) = chain.last() else { continue };
         let start = notes[first].start;
         let end = start + resolved_duration_ticks(&notes, first, chart.resolution);
@@ -243,14 +273,21 @@ pub(crate) fn layout_track(chart: &Chart, track: &ChartTrack) -> NotationLayout 
         cursor = end;
     }
     if let Some(last_measure) = measures.last() {
-        rests.extend(infer_rests(cursor, last_measure.end_tick, chart.resolution, &measures));
+        rests.extend(infer_rests(
+            cursor,
+            last_measure.end_tick,
+            chart.resolution,
+            &measures,
+        ));
     }
 
     NotationLayout {
         clef: default_clef(track),
+        key_signature: track.key_signature,
         measures,
         ties,
         beams,
+        tuplets,
         rests,
     }
 }

@@ -30,7 +30,8 @@ This plan covers two sequential efforts:
    `open-band` app. Home gains an `Editor` option alongside `Live Session`, `Songs`, and
    `Set Up`.
 2. **Sheet view notation fidelity**: sheet view is a full notation editor (ties, dotted
-   notes, beaming, measure-aware layout) — not a simplified grid. It doubles as an optional
+  notes, tuplets, beaming, measure-aware layout, clefs, and key signatures) — not a simplified
+  grid. It doubles as an optional
    read-only overlay at the bottom of the screen during live gameplay for learning purposes
    (see Part C). This requires chart events to carry explicit rhythmic notation data, not
    just a raw `duration_beats` float (see A2).
@@ -122,23 +123,31 @@ This plan covers two sequential efforts:
   preset resolved to a range at editor-save time. Descriptive only — does not gate
   playability or detection.
 - `ChartTrack` becomes: `{ name, kind: InstrumentKind, tuning | kit | vocal_range, notes,
-  star_power_phrases }`.
+  clef, key_signature, star_power_phrases }`.
 
 #### Event content and dynamics
 
 - `ChartEvent` needs to represent both pitched (strings/voice) and percussive (percussion)
   content, and both need full rhythmic notation data since sheet view is a real notation
   editor and both kinds get staff/rhythm rendering. Split into a tagged representation:
-  - `Pitched { start_tick, note_value, dots, tied, midi_note, preferred_string, attack,
-    transition, bend, motion }` (strings/voice)
-  - `Percussive { start_tick, note_value, dots, tied, piece, dynamics, roll }`
+  - `Pitched { start_tick, note_value, dots, tied, tuplet, chord, dynamic, articulations,
+    midi_note, preferred_string, attack, transition, bend, motion }` (strings/voice)
+  - `Percussive { start_tick, note_value, dots, tied, tuplet, chord, dynamic, articulations,
+    piece, dynamics, roll, droll }`
     (percussion, piece = kit piece name)
   - `note_value`: an enum (`Whole`, `Half`, `Quarter`, `Eighth`, `Sixteenth`) — the same
     palette the sheet-view toolbar exposes. This is the source of truth for rhythmic
     duration, replacing the old freeform `duration_beats` float.
   - `dots`: `0`-`2`, for dotted-note augmentation.
+  - `tuplet`: `{ actual, normal }`, such as `{ actual: 3, normal: 2 }` for triplets. The
+    resolved tick duration is scaled by `normal / actual`, and notation layout groups
+    adjacent events with the same ratio.
+  - `chord`: an optional shared identifier for simultaneous notes, preserving chord grouping
+    for sheet/tab rendering and editor operations.
   - `tied`: `bool`, whether this event is tied into the next event of the same
     pitch/piece — supports durations that can't be expressed as a single notated value.
+    Chart validation checks that the next event starts at the tie endpoint and keeps the
+    same pitch/piece; `tied` remains useful and is not redundant with other fields.
   - `duration_ticks` (for playback timing) is derived from `note_value` + `dots` +
     `resolution`, summed across a tie chain. Follow the existing `midi_note`/`note`
     pattern in `ChartEventFields` (custom `Deserialize` with cross-validation) if an
@@ -150,6 +159,10 @@ This plan covers two sequential efforts:
     defaults to `Normal`. Matches Clone Hero's accent/ghost modifiers directly (see
     Part D). A future continuous velocity value is a possible later extension but isn't
     needed for parity with existing formats.
+  - `dynamic` (all event kinds): standard written levels `ppp`, `pp`, `mp`, `mf`, `f`,
+    `ff`, and `fff`.
+  - `articulations` (all event kinds): an extensible list currently supporting `staccato`,
+    `tenuto`, `marcato`, `accent`, `fermata`, and `grace`.
   - Drum roll fields (percussion only):
     - `roll: Option<String>` names the ending piece for a single-lane roll or piece
       transition. The event's `piece` is the starting piece; using the same name for both
@@ -171,6 +184,13 @@ This plan covers two sequential efforts:
       accepted for pitch targets.
     - These fields preserve `note` as the event's pitch and are chart/notation data only;
       gameplay interpretation is deferred.
+  - `bend.points` optionally describes a normalized time curve of semitone offsets, allowing
+    bend-release and other shaped bends; the simple `semitones`/`release` form remains valid.
+- Track notation metadata:
+  - `clef` optionally overrides inferred `treble`, `bass`, `alto`, or `tenor`.
+  - `key_signature` stores `{ fifths: -7..7, mode: major | minor }`.
+- `VocalPhrase` supports `syllable: single | begin | middle | end` and `melisma: bool` so
+  lyric syllable boundaries and one-syllable/multiple-note phrases survive notation export.
 - `star_power_phrases: Vec<Phrase>` on `ChartTrack` (any instrument kind), where
   `Phrase { start_tick, duration_ticks }` — a simple range marker with no nested note
   list. Anything played during that span counts as part of the phrase; this mirrors the
