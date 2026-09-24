@@ -1,4 +1,71 @@
-use super::*;
+use crate::*;
+
+pub(crate) const OPEN_STRINGS_CHART: &str = include_str!("../../../charts/open-strings.json");
+pub(crate) const CHART_HIT_LINE_Y: f32 = -250.0;
+pub(crate) const CHART_NOTE_SPEED: f32 = 260.0;
+
+#[derive(Resource)]
+pub(crate) struct SongMenuSelection {
+    pub(crate) selected: usize,
+    pub(crate) charts: Vec<Chart>,
+}
+
+#[derive(Resource)]
+pub(crate) struct ChartSession {
+    pub(crate) chart: Chart,
+    pub(crate) started_at: f32,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct ChartStats {
+    pub(crate) total_notes: usize,
+    pub(crate) correct_hits: usize,
+    pub(crate) sustain_expected: usize,
+    pub(crate) sustain_successful: usize,
+    pub(crate) timing_offsets_ms: Vec<f32>,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct ChartFeedback {
+    pub(crate) message: String,
+    pub(crate) until: f32,
+}
+
+#[derive(Component)]
+pub(crate) struct SongMenuText;
+
+#[derive(Component)]
+pub(crate) struct ChartEntity;
+
+#[derive(Component)]
+pub(crate) struct ChartCountdownText;
+
+#[derive(Component)]
+pub(crate) struct ChartNoteVisual {
+    pub(crate) string: usize,
+    pub(crate) start: f32,
+    pub(crate) duration: f32,
+    pub(crate) pitch_hz: f32,
+    pub(crate) matched: bool,
+    pub(crate) missed: bool,
+    pub(crate) sustain_observed: f32,
+}
+
+/// A percussion note rendered in the chart gameplay highway; visual only for now — hit
+/// detection/scoring against live MIDI input is not yet wired up (see todo.md A8).
+#[derive(Component)]
+pub(crate) struct PercussionNoteVisual {
+    pub(crate) lane: Option<usize>,
+    pub(crate) spans_lanes: bool,
+    pub(crate) start: f32,
+    pub(crate) duration: f32,
+}
+
+#[derive(Component)]
+pub(crate) struct ChartFeedbackText;
+
+#[derive(Component)]
+pub(crate) struct ChartReviewText;
 
 pub(crate) fn load_charts() -> Vec<Chart> {
     let mut paths = std::fs::read_dir("charts")

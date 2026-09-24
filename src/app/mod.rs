@@ -1,3 +1,7 @@
+mod state;
+
+pub(crate) use state::*;
+
 use super::*;
 
 /// Build and run the Bevy application.

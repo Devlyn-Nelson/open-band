@@ -1,4 +1,109 @@
-use super::*;
+use crate::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Resource)]
+/// Available devices and current choices in Input Setup.
+pub(crate) struct DeviceSelection {
+    pub(crate) audio_devices: Vec<DeviceChoice>,
+    pub(crate) midi_devices: Vec<DeviceChoice>,
+    pub(crate) tuning_library: Vec<NamedTuning>,
+    pub(crate) kit_library: Vec<NamedKit>,
+    pub(crate) slots: Vec<InstrumentSlot>,
+    pub(crate) focus: usize,
+}
+
+impl DeviceSelection {
+    /// The device list a slot's device selection should cycle through.
+    pub(crate) fn devices_for(&self, kind: InstrumentKind) -> &[DeviceChoice] {
+        match kind {
+            InstrumentKind::Percussion => &self.midi_devices,
+            InstrumentKind::Strings | InstrumentKind::Voice => &self.audio_devices,
+        }
+    }
+
+    /// The library preset name matching a slot's configured tuning/kit, if any (a slot
+    /// loaded from an older settings file, or with a hand-edited tuning/kit, may not
+    /// match a current library entry).
+    pub(crate) fn preset_name_for(&self, slot: &InstrumentSlot) -> Option<&str> {
+        match slot.kind {
+            InstrumentKind::Strings => {
+                let tuning = slot.tuning.as_ref()?;
+                self.tuning_library
+                    .iter()
+                    .find(|named| named.strings == tuning.strings)
+                    .map(|named| named.name.as_str())
+            }
+            InstrumentKind::Percussion => {
+                let kit = slot.kit.as_ref()?;
+                self.kit_library
+                    .iter()
+                    .find(|named| named.lanes == kit.lanes && named.pieces == kit.pieces)
+                    .map(|named| named.name.as_str())
+            }
+            InstrumentKind::Voice => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct DeviceChoice {
+    pub(crate) id: String,
+    pub(crate) label: String,
+}
+
+#[derive(Resource, Serialize, Deserialize, Default, Debug)]
+/// Settings persisted between launches in `open-band-settings/settings.json`.
+pub(crate) struct PersistentSettings {
+    #[serde(default)]
+    pub(crate) slots: Vec<InstrumentSlot>,
+    pub(crate) latency_ms: Option<f32>,
+}
+
+#[derive(Component)]
+pub(crate) struct DeviceSelectionText;
+
+#[derive(Component)]
+pub(crate) struct DeviceSelectionCamera;
+
+#[derive(Resource)]
+/// Signal and tuner state displayed during instrument calibration.
+pub(crate) struct Calibration {
+    /// Index into the configured `InstrumentSlot` list.
+    pub(crate) selected: usize,
+    pub(crate) level: f32,
+    pub(crate) peak: f32,
+    pub(crate) samples: u32,
+    pub(crate) last_pitch_hz: Option<f32>,
+}
+
+#[derive(Component)]
+pub(crate) struct CalibrationText;
+
+#[derive(Component)]
+pub(crate) struct CalibrationMeter;
+
+#[derive(Component)]
+pub(crate) struct CalibrationCamera;
+
+#[derive(Resource)]
+/// Timing measurements collected by the latency calibration screen.
+pub(crate) struct LatencyCalibration {
+    pub(crate) started_at: f32,
+    pub(crate) best_ms: Option<f32>,
+    pub(crate) attempts: u32,
+}
+
+#[derive(Component)]
+pub(crate) struct LatencyText;
+
+#[derive(Component)]
+pub(crate) struct LatencyPulse;
+
+#[derive(Component)]
+pub(crate) struct LatencyEntity;
+
+#[derive(Component)]
+pub(crate) struct LatencyCamera;
 
 pub(crate) fn setup_device_selection(mut commands: Commands) {
     commands.spawn((Camera2d, DeviceSelectionCamera));

@@ -1,7 +1,14 @@
-use super::{
-    AudioDetector, InputConfig, Instrument, InstrumentEvent, InstrumentKind, InstrumentSlot, Kit,
-    LANES, NotePhase, RECORDING_ENVIRONMENT_VARIABLE, pitch_to_lane,
+pub(crate) const RECORDING_ENVIRONMENT_VARIABLE: &str = "BAND_HERO_RECORDING";
+
+use crate::{
+    AudioDetector, Instrument, InstrumentEvent, InstrumentKind, InstrumentSlot, Kit, LANES,
+    NotePhase, pitch_to_lane,
 };
+
+/// Runtime device configuration consumed by the input worker.
+pub(crate) struct InputConfig {
+    pub(crate) slots: Vec<InstrumentSlot>,
+}
 use bevy::prelude::*;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use midir::{Ignore, MidiInput};

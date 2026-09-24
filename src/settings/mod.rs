@@ -1,4 +1,97 @@
-use super::*;
+use crate::*;
+use serde::{Deserialize, Serialize};
+
+pub(crate) const SETTINGS_DIRECTORY: &str = "open-band-settings";
+pub(crate) const SETTINGS_FILE: &str = "open-band-settings/settings.json";
+
+/// Which detector algorithm a `Strings` slot uses; irrelevant for other kinds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DetectorProfile {
+    /// Multiple simultaneous pitches (chords), e.g. a guitar.
+    Polyphonic,
+    /// One physical string at a time, matched to the nearest open-string lane, e.g. a bass.
+    PerString,
+}
+
+/// One configured physical instrument input. Any number of slots of any kind can exist.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct InstrumentSlot {
+    pub(crate) kind: InstrumentKind,
+    /// Stable CPAL device id (`Strings`/`Voice`) or `midi:<index>` port key (`Percussion`).
+    #[serde(default)]
+    pub(crate) device: Option<String>,
+    /// The configured tuning; only meaningful when `kind` is `Strings`.
+    #[serde(default)]
+    pub(crate) tuning: Option<Tuning>,
+    /// The configured kit; only meaningful when `kind` is `Percussion`.
+    #[serde(default)]
+    pub(crate) kit: Option<Kit>,
+    /// Only meaningful when `kind` is `Strings`.
+    #[serde(default = "default_detector_profile")]
+    pub(crate) detector: DetectorProfile,
+}
+
+fn default_detector_profile() -> DetectorProfile {
+    DetectorProfile::PerString
+}
+
+impl InstrumentSlot {
+    pub(crate) fn default_for(kind: InstrumentKind) -> Self {
+        match kind {
+            InstrumentKind::Strings => Self {
+                kind,
+                device: None,
+                tuning: Some(Tuning::default()),
+                kit: None,
+                detector: DetectorProfile::PerString,
+            },
+            InstrumentKind::Percussion => Self {
+                kind,
+                device: None,
+                tuning: None,
+                kit: Some(Kit::default()),
+                detector: DetectorProfile::PerString,
+            },
+            InstrumentKind::Voice => Self {
+                kind,
+                device: None,
+                tuning: None,
+                kit: None,
+                detector: DetectorProfile::PerString,
+            },
+        }
+    }
+
+    pub(crate) fn label(&self) -> String {
+        match self.kind {
+            InstrumentKind::Strings => {
+                let tuning = self.tuning.clone().unwrap_or_default();
+                format!("STRINGS ({})", tuning.strings.join("-"))
+            }
+            InstrumentKind::Percussion => {
+                let kit = self.kit.clone().unwrap_or_default();
+                format!("PERCUSSION (MIDI, {} pieces)", kit.pieces.len())
+            }
+            InstrumentKind::Voice => "VOICE".into(),
+        }
+    }
+
+    pub(crate) fn open_frequencies(&self) -> Vec<f32> {
+        self.tuning
+            .as_ref()
+            .and_then(|tuning| tuning.open_frequencies().ok())
+            .unwrap_or_else(|| {
+                Tuning::default()
+                    .open_frequencies()
+                    .expect("default tuning parses")
+            })
+    }
+
+    pub(crate) fn kit_or_default(&self) -> Kit {
+        self.kit.clone().unwrap_or_default()
+    }
+}
 
 pub(crate) fn initial_app_state() -> AppState {
     if std::path::Path::new(SETTINGS_FILE).exists() {

@@ -1,4 +1,4 @@
-use super::*;
+use crate::*;
 
 pub(crate) struct PolyphonicAudioDetector {
     sample_rate: f32,

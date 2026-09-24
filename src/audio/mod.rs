@@ -1,4 +1,9 @@
-use super::{InstrumentKind, LANES};
+pub(crate) mod detector;
+pub(crate) use detector::*;
+
+pub(crate) const LANES: usize = 5;
+
+use super::InstrumentKind;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 /// A configured instrument input: which slot it came from, its kind, and (for `Strings`)

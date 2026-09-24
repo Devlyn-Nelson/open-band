@@ -1,4 +1,49 @@
-use super::*;
+use crate::*;
+
+pub(crate) const HIT_LINE_Y: f32 = -250.0;
+pub(crate) const NOTE_SPEED: f32 = 260.0;
+
+#[derive(Resource, Default)]
+/// Accumulated gameplay score.
+pub(crate) struct Score {
+    pub(crate) hits: u32,
+    pub(crate) combo: u32,
+    pub(crate) accuracy: f32,
+}
+
+#[derive(Component)]
+/// A falling gameplay note and the lane it belongs to.
+pub(crate) struct FallingNote {
+    pub(crate) lane: usize,
+    pub(crate) instrument: Instrument,
+    pub(crate) spawned_at: f32,
+    pub(crate) duration_secs: f32,
+}
+
+#[derive(Component)]
+/// Marker shared by all entities owned by the live session.
+pub(crate) struct GameplayEntity;
+
+#[derive(Resource, Default)]
+/// Latest event values shown in the live-session debug window.
+pub(crate) struct DebugInputData {
+    pub(crate) instrument: Option<Instrument>,
+    /// The current instrument's real configured open-string frequencies, for the debug
+    /// window's per-string breakdown (empty for non-`Strings` kinds).
+    pub(crate) open_frequencies: Vec<f32>,
+    pub(crate) pitch_hz: Option<f32>,
+    pub(crate) lane: Option<usize>,
+    pub(crate) strength: f32,
+    pub(crate) noise_floor: f32,
+    pub(crate) duration_secs: f32,
+    pub(crate) event_count: u64,
+}
+
+#[derive(Component)]
+pub(crate) struct DebugWindow;
+
+#[derive(Component)]
+pub(crate) struct DebugText;
 
 /// Spawn the live highway and its diagnostic panel.
 pub(crate) fn setup_gameplay(mut commands: Commands, debug: Res<DebugInputData>) {

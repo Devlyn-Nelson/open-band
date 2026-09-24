@@ -1,4 +1,4 @@
-use super::*;
+use crate::*;
 
 pub(crate) fn instrument_navigation(
     state: Res<State<AppState>>,

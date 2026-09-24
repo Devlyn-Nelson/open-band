@@ -1,4 +1,19 @@
-use super::*;
+use crate::*;
+
+#[derive(Resource, Default)]
+/// Selection state for the Home and Set Up menus.
+pub(crate) struct MenuSelection {
+    pub(crate) home_selected: usize,
+    pub(crate) setup_selected: usize,
+}
+
+#[derive(Component)]
+/// Text node used by the Home and Set Up menus.
+pub(crate) struct MenuText;
+
+#[derive(Component)]
+/// Camera owned by a menu screen.
+pub(crate) struct MenuCamera;
 
 /// Spawn the Home screen.
 pub(crate) fn setup_home(mut commands: Commands) {
