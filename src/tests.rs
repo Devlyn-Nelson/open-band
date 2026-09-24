@@ -1,14 +1,12 @@
 use super::{
     Articulation, AudioDetector, AudioOnsetDetector, BendSpec, Chart, ChartEvent, Clef,
-    DetectorProfile, DeviceChoice, DynamicLevel, EventRelation, Instrument, InstrumentKind, KeyMode, KeySignature,
-    GraceKind, HarmonicKind, HiHatState, MotionKind, NoteAttack, NoteContent, NoteDynamics,
-    NotePhase, NoteTransition, PercussionGrace, ScoreExpression,
-    ScoreMarker, TempoText,
-    PerformanceHints, PitchSpelling, PolyphonicAudioDetector, SnapInterval, SyllableKind,
-    Tuning, VibratoKind, cents_error, cycle_track_kit,
-    cycle_track_tuning, default_clef, estimate_pitch, layout_track, load_charts, load_kit_library,
-    load_tuning_library, measures, new_track, pitch_to_lane, selected_device_index, slugify,
-    snap_tick, string_lane,
+    DetectorProfile, DeviceChoice, DynamicLevel, EventRelation, GraceKind, HarmonicKind,
+    HiHatState, Instrument, InstrumentKind, KeyMode, KeySignature, MotionKind, NoteAttack,
+    NoteContent, NoteDynamics, NotePhase, NoteTransition, PercussionGrace, PerformanceHints,
+    PitchSpelling, PolyphonicAudioDetector, ScoreExpression, ScoreMarker, SnapInterval,
+    SyllableKind, TempoText, Tuning, VibratoKind, cents_error, cycle_track_kit, cycle_track_tuning,
+    default_clef, estimate_pitch, layout_track, load_charts, load_kit_library, load_tuning_library,
+    measures, new_track, pitch_to_lane, selected_device_index, slugify, snap_tick, string_lane,
 };
 use std::f32::consts::TAU;
 use std::path::Path;
@@ -337,7 +335,10 @@ fn performance_hints_parse_resolve_and_round_trip() {
     let resolved = chart.string_notes();
     assert_eq!(resolved[0].string, 1);
     assert_eq!(resolved[0].attack, Some(NoteAttack::Tap));
-    assert_eq!(resolved[0].motion.as_ref().map(|motion| motion.target), Some(42));
+    assert_eq!(
+        resolved[0].motion.as_ref().map(|motion| motion.target),
+        Some(42)
+    );
 
     let serialized = serde_json::to_string(&chart).expect("performance hints should serialize");
     assert!(serialized.contains("\"performance\""));
@@ -412,7 +413,10 @@ fn instrument_notation_metadata_round_trips() {
     )
     .expect("instrument notation chart should parse");
     assert_eq!(chart.tracks[0].capo, Some(3));
-    assert_eq!(chart.tracks[0].notes[0].grace.as_ref().unwrap().kind, GraceKind::Acciaccatura);
+    assert_eq!(
+        chart.tracks[0].notes[0].grace.as_ref().unwrap().kind,
+        GraceKind::Acciaccatura
+    );
     let guitar_hints = chart.tracks[0].notes[0].performance.as_ref().unwrap();
     assert_eq!(guitar_hints.harmonic, Some(HarmonicKind::Natural));
     assert!(guitar_hints.palm_mute);
@@ -446,10 +450,12 @@ fn chord_validation_reports_inconsistent_groups() {
         }"#,
     )
     .expect("chord chart should parse");
-    assert!(chart
-        .validate()
-        .iter()
-        .any(|warning| warning.contains("chord \"c1\" has inconsistent")));
+    assert!(
+        chart
+            .validate()
+            .iter()
+            .any(|warning| warning.contains("chord \"c1\" has inconsistent"))
+    );
 }
 
 #[test]
@@ -607,15 +613,22 @@ fn score_navigation_markers_round_trip_and_validate() {
         "#,
     )
     .expect("navigation chart should parse");
-    assert!(matches!(chart.structure[1], ScoreMarker::RepeatEnd { times: 2, .. }));
+    assert!(matches!(
+        chart.structure[1],
+        ScoreMarker::RepeatEnd { times: 2, .. }
+    ));
     assert!(chart.validate().is_empty());
 
     let serialized = serde_json::to_string(&chart).expect("navigation chart should serialize");
-    chart.structure.push(ScoreMarker::RepeatEnd { tick: 0, times: 1 });
-    assert!(chart
-        .validate()
-        .iter()
-        .any(|warning| warning.contains("repeat end must have times")));
+    chart
+        .structure
+        .push(ScoreMarker::RepeatEnd { tick: 0, times: 1 });
+    assert!(
+        chart
+            .validate()
+            .iter()
+            .any(|warning| warning.contains("repeat end must have times"))
+    );
     serde_json::from_str::<Chart>(&serialized).expect("navigation chart should reload");
 }
 
@@ -645,14 +658,29 @@ fn tempo_text_and_score_expressions_round_trip_and_validate() {
     )
     .expect("expression chart should parse");
     assert_eq!(chart.tempo_text[0].text, "Andante");
-    assert!(matches!(chart.expressions[0], ScoreExpression::Accelerando { .. }));
+    assert!(matches!(
+        chart.expressions[0],
+        ScoreExpression::Accelerando { .. }
+    ));
     assert!(chart.validate().is_empty());
 
     let serialized = serde_json::to_string(&chart).expect("expression chart should serialize");
-    let reloaded: Chart = serde_json::from_str(&serialized).expect("expression chart should reload");
-    assert_eq!(reloaded.tempo_text[0], TempoText { tick: 0, text: "Andante".into(), bpm: Some(80.0) });
+    let reloaded: Chart =
+        serde_json::from_str(&serialized).expect("expression chart should reload");
+    assert_eq!(
+        reloaded.tempo_text[0],
+        TempoText {
+            tick: 0,
+            text: "Andante".into(),
+            bpm: Some(80.0)
+        }
+    );
 
-    chart.tempo_text.push(TempoText { tick: 0, text: String::new(), bpm: None });
+    chart.tempo_text.push(TempoText {
+        tick: 0,
+        text: String::new(),
+        bpm: None,
+    });
     chart.expressions.push(ScoreExpression::Ritardando {
         start: 0,
         duration_ticks: 0,
@@ -660,8 +688,16 @@ fn tempo_text_and_score_expressions_round_trip_and_validate() {
         to_bpm: 90.0,
     });
     let warnings = chart.validate();
-    assert!(warnings.iter().any(|warning| warning.contains("empty label")));
-    assert!(warnings.iter().any(|warning| warning.contains("invalid range")));
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("empty label"))
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("invalid range"))
+    );
 }
 
 #[test]
@@ -763,18 +799,30 @@ fn score_event_ids_and_relationships_round_trip_and_validate() {
     .expect("relationship chart should parse");
 
     assert_eq!(chart.tracks[0].notes[0].id.as_deref(), Some("n1"));
-    assert_eq!(chart.tracks[0].ties[0], EventRelation { from: "n1".into(), to: "n2".into() });
+    assert_eq!(
+        chart.tracks[0].ties[0],
+        EventRelation {
+            from: "n1".into(),
+            to: "n2".into()
+        }
+    );
     assert!(chart.validate().is_empty());
 
     let serialized = serde_json::to_string(&chart).expect("relationship chart should serialize");
-    let reloaded: Chart = serde_json::from_str(&serialized).expect("relationship chart should reload");
+    let reloaded: Chart =
+        serde_json::from_str(&serialized).expect("relationship chart should reload");
     assert_eq!(reloaded.tracks[0].slurs.len(), 1);
 
-    chart.tracks[0].ties.push(EventRelation { from: "n2".into(), to: "missing".into() });
-    assert!(chart
-        .validate()
-        .iter()
-        .any(|warning| warning.contains("tie references an unknown event ID")));
+    chart.tracks[0].ties.push(EventRelation {
+        from: "n2".into(),
+        to: "missing".into(),
+    });
+    assert!(
+        chart
+            .validate()
+            .iter()
+            .any(|warning| warning.contains("tie references an unknown event ID"))
+    );
 }
 
 #[test]
@@ -829,7 +877,10 @@ fn chart_directory_loads_all_valid_charts() {
     let chart_files = std::fs::read_dir("charts")
         .expect("charts directory should exist")
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
         .count();
     assert_eq!(
         charts.len(),
@@ -843,7 +894,10 @@ fn chart_directory_loads_all_valid_charts() {
 /// The drum-only test chart hits every standard rock kit piece at least twice.
 fn drum_kit_workout_chart_covers_every_piece_at_least_twice() {
     let charts = load_charts();
-    let Some(chart) = charts.iter().find(|chart| chart.title == "Drum Kit Workout") else {
+    let Some(chart) = charts
+        .iter()
+        .find(|chart| chart.title == "Drum Kit Workout")
+    else {
         return;
     };
     let notes = chart.percussion_notes();

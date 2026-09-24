@@ -266,7 +266,9 @@ pub(crate) fn layout_track(chart: &Chart, track: &ChartTrack) -> NotationLayout 
     // Sounding tie chains and authored rests occupy ranges; infer silence only between them.
     let mut occupied = Vec::new();
     for chain in &ties {
-        let Some(&first) = chain.first() else { continue };
+        let Some(&first) = chain.first() else {
+            continue;
+        };
         let end = notes[first].start + resolved_duration_ticks(&notes, first, chart.resolution);
         occupied.push((notes[first].start, end, None));
     }
@@ -275,7 +277,10 @@ pub(crate) fn layout_track(chart: &Chart, track: &ChartTrack) -> NotationLayout 
             occupied.push((
                 note.start,
                 note.start + note.duration_ticks(chart.resolution),
-                Some(Rest { start: note.start, value: note.length }),
+                Some(Rest {
+                    start: note.start,
+                    value: note.length,
+                }),
             ));
         }
     }

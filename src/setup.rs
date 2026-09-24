@@ -537,7 +537,9 @@ pub(crate) fn bass_tuner_reading(
         .iter()
         .enumerate()
         .min_by(|(_, left), (_, right)| {
-            (pitch_hz - *left).abs().total_cmp(&(pitch_hz - *right).abs())
+            (pitch_hz - *left)
+                .abs()
+                .total_cmp(&(pitch_hz - *right).abs())
         })
         .map(|(index, target)| (index, *target))
         .unwrap_or((0, pitch_hz));

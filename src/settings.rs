@@ -12,7 +12,10 @@ pub(crate) fn initial_app_state() -> AppState {
 /// fixed guitar/bass/drums/vocals lineup so existing users see a familiar default. Device
 /// choices are preselected from `BAND_HERO_*_DEVICE` environment variables when available,
 /// matching the previous first-run behavior.
-fn default_slots(audio_devices: &[DeviceChoice], midi_devices: &[DeviceChoice]) -> Vec<InstrumentSlot> {
+fn default_slots(
+    audio_devices: &[DeviceChoice],
+    midi_devices: &[DeviceChoice],
+) -> Vec<InstrumentSlot> {
     let audio_device = |variable: &str| {
         let index = selected_device_index(audio_devices, None, variable);
         audio_devices.get(index).map(|device| device.id.clone())
@@ -23,7 +26,13 @@ fn default_slots(audio_devices: &[DeviceChoice], midi_devices: &[DeviceChoice]) 
     };
     let bass_tuning = if std::env::var("BAND_HERO_BASS_STRINGS").as_deref() == Ok("5") {
         Tuning {
-            strings: vec!["B0".into(), "E1".into(), "A1".into(), "D2".into(), "G2".into()],
+            strings: vec![
+                "B0".into(),
+                "E1".into(),
+                "A1".into(),
+                "D2".into(),
+                "G2".into(),
+            ],
         }
     } else {
         Tuning::default()
@@ -158,4 +167,3 @@ pub(crate) fn selected_device_index(
         })
         .unwrap_or(0)
 }
-

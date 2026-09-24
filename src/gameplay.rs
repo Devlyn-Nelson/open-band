@@ -206,12 +206,17 @@ fn bass_debug_details(instrument: Instrument, open_frequencies: &[f32], pitch_hz
         .iter()
         .enumerate()
         .min_by(|(_, left), (_, right)| {
-            (pitch_hz - *left).abs().total_cmp(&(pitch_hz - *right).abs())
+            (pitch_hz - *left)
+                .abs()
+                .total_cmp(&(pitch_hz - *right).abs())
         })
         .map(|(index, target)| (index, *target))
         .unwrap_or((0, pitch_hz));
     let cents = 1200.0 * (pitch_hz / target).log2();
-    format!("STRING      {}\nPITCH       {target:.2} Hz ({cents:+.1} cents)", string + 1)
+    format!(
+        "STRING      {}\nPITCH       {target:.2} Hz ({cents:+.1} cents)",
+        string + 1
+    )
 }
 
 pub(crate) fn move_notes(

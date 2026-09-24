@@ -145,24 +145,22 @@ pub(crate) fn instrument_navigation_command(
                 _ => {}
             }
         }
-        AppState::LatencyCalibration => {
-            match key {
-                KeyCode::ArrowUp | KeyCode::ArrowDown => {
-                    record_latency_tap(latency, time);
-                }
-                KeyCode::Escape => next_state.set(AppState::Setup),
-                KeyCode::Enter => {
-                    if let Some(latency) = latency.as_ref() {
-                        if latency.attempts > 0 {
-                            settings.latency_ms = latency.best_ms;
-                            save_settings(settings);
-                            next_state.set(AppState::Setup);
-                        }
+        AppState::LatencyCalibration => match key {
+            KeyCode::ArrowUp | KeyCode::ArrowDown => {
+                record_latency_tap(latency, time);
+            }
+            KeyCode::Escape => next_state.set(AppState::Setup),
+            KeyCode::Enter => {
+                if let Some(latency) = latency.as_ref() {
+                    if latency.attempts > 0 {
+                        settings.latency_ms = latency.best_ms;
+                        save_settings(settings);
+                        next_state.set(AppState::Setup);
                     }
                 }
-                _ => {}
             }
-        }
+            _ => {}
+        },
         AppState::ChartReview => match key {
             KeyCode::Enter => next_state.set(AppState::Songs),
             KeyCode::Escape => next_state.set(AppState::Home),

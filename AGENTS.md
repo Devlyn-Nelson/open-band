@@ -56,6 +56,9 @@ The worker performs detection off the Bevy thread. Bevy owns state transitions, 
 ## Change Discipline
 
 1. Identify the owning module before editing.
-2. Preserve the callback/worker/Bevy thread boundary.
-3. Add or update a focused test for detector, mapping, chart parsing, or settings behavior.
-4. Run the narrowest relevant command, then `cargo test` before handing off.
+2. Provide in line and function documentation for code.
+3. Preserve the callback/worker/Bevy thread boundary.
+4. Add or update a focused test for detector, mapping, chart parsing, or settings behavior.
+5. Run the narrowest relevant command, then `cargo test` before handing off.
+6. Update `README.md` when introducing new features or updating existing ones.
+7. Update `AGENTS.md` when changing, removing or adding to the project structure.

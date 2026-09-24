@@ -135,7 +135,11 @@ pub(crate) fn estimate_pitch_with_confidence(
 
 /// Convert an instrument pitch into its gameplay lane. `open_frequencies` is the
 /// instrument's actual configured tuning (ignored for `Percussion`/`Voice`).
-pub(crate) fn pitch_to_lane(instrument: Instrument, open_frequencies: &[f32], pitch_hz: f32) -> usize {
+pub(crate) fn pitch_to_lane(
+    instrument: Instrument,
+    open_frequencies: &[f32],
+    pitch_hz: f32,
+) -> usize {
     match instrument.kind {
         InstrumentKind::Percussion => 0,
         InstrumentKind::Voice => {
@@ -153,7 +157,10 @@ pub(crate) fn string_lane(open_frequencies: &[f32], pitch_hz: f32) -> usize {
         .iter()
         .enumerate()
         .min_by(|(_, left), (_, right)| {
-            (pitch_hz / **left).ln().abs().total_cmp(&(pitch_hz / **right).ln().abs())
+            (pitch_hz / **left)
+                .ln()
+                .abs()
+                .total_cmp(&(pitch_hz / **right).ln().abs())
         })
         .map_or(0, |(lane, _)| lane.min(LANES - 1))
 }

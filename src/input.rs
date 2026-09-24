@@ -1,6 +1,6 @@
 use super::{
-    AudioDetector, InputConfig, Instrument, InstrumentEvent, InstrumentKind,
-    InstrumentSlot, Kit, LANES, NotePhase, RECORDING_ENVIRONMENT_VARIABLE, pitch_to_lane,
+    AudioDetector, InputConfig, Instrument, InstrumentEvent, InstrumentKind, InstrumentSlot, Kit,
+    LANES, NotePhase, RECORDING_ENVIRONMENT_VARIABLE, pitch_to_lane,
 };
 use bevy::prelude::*;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -124,7 +124,11 @@ pub(crate) fn spawn_instrument_thread(
 }
 
 /// Open one CPAL input and attach the onset/pitch callback.
-fn open_audio_input(host: &cpal::Host, slot_index: usize, slot: &InstrumentSlot) -> Result<AudioInput, String> {
+fn open_audio_input(
+    host: &cpal::Host,
+    slot_index: usize,
+    slot: &InstrumentSlot,
+) -> Result<AudioInput, String> {
     let open_frequencies = slot.open_frequencies();
     let instrument = Instrument {
         slot: slot_index,
@@ -141,12 +145,20 @@ fn open_audio_input(host: &cpal::Host, slot_index: usize, slot: &InstrumentSlot)
     let (frame_sender, frame_receiver) = sync_channel(32);
 
     let stream = match supported.sample_format() {
-        cpal::SampleFormat::F32 => {
-            build_audio_stream::<f32>(&device, &config, channels, frame_sender.clone(), error_callback)
-        }
-        cpal::SampleFormat::I16 => {
-            build_audio_stream::<i16>(&device, &config, channels, frame_sender.clone(), error_callback)
-        }
+        cpal::SampleFormat::F32 => build_audio_stream::<f32>(
+            &device,
+            &config,
+            channels,
+            frame_sender.clone(),
+            error_callback,
+        ),
+        cpal::SampleFormat::I16 => build_audio_stream::<i16>(
+            &device,
+            &config,
+            channels,
+            frame_sender.clone(),
+            error_callback,
+        ),
         cpal::SampleFormat::U16 => {
             build_audio_stream::<u16>(&device, &config, channels, frame_sender, error_callback)
         }
@@ -155,11 +167,19 @@ fn open_audio_input(host: &cpal::Host, slot_index: usize, slot: &InstrumentSlot)
     .map_err(|error| error.to_string())?;
 
     stream.play().map_err(|error| error.to_string())?;
-    println!("Listening to slot {slot_index} ({:?}) on {device}", slot.kind);
+    println!(
+        "Listening to slot {slot_index} ({:?}) on {device}",
+        slot.kind
+    );
     Ok(AudioInput {
         _stream: stream,
         frames: frame_receiver,
-        detector: AudioDetector::new(slot.kind, &open_frequencies, slot.detector, config.sample_rate as f32),
+        detector: AudioDetector::new(
+            slot.kind,
+            &open_frequencies,
+            slot.detector,
+            config.sample_rate as f32,
+        ),
         instrument,
         open_frequencies,
     })
@@ -344,4 +364,3 @@ fn percussion_lane_for_trigger(kit: &Kit, note: u8) -> usize {
             piece.lane.map_or(spanning_lane, |lane| lane.min(LANES - 1))
         })
 }
-

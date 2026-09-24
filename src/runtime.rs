@@ -107,7 +107,11 @@ impl InstrumentSlot {
         self.tuning
             .as_ref()
             .and_then(|tuning| tuning.open_frequencies().ok())
-            .unwrap_or_else(|| Tuning::default().open_frequencies().expect("default tuning parses"))
+            .unwrap_or_else(|| {
+                Tuning::default()
+                    .open_frequencies()
+                    .expect("default tuning parses")
+            })
     }
 
     /// This slot's configured kit, falling back to the default kit if none is configured.
@@ -266,4 +270,3 @@ pub(crate) struct DebugText;
 pub(crate) struct InputConfig {
     pub(crate) slots: Vec<InstrumentSlot>,
 }
-

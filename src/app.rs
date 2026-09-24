@@ -102,7 +102,11 @@ pub(crate) fn run() {
         .add_systems(OnEnter(AppState::ChartGameplay), setup_chart_gameplay)
         .add_systems(
             Update,
-            (chart_gameplay_system, chart_menu_input, percussion_note_motion)
+            (
+                chart_gameplay_system,
+                chart_menu_input,
+                percussion_note_motion,
+            )
                 .run_if(in_state(AppState::ChartGameplay)),
         )
         .add_systems(OnExit(AppState::ChartGameplay), cleanup_chart_entities)
