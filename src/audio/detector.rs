@@ -1,5 +1,6 @@
 use crate::*;
 
+/// AI_CODE
 pub(crate) struct PolyphonicAudioDetector {
     sample_rate: f32,
     max_pitch_hz: f32,
@@ -9,6 +10,7 @@ pub(crate) struct PolyphonicAudioDetector {
     tracks: Vec<PolyphonicTrack>,
 }
 
+/// AI_CODE
 struct PolyphonicTrack {
     pitch_hz: f32,
     strength: f32,
@@ -17,6 +19,7 @@ struct PolyphonicTrack {
 }
 
 impl PolyphonicAudioDetector {
+    /// AI_CODE
     pub(crate) fn new(sample_rate: f32, max_pitch_hz: f32) -> Self {
         Self {
             sample_rate,
@@ -28,6 +31,7 @@ impl PolyphonicAudioDetector {
         }
     }
 
+    /// AI_CODE
     pub(crate) fn detect(&mut self, samples: impl Iterator<Item = f32>) -> Vec<DetectedNote> {
         self.samples.extend(samples);
         if self.samples.len() < 4096 {
@@ -118,6 +122,7 @@ impl PolyphonicAudioDetector {
     }
 }
 
+/// AI_CODE
 fn spectral_peaks(samples: &[f32], sample_rate: f32, threshold: f32) -> Vec<(f32, f32)> {
     let fft_size = samples.len().next_power_of_two() * 4;
     let mut planner = FftPlanner::new();
@@ -162,15 +167,18 @@ fn spectral_peaks(samples: &[f32], sample_rate: f32, threshold: f32) -> Vec<(f32
         .collect()
 }
 
+/// AI_CODE
 enum AudioDetectorKind {
     Mono(AudioOnsetDetector),
     Poly(PolyphonicAudioDetector),
     Bass(BassDetector),
 }
 
+/// AI_CODE
 pub(crate) struct AudioDetector(AudioDetectorKind);
 
 impl AudioDetector {
+    /// AI_CODE
     pub(crate) fn new(
         kind: InstrumentKind,
         open_frequencies: &[f32],
@@ -198,6 +206,7 @@ impl AudioDetector {
         }
     }
 
+    /// AI_CODE
     pub(crate) fn detect(&mut self, samples: impl Iterator<Item = f32>) -> Vec<DetectedNote> {
         match &mut self.0 {
             AudioDetectorKind::Mono(detector) => detector.detect_with_duration(samples),
@@ -207,6 +216,7 @@ impl AudioDetector {
     }
 }
 
+/// AI_CODE
 struct BassDetector {
     open_frequencies: Vec<f32>,
     mono: AudioOnsetDetector,
@@ -214,6 +224,7 @@ struct BassDetector {
 }
 
 impl BassDetector {
+    /// AI_CODE
     fn new(open_frequencies: Vec<f32>, sample_rate: f32) -> Self {
         Self {
             mono: AudioOnsetDetector {
@@ -227,6 +238,7 @@ impl BassDetector {
         }
     }
 
+    /// AI_CODE
     fn detect(&mut self, samples: impl Iterator<Item = f32>) -> Vec<DetectedNote> {
         let samples = samples.collect::<Vec<_>>();
         let mut events = self.mono.detect_with_duration(samples.iter().copied());
@@ -244,6 +256,7 @@ impl BassDetector {
     }
 }
 
+/// AI_CODE
 struct BassStringDetector {
     sample_rate: f32,
     targets: Vec<f32>,
@@ -256,7 +269,9 @@ struct BassStringDetector {
     last_event_sample: Option<usize>,
 }
 
+/// AI_CODE
 impl BassStringDetector {
+    /// AI_CODE
     fn new(sample_rate: f32, targets: Vec<f32>) -> Self {
         let count = targets.len();
         Self {
@@ -272,6 +287,7 @@ impl BassStringDetector {
         }
     }
 
+    /// AI_CODE
     fn detect(&mut self, samples: impl Iterator<Item = f32>) -> Vec<DetectedNote> {
         self.samples.extend(samples);
         if self.samples.len() < 4096 {
@@ -353,6 +369,7 @@ impl BassStringDetector {
     }
 }
 
+/// AI_CODE
 fn target_frequency_energy(samples: &[f32], sample_rate: f32, frequency: f32) -> f32 {
     let last = (samples.len() - 1).max(1) as f32;
     let (real, imaginary) =
@@ -371,6 +388,7 @@ fn target_frequency_energy(samples: &[f32], sample_rate: f32, frequency: f32) ->
     real.hypot(imaginary)
 }
 
+/// AI_CODE
 fn harmonic_energy(samples: &[f32], sample_rate: f32, fundamental_hz: f32) -> f32 {
     (1..=4)
         .map(|harmonic| {
@@ -379,6 +397,7 @@ fn harmonic_energy(samples: &[f32], sample_rate: f32, fundamental_hz: f32) -> f3
         .sum()
 }
 
+/// AI_CODE
 #[derive(Default)]
 pub(crate) struct AudioOnsetDetector {
     pub(crate) average: f32,
@@ -399,6 +418,7 @@ pub(crate) struct AudioOnsetDetector {
 }
 
 impl AudioOnsetDetector {
+    /// AI_CODE
     pub(crate) fn detect(&mut self, samples: impl Iterator<Item = f32>) -> Option<(f32, f32, f32)> {
         self.samples.extend(samples);
         if self.samples.len() < 4096 {
@@ -480,6 +500,7 @@ impl AudioOnsetDetector {
         }
     }
 
+    /// AI_CODE
     pub(crate) fn detect_with_duration(
         &mut self,
         samples: impl Iterator<Item = f32>,

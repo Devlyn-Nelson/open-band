@@ -26,6 +26,8 @@ pub(crate) struct GameplayEntity;
 
 #[derive(Resource, Default)]
 /// Latest event values shown in the live-session debug window.
+///
+/// AI_CODE
 pub(crate) struct DebugInputData {
     pub(crate) instrument: Option<Instrument>,
     /// The current instrument's real configured open-string frequencies, for the debug
@@ -46,6 +48,8 @@ pub(crate) struct DebugWindow;
 pub(crate) struct DebugText;
 
 /// Spawn the live highway and its diagnostic panel.
+///
+/// AI_CODE
 pub(crate) fn setup_gameplay(mut commands: Commands, debug: Res<DebugInputData>) {
     commands.spawn((Camera2d, GameplayEntity));
     commands.spawn((
@@ -121,6 +125,7 @@ pub(crate) fn setup_gameplay(mut commands: Commands, debug: Res<DebugInputData>)
     }
 }
 
+/// AI_CODE
 pub(crate) fn cleanup_gameplay(
     mut commands: Commands,
     entities: Query<Entity, With<GameplayEntity>>,
@@ -130,6 +135,7 @@ pub(crate) fn cleanup_gameplay(
     }
 }
 
+/// AI_CODE
 pub(crate) fn gameplay_menu_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut next_state: ResMut<NextState<AppState>>,
@@ -139,6 +145,7 @@ pub(crate) fn gameplay_menu_input(
     }
 }
 
+/// AI_CODE
 pub(crate) fn debug_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut visibility: Query<&mut Visibility, With<DebugWindow>>,
@@ -155,6 +162,7 @@ pub(crate) fn debug_input(
     };
 }
 
+/// AI_CODE
 pub(crate) fn receive_instrument_events(
     mut commands: Commands,
     stream: Res<InstrumentStream>,
@@ -173,23 +181,28 @@ pub(crate) fn receive_instrument_events(
             .slots
             .get(event.instrument.slot)
             .map_or_else(Vec::new, InstrumentSlot::open_frequencies);
-        debug.pitch_hz = event.pitch_hz;
-        debug.lane = Some(event.lane);
+        let lane = pitch_to_lane(
+            &event.instrument,
+            &debug.open_frequencies,
+            event.note.pitch_note(),
+        );
+        debug.pitch_hz = Some(event.note.pitch_note());
+        debug.lane = Some(lane);
         debug.strength = event.strength;
         debug.noise_floor = event.noise_floor;
         debug.duration_secs = event.duration_secs;
         if event.phase == NotePhase::Started {
             debug.event_count += 1;
-            let x = -360.0 + event.lane as f32 * 180.0;
+            let x = -360.0 + lane as f32 * 180.0;
             commands.spawn((
                 Sprite {
-                    color: instrument_color(event.instrument, event.lane),
+                    color: instrument_color(event.instrument, lane),
                     custom_size: Some(Vec2::new(108.0, 8.0)),
                     ..default()
                 },
                 Transform::from_xyz(x, 300.0 + event.strength * 10.0, 1.0),
                 FallingNote {
-                    lane: event.lane,
+                    lane: lane,
                     instrument: event.instrument,
                     spawned_at: time.elapsed_secs(),
                     duration_secs: 0.0,
@@ -200,7 +213,7 @@ pub(crate) fn receive_instrument_events(
             let mut latest_spawn = f32::NEG_INFINITY;
             for (mut note, mut sprite) in &mut notes {
                 if note.instrument == event.instrument
-                    && note.lane == event.lane
+                    && note.lane == lane
                     && note.spawned_at > latest_spawn
                 {
                     latest_spawn = note.spawned_at;
@@ -219,6 +232,7 @@ pub(crate) fn receive_instrument_events(
     *text = Text::new(debug_text(&debug));
 }
 
+/// AI_CODE
 fn debug_text(debug: &DebugInputData) -> String {
     let instrument = debug.instrument.map_or_else(
         || "NONE".into(),
@@ -243,6 +257,7 @@ fn debug_text(debug: &DebugInputData) -> String {
     )
 }
 
+/// AI_CODE
 fn bass_debug_details(instrument: Instrument, open_frequencies: &[f32], pitch_hz: f32) -> String {
     if instrument.kind != InstrumentKind::Strings || open_frequencies.is_empty() {
         return "STRING      --\nNOTE        --".into();
@@ -264,6 +279,7 @@ fn bass_debug_details(instrument: Instrument, open_frequencies: &[f32], pitch_hz
     )
 }
 
+/// AI_CODE
 pub(crate) fn move_notes(
     mut notes: Query<(&FallingNote, &Sprite, &mut Transform)>,
     time: Res<Time>,
@@ -275,6 +291,7 @@ pub(crate) fn move_notes(
     }
 }
 
+/// AI_CODE
 pub(crate) fn hit_notes(
     mut commands: Commands,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -304,6 +321,7 @@ pub(crate) fn hit_notes(
     }
 }
 
+/// AI_CODE
 pub(crate) fn lane_color(lane: usize) -> Color {
     match lane {
         0 => Color::srgb(0.95, 0.2, 0.25),
@@ -314,6 +332,7 @@ pub(crate) fn lane_color(lane: usize) -> Color {
     }
 }
 
+/// AI_CODE
 pub(crate) fn instrument_color(instrument: Instrument, lane: usize) -> Color {
     match instrument.kind {
         InstrumentKind::Strings => {

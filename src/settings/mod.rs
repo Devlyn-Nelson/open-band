@@ -5,6 +5,8 @@ pub(crate) const SETTINGS_DIRECTORY: &str = "open-band-settings";
 pub(crate) const SETTINGS_FILE: &str = "open-band-settings/settings.json";
 
 /// Which detector algorithm a `Strings` slot uses; irrelevant for other kinds.
+///
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum DetectorProfile {
@@ -15,6 +17,8 @@ pub(crate) enum DetectorProfile {
 }
 
 /// One configured physical instrument input. Any number of slots of any kind can exist.
+///
+/// AI_CODE
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct InstrumentSlot {
     pub(crate) kind: InstrumentKind,
@@ -37,6 +41,7 @@ fn default_detector_profile() -> DetectorProfile {
 }
 
 impl InstrumentSlot {
+    /// AI_CODE
     pub(crate) fn default_for(kind: InstrumentKind) -> Self {
         match kind {
             InstrumentKind::Strings => Self {
@@ -63,6 +68,7 @@ impl InstrumentSlot {
         }
     }
 
+    /// AI_CODE
     pub(crate) fn label(&self) -> String {
         match self.kind {
             InstrumentKind::Strings => {
@@ -77,6 +83,7 @@ impl InstrumentSlot {
         }
     }
 
+    /// AI_CODE
     pub(crate) fn open_frequencies(&self) -> Vec<f32> {
         self.tuning
             .as_ref()
@@ -88,11 +95,13 @@ impl InstrumentSlot {
             })
     }
 
+    /// AI_CODE
     pub(crate) fn kit_or_default(&self) -> Kit {
         self.kit.clone().unwrap_or_default()
     }
 }
 
+/// AI_CODE
 pub(crate) fn initial_app_state() -> AppState {
     if std::path::Path::new(SETTINGS_FILE).exists() {
         AppState::Home
@@ -105,6 +114,8 @@ pub(crate) fn initial_app_state() -> AppState {
 /// fixed guitar/bass/drums/vocals lineup so existing users see a familiar default. Device
 /// choices are preselected from `BAND_HERO_*_DEVICE` environment variables when available,
 /// matching the previous first-run behavior.
+///
+/// AI_CODE
 fn default_slots(
     audio_devices: &[DeviceChoice],
     midi_devices: &[DeviceChoice],
@@ -166,6 +177,7 @@ fn default_slots(
     ]
 }
 
+/// AI_CODE
 pub(crate) fn input_config_from_settings(settings: &PersistentSettings) -> InputConfig {
     let slots = if settings.slots.is_empty() {
         default_slots(&[], &[])
@@ -175,6 +187,7 @@ pub(crate) fn input_config_from_settings(settings: &PersistentSettings) -> Input
     InputConfig { slots }
 }
 
+/// AI_CODE
 pub(crate) fn scan_devices(settings: &PersistentSettings) -> DeviceSelection {
     let host = cpal::default_host();
     let audio_devices = host
@@ -226,6 +239,7 @@ pub(crate) fn scan_devices(settings: &PersistentSettings) -> DeviceSelection {
     }
 }
 
+/// AI_CODE
 pub(crate) fn load_settings() -> PersistentSettings {
     std::fs::read_to_string(SETTINGS_FILE)
         .ok()
@@ -233,6 +247,7 @@ pub(crate) fn load_settings() -> PersistentSettings {
         .unwrap_or_default()
 }
 
+/// AI_CODE
 pub(crate) fn save_settings(settings: &PersistentSettings) {
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
         std::fs::create_dir_all(SETTINGS_DIRECTORY)?;
@@ -245,6 +260,7 @@ pub(crate) fn save_settings(settings: &PersistentSettings) {
     }
 }
 
+/// AI_CODE
 pub(crate) fn selected_device_index(
     devices: &[DeviceChoice],
     saved: Option<&str>,

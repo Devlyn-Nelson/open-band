@@ -2,14 +2,24 @@ use super::{
     Articulation, AudioDetector, AudioOnsetDetector, BendSpec, Chart, ChartEvent, Clef,
     DetectorProfile, DeviceChoice, DynamicLevel, EventRelation, GraceKind, HarmonicKind,
     HiHatState, Instrument, InstrumentKind, KeyMode, KeySignature, MotionKind, NoteAttack,
-    NoteContent, NoteDynamics, NotePhase, NoteTransition, PercussionGrace, PerformanceHints,
-    PitchSpelling, PolyphonicAudioDetector, ScoreExpression, ScoreMarker, SnapInterval,
-    SyllableKind, TempoText, Tuning, VibratoKind, cents_error, cycle_track_kit, cycle_track_tuning,
-    default_clef, estimate_pitch, layout_track, load_charts, load_kit_library, load_tuning_library,
-    measures, new_track, pitch_to_lane, selected_device_index, slugify, snap_tick, string_lane,
+    NoteContent, NoteData, NoteDynamics, NotePhase, NoteTransition, PercussionGrace,
+    PerformanceHints, PitchSpelling, PolyphonicAudioDetector, ScoreExpression, ScoreMarker,
+    SnapInterval, SyllableKind, TempoText, Tuning, VibratoKind, cents_error, cycle_track_kit,
+    cycle_track_tuning, default_clef, estimate_pitch, layout_track, load_charts, load_kit_library,
+    load_tuning_library, measures, new_track, pitch_to_lane, selected_device_index, slugify,
+    snap_tick, string_lane,
 };
 use std::f32::consts::TAU;
 use std::path::Path;
+
+#[test]
+fn note_data_converts_pitch_to_nearest_midi_note() {
+    assert_eq!(NoteData::Midi(60).midi_note(), 60);
+    assert_eq!(NoteData::Pitch(440.0).midi_note(), 69);
+    assert_eq!(NoteData::Pitch(466.16).midi_note(), 70);
+    assert!((NoteData::Midi(69).pitch_note() - 440.0).abs() < 0.001);
+    assert_eq!(NoteData::Pitch(123.45).pitch_note(), 123.45);
+}
 
 #[test]
 /// Keeps the same pitch stable when its amplitude changes.
@@ -1739,7 +1749,7 @@ fn supplied_bass_recordings_detect_expected_open_strings() {
                 let bass5_open_frequencies = [30.87, 41.20, 55.00, 73.42, 98.00];
                 let mut detected_lanes = detected_pitches
                     .iter()
-                    .map(|pitch| pitch_to_lane(bass5, &bass5_open_frequencies, *pitch))
+                    .map(|pitch| pitch_to_lane(&bass5, &bass5_open_frequencies, *pitch))
                     .collect::<Vec<_>>();
                 detected_lanes.dedup();
                 if detected_lanes != expected_lanes {

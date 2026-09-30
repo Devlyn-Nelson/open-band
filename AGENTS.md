@@ -58,8 +58,10 @@ The worker performs detection off the Bevy thread. Bevy owns state transitions, 
 
 1. Identify the owning module before editing.
 2. Provide in line and function documentation for code.
-3. Preserve the callback/worker/Bevy thread boundary.
-4. Add or update a focused test for detector, mapping, chart parsing, or settings behavior.
-5. Run the narrowest relevant command, then `cargo test` before handing off.
-6. Update `README.md` when introducing new features or updating existing ones.
-7. Update `AGENTS.md` when changing, removing or adding to the project structure.
+3. Functions, Structures, and Enums create by non-human agents shall be marked with `AI_CODE` at the end of the header comments.
+4. Code additions or modifications by non-human agents to areas that where not written by non-human agents shall be marked with `\/ AI_CODE \/` above and `/\ AI_CODE /\` bellow the code snippet.
+5. Preserve the callback/worker/Bevy thread boundary.
+6. Add or update a focused test for detector, mapping, chart parsing, or settings behavior.
+7. Run the narrowest relevant command, then `cargo test` before handing off.
+8. Update `README.md` when introducing new features or updating existing ones.
+9. Update `AGENTS.md` when changing, removing or adding to the project structure.

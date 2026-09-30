@@ -1,5 +1,6 @@
 pub(crate) const RECORDING_ENVIRONMENT_VARIABLE: &str = "BAND_HERO_RECORDING";
 
+use crate::audio::NoteData;
 use crate::{
     AudioDetector, Instrument, InstrumentEvent, InstrumentKind, InstrumentSlot, Kit, LANES,
     NotePhase, pitch_to_lane,
@@ -20,6 +21,8 @@ use std::time::Duration;
 
 #[derive(Resource)]
 /// Shared event channel and lifetime handles for the input worker.
+///
+/// AI_CODE
 pub(crate) struct InstrumentStream {
     pub(crate) sender: Sender<InstrumentEvent>,
     pub(crate) events: Mutex<Receiver<InstrumentEvent>>,
@@ -28,6 +31,7 @@ pub(crate) struct InstrumentStream {
     pub(crate) started: bool,
 }
 
+/// AI_CODE
 pub(crate) struct AudioInput {
     pub(crate) _stream: cpal::Stream,
     pub(crate) frames: Receiver<Vec<f32>>,
@@ -37,6 +41,8 @@ pub(crate) struct AudioInput {
 }
 
 /// Open configured audio and MIDI inputs on a dedicated worker thread.
+///
+/// AI_CODE
 pub(crate) fn spawn_instrument_thread(
     sender: Sender<InstrumentEvent>,
     config: InputConfig,
@@ -102,7 +108,6 @@ pub(crate) fn spawn_instrument_thread(
                         &mut input.detector,
                         frame.into_iter(),
                         input.instrument,
-                        &input.open_frequencies,
                         &sender,
                     );
                 }
@@ -131,6 +136,8 @@ pub(crate) fn spawn_instrument_thread(
 }
 
 /// Open one CPAL input and attach the onset/pitch callback.
+///
+/// AI_CODE
 fn open_audio_input(
     host: &cpal::Host,
     slot_index: usize,
@@ -193,6 +200,8 @@ fn open_audio_input(
 }
 
 /// Build a typed CPAL callback that converts samples into normalized events.
+///
+/// AI_CODE
 fn build_audio_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -225,6 +234,8 @@ where
 }
 
 /// Read a mono 24-bit WAV file and feed it through the same detector as live audio.
+///
+/// AI_CODE
 fn run_recording_input(
     path: &str,
     slot_index: usize,
@@ -255,7 +266,6 @@ fn run_recording_input(
                 &mut detector,
                 std::iter::once(sample? as f32 / 8_388_608.0),
                 instrument,
-                &open_frequencies,
                 &sender,
             );
         }
@@ -267,19 +277,19 @@ fn run_recording_input(
 }
 
 /// Convert detector output into the event shape consumed by gameplay and calibration.
+///
+/// AI_CODE
 fn send_detected_events(
     detector: &mut AudioDetector,
     samples: impl Iterator<Item = f32>,
     instrument: Instrument,
-    open_frequencies: &[f32],
     sender: &Sender<InstrumentEvent>,
 ) {
     for detected in detector.detect(samples) {
         let _ = sender.send(InstrumentEvent {
             instrument,
-            lane: pitch_to_lane(instrument, open_frequencies, detected.pitch_hz),
             strength: detected.strength,
-            pitch_hz: Some(detected.pitch_hz),
+            note: NoteData::Pitch(detected.pitch_hz),
             noise_floor: detected.noise_floor,
             phase: detected.phase,
             duration_secs: detected.duration_secs,
@@ -287,6 +297,7 @@ fn send_detected_events(
     }
 }
 
+/// AI_CODE
 fn find_input_device(host: &cpal::Host, requested: Option<&str>) -> Result<cpal::Device, String> {
     if let Some(requested) = requested {
         if let Ok(id) = cpal::DeviceId::from_str(requested) {
@@ -308,6 +319,7 @@ fn find_input_device(host: &cpal::Host, requested: Option<&str>) -> Result<cpal:
     ))
 }
 
+/// AI_CODE
 fn open_midi_input(
     sender: Sender<InstrumentEvent>,
     slot_index: usize,
@@ -339,12 +351,10 @@ fn open_midi_input(
             "open-band-midi-input",
             move |_, message, _| {
                 if message.len() >= 3 && message[0] & 0xf0 == 0x90 && message[2] > 0 {
-                    let lane = percussion_lane_for_trigger(&kit, message[1]);
                     let _ = sender.send(InstrumentEvent {
                         instrument,
-                        lane,
                         strength: message[2] as f32 / 127.0,
-                        pitch_hz: None,
+                        note: NoteData::Midi(message[1]),
                         noise_floor: 0.0,
                         phase: NotePhase::Started,
                         duration_secs: 0.0,
@@ -361,6 +371,8 @@ fn open_midi_input(
 /// Resolves a raw MIDI note to a gameplay lane using the kit's configured pieces instead
 /// of a hardcoded note table. A `lane_span` piece (e.g. kick) uses a dedicated lane past
 /// the kit's regular lanes; an unrecognized note falls back to the same dedicated lane.
+///
+/// AI_CODE
 fn percussion_lane_for_trigger(kit: &Kit, note: u8) -> usize {
     let trigger = format!("midi:{note}");
     let spanning_lane = kit.lanes.min(LANES - 1);

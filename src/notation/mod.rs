@@ -1,6 +1,8 @@
 use super::*;
 
 /// One measure's tick span and the time signature in effect for it.
+///
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Measure {
     pub(crate) index: usize,
@@ -11,6 +13,7 @@ pub(crate) struct Measure {
 }
 
 impl Measure {
+    /// AI_CODE
     fn beat_ticks(&self, resolution: u32) -> u32 {
         (resolution * 4 / self.denominator.max(1) as u32).max(1)
     }
@@ -18,6 +21,8 @@ impl Measure {
 
 /// An inferred rest; rests are never stored in chart data (see todo.md Decision 3) —
 /// they're derived here from the gaps between notes.
+///
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Rest {
     pub(crate) start: u32,
@@ -25,6 +30,8 @@ pub(crate) struct Rest {
 }
 
 /// The standard note-value palette, largest first, used to greedily fill rest gaps.
+///
+/// AI_CODE
 const REST_VALUES: [NoteValue; 5] = [
     NoteValue::Whole,
     NoteValue::Half,
@@ -36,6 +43,8 @@ const REST_VALUES: [NoteValue; 5] = [
 /// A complete layout for one track: measures, tie chains, beam groups, and inferred
 /// rests. Produced independently of any rendering framework — the editor's sheet view
 /// and the gameplay overlay (Part C) both render from this same description.
+///
+/// AI_CODE
 pub(crate) struct NotationLayout {
     pub(crate) clef: Option<Clef>,
     pub(crate) key_signature: Option<KeySignature>,
@@ -53,6 +62,8 @@ pub(crate) struct NotationLayout {
 /// Picks a default clef from a track's kind/tuning; `Strings` uses the lowest string's
 /// pitch since `Strings` no longer distinguishes guitar from bass (see todo.md B4).
 /// Callers may override this per track once the editor exposes that as a setting.
+///
+/// AI_CODE
 pub(crate) fn default_clef(track: &ChartTrack) -> Option<Clef> {
     if track.clef.is_some() {
         return track.clef;
@@ -78,6 +89,7 @@ pub(crate) fn default_clef(track: &ChartTrack) -> Option<Clef> {
     }
 }
 
+/// AI_CODE
 fn tuplet_groups(notes: &[ChartEvent]) -> Vec<Vec<usize>> {
     let mut groups = Vec::new();
     let mut current = Vec::new();
@@ -105,6 +117,8 @@ fn tuplet_groups(notes: &[ChartEvent]) -> Vec<Vec<usize>> {
 
 /// Builds sequential measures from tick 0 through at least `end_tick`, using whichever
 /// `time_signature_map` entry is in effect at each measure's start.
+///
+/// AI_CODE
 pub(crate) fn measures(chart: &Chart, end_tick: u32) -> Vec<Measure> {
     let mut changes = chart.time_signature_map.clone();
     changes.sort_by_key(|change| change.start);
@@ -147,6 +161,8 @@ pub(crate) fn measures(chart: &Chart, end_tick: u32) -> Vec<Measure> {
 }
 
 /// Groups consecutive `tied` events into chains, in `track.notes` order.
+///
+/// AI_CODE
 fn tie_chains(notes: &[ChartEvent]) -> Vec<Vec<usize>> {
     let mut chains = Vec::new();
     let mut current = Vec::new();
@@ -168,6 +184,7 @@ fn tie_chains(notes: &[ChartEvent]) -> Vec<Vec<usize>> {
     chains
 }
 
+/// AI_CODE
 fn measure_containing(measures: &[Measure], tick: u32) -> Option<&Measure> {
     measures
         .iter()
@@ -176,6 +193,8 @@ fn measure_containing(measures: &[Measure], tick: u32) -> Option<&Measure> {
 
 /// Groups consecutive eighth/sixteenth notes that fall within the same beat into beams.
 /// A rest, a longer note, or a beat boundary breaks the run.
+///
+/// AI_CODE
 fn beam_groups(notes: &[ChartEvent], resolution: u32, measures: &[Measure]) -> Vec<Vec<usize>> {
     let mut groups = Vec::new();
     let mut current = Vec::new();
@@ -214,6 +233,8 @@ fn beam_groups(notes: &[ChartEvent], resolution: u32, measures: &[Measure]) -> V
 
 /// Fills `[gap_start, gap_end)` with the fewest standard rest symbols, splitting at any
 /// measure boundary the gap crosses so no rest spans a barline.
+///
+/// AI_CODE
 fn infer_rests(gap_start: u32, gap_end: u32, resolution: u32, measures: &[Measure]) -> Vec<Rest> {
     if gap_end <= gap_start {
         return Vec::new();
@@ -247,6 +268,8 @@ fn infer_rests(gap_start: u32, gap_end: u32, resolution: u32, measures: &[Measur
 /// Produces the full notation layout for one track: measures spanning its notes, tie
 /// chains, beam groups, and inferred rests filling the gaps between (and before/after)
 /// its notes.
+///
+/// AI_CODE
 pub(crate) fn layout_track(chart: &Chart, track: &ChartTrack) -> NotationLayout {
     let mut notes = track.notes.clone();
     notes.sort_by_key(|note| note.start);

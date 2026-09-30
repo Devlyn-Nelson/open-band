@@ -4,18 +4,21 @@ pub(crate) const OPEN_STRINGS_CHART: &str = include_str!("../../../charts/open-s
 pub(crate) const CHART_HIT_LINE_Y: f32 = -250.0;
 pub(crate) const CHART_NOTE_SPEED: f32 = 260.0;
 
+/// AI_CODE
 #[derive(Resource)]
 pub(crate) struct SongMenuSelection {
     pub(crate) selected: usize,
     pub(crate) charts: Vec<Chart>,
 }
 
+/// AI_CODE
 #[derive(Resource)]
 pub(crate) struct ChartSession {
     pub(crate) chart: Chart,
     pub(crate) started_at: f32,
 }
 
+/// AI_CODE
 #[derive(Resource, Default)]
 pub(crate) struct ChartStats {
     pub(crate) total_notes: usize,
@@ -25,6 +28,7 @@ pub(crate) struct ChartStats {
     pub(crate) timing_offsets_ms: Vec<f32>,
 }
 
+/// AI_CODE
 #[derive(Resource, Default)]
 pub(crate) struct ChartFeedback {
     pub(crate) message: String,
@@ -40,6 +44,7 @@ pub(crate) struct ChartEntity;
 #[derive(Component)]
 pub(crate) struct ChartCountdownText;
 
+/// AI_CODE
 #[derive(Component)]
 pub(crate) struct ChartNoteVisual {
     pub(crate) string: usize,
@@ -53,6 +58,8 @@ pub(crate) struct ChartNoteVisual {
 
 /// A percussion note rendered in the chart gameplay highway; visual only for now — hit
 /// detection/scoring against live MIDI input is not yet wired up (see todo.md A8).
+///
+/// AI_CODEv
 #[derive(Component)]
 pub(crate) struct PercussionNoteVisual {
     pub(crate) lane: Option<usize>,
@@ -67,6 +74,7 @@ pub(crate) struct ChartFeedbackText;
 #[derive(Component)]
 pub(crate) struct ChartReviewText;
 
+/// AI_CODE
 pub(crate) fn load_charts() -> Vec<Chart> {
     let mut paths = std::fs::read_dir("charts")
         .ok()
@@ -100,6 +108,7 @@ pub(crate) fn load_charts() -> Vec<Chart> {
     charts
 }
 
+/// AI_CODE
 pub(crate) fn setup_song_menu(mut commands: Commands) {
     commands.insert_resource(SongMenuSelection {
         selected: 0,
@@ -124,6 +133,7 @@ pub(crate) fn setup_song_menu(mut commands: Commands) {
     ));
 }
 
+/// AI_CODE
 pub(crate) fn song_menu_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut menu: ResMut<SongMenuSelection>,
@@ -154,6 +164,7 @@ pub(crate) fn song_menu_input(
     }
 }
 
+/// AI_CODE
 pub(crate) fn song_menu_display(
     menu: Res<SongMenuSelection>,
     mut text: Query<&mut Text, With<SongMenuText>>,
@@ -185,6 +196,7 @@ pub(crate) fn song_menu_display(
     ));
 }
 
+/// AI_CODE
 pub(crate) fn cleanup_song_menu(
     mut commands: Commands,
     entities: Query<Entity, With<ChartEntity>>,
@@ -194,6 +206,7 @@ pub(crate) fn cleanup_song_menu(
     }
 }
 
+/// AI_CODE
 pub(crate) fn setup_chart_countdown(
     mut commands: Commands,
     time: Res<Time>,
@@ -229,6 +242,7 @@ pub(crate) fn setup_chart_countdown(
     ));
 }
 
+/// AI_CODE
 pub(crate) fn chart_countdown_system(
     time: Res<Time>,
     session: Res<ChartSession>,
@@ -245,6 +259,7 @@ pub(crate) fn chart_countdown_system(
     }
 }
 
+/// AI_CODE
 pub(crate) fn setup_chart_gameplay(mut commands: Commands, session: Res<ChartSession>) {
     let notes = session.chart.string_notes();
     commands.spawn((Camera2d, ChartEntity));
@@ -350,6 +365,8 @@ pub(crate) fn setup_chart_gameplay(mut commands: Commands, session: Res<ChartSes
 /// Percussion tracks render as their own lane strip beside the string highway: a fixed
 /// lane count, shared-lane pieces tinted by `symbol`, and `lane_span` pieces (e.g. kick)
 /// as a full-width bar. Visual only for now — not yet wired to live hit detection/scoring.
+///
+/// AI_CODE
 fn spawn_percussion_visuals(commands: &mut Commands, chart: &Chart) {
     let percussion_notes = chart.percussion_notes();
     if percussion_notes.is_empty() {
@@ -409,6 +426,8 @@ fn spawn_percussion_visuals(commands: &mut Commands, chart: &Chart) {
 
 /// Named lane-span colors (e.g. a lane-spanning kick bar), matching the Clone Hero/Rock
 /// Band convention of a colored full-width bar. Unknown names fall back to a neutral tint.
+///
+/// AI_CODE
 fn lane_span_color(name: &str) -> Color {
     match name {
         "yellow" => Color::srgb(0.95, 0.85, 0.2),
@@ -424,6 +443,8 @@ fn lane_span_color(name: &str) -> Color {
 /// Broad default symbol catalog for shared-lane percussion pieces (Decision 4 in
 /// todo.md); unrecognized symbols fall back to a generic tint rather than blocking on a
 /// missing shape.
+///
+/// AI_CODE
 fn percussion_symbol_color(symbol: Option<&str>) -> Color {
     match symbol {
         Some("cymbal" | "crash" | "ride" | "hihat" | "china" | "splash") => {
@@ -436,6 +457,7 @@ fn percussion_symbol_color(symbol: Option<&str>) -> Color {
     }
 }
 
+/// AI_CODE
 pub(crate) fn percussion_note_motion(
     time: Res<Time>,
     session: Res<ChartSession>,
@@ -451,6 +473,7 @@ pub(crate) fn percussion_note_motion(
     }
 }
 
+/// AI_CODE
 pub(crate) fn chart_gameplay_system(
     mut commands: Commands,
     time: Res<Time>,
@@ -468,22 +491,16 @@ pub(crate) fn chart_gameplay_system(
     if let Ok(events) = stream.events.lock() {
         for event in events.try_iter() {
             if event.instrument.kind == InstrumentKind::Strings {
-                detected_events.push((
-                    event.phase,
-                    event.lane,
-                    event.pitch_hz.unwrap_or(0.0),
-                    event.duration_secs,
-                ));
+                detected_events.push((event.phase, event.note.pitch_note(), event.duration_secs));
             }
         }
     }
-    for (phase, lane, pitch, duration) in detected_events {
+    for (phase, pitch, duration) in detected_events {
         match phase {
             NotePhase::Started => {
                 let mut best_match = None;
                 for (entity, note, _, _) in &mut notes {
                     if !note.matched
-                        && lane == note.string
                         && (note.start - elapsed).abs() <= 0.25
                         && cents_error(pitch, note.pitch_hz).abs() <= 90.0
                     {
@@ -511,7 +528,7 @@ pub(crate) fn chart_gameplay_system(
             }
             NotePhase::Updated => {
                 for (_, mut note, _, _) in &mut notes {
-                    if note.matched && note.string == lane {
+                    if note.matched {
                         note.sustain_observed = note.sustain_observed.max(duration);
                     }
                 }
@@ -519,7 +536,7 @@ pub(crate) fn chart_gameplay_system(
             NotePhase::Ended => {
                 let mut ended = None;
                 for (entity, note, _, _) in &mut notes {
-                    if note.matched && note.string == lane {
+                    if note.matched {
                         if note.duration <= 0.0
                             || duration.max(note.sustain_observed) >= note.duration * 0.7
                         {
@@ -564,10 +581,12 @@ pub(crate) fn chart_gameplay_system(
     }
 }
 
+/// AI_CODE
 pub(crate) fn cents_error(actual_hz: f32, expected_hz: f32) -> f32 {
     1200.0 * (actual_hz / expected_hz).log2()
 }
 
+/// AI_CODE
 pub(crate) fn chart_menu_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut next_state: ResMut<NextState<AppState>>,
@@ -577,6 +596,7 @@ pub(crate) fn chart_menu_input(
     }
 }
 
+/// AI_CODE
 pub(crate) fn cleanup_chart_entities(
     mut commands: Commands,
     entities: Query<Entity, With<ChartEntity>>,
@@ -586,6 +606,7 @@ pub(crate) fn cleanup_chart_entities(
     }
 }
 
+/// AI_CODE
 pub(crate) fn setup_chart_review(mut commands: Commands, session: Res<ChartSession>) {
     commands.spawn((Camera2d, ChartReviewText));
     commands.spawn((
@@ -606,6 +627,7 @@ pub(crate) fn setup_chart_review(mut commands: Commands, session: Res<ChartSessi
     let _ = session;
 }
 
+/// AI_CODE
 pub(crate) fn chart_review_display(
     stats: Res<ChartStats>,
     session: Res<ChartSession>,
@@ -634,6 +656,7 @@ pub(crate) fn chart_review_display(
     ));
 }
 
+/// AI_CODE
 pub(crate) fn chart_review_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut next_state: ResMut<NextState<AppState>>,
@@ -645,6 +668,7 @@ pub(crate) fn chart_review_input(
     }
 }
 
+/// AI_CODE
 pub(crate) fn cleanup_chart_review(
     mut commands: Commands,
     entities: Query<Entity, With<ChartReviewText>>,

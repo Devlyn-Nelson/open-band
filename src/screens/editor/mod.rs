@@ -8,6 +8,7 @@ pub(crate) struct EditorCamera;
 #[derive(Component)]
 pub(crate) struct EditorText;
 
+/// AI_CODE
 pub(crate) struct EditorChartEntry {
     pub(crate) title: String,
     pub(crate) path: PathBuf,
@@ -15,6 +16,8 @@ pub(crate) struct EditorChartEntry {
 
 #[derive(Resource, Default)]
 /// The chart-picker shown before a document is open (see `EditorDocument`).
+///
+/// AI_CODE
 pub(crate) struct EditorBrowser {
     pub(crate) entries: Vec<EditorChartEntry>,
     pub(crate) selected: usize,
@@ -23,6 +26,8 @@ pub(crate) struct EditorBrowser {
 #[derive(Resource)]
 /// Tuning/kit libraries loaded once per editor session, shared by the track list's
 /// tuning/kit cycling.
+///
+/// AI_CODE
 pub(crate) struct EditorLibraries {
     pub(crate) tunings: Vec<NamedTuning>,
     pub(crate) kits: Vec<NamedKit>,
@@ -31,6 +36,8 @@ pub(crate) struct EditorLibraries {
 #[derive(Resource)]
 /// The chart currently open for editing. Its presence (vs. `EditorBrowser` alone) is what
 /// switches the Editor state between the chart picker and the track list.
+///
+/// AI_CODE
 pub(crate) struct EditorDocument {
     pub(crate) chart: Chart,
     pub(crate) path: Option<PathBuf>,
@@ -40,6 +47,7 @@ pub(crate) struct EditorDocument {
     pub(crate) status: String,
 }
 
+/// AI_CODE
 fn list_editable_charts() -> Vec<EditorChartEntry> {
     let mut paths = std::fs::read_dir("charts")
         .ok()
@@ -65,6 +73,7 @@ fn list_editable_charts() -> Vec<EditorChartEntry> {
         .collect()
 }
 
+/// AI_CODE
 fn new_chart_document() -> EditorDocument {
     EditorDocument {
         chart: Chart {
@@ -93,6 +102,7 @@ fn new_chart_document() -> EditorDocument {
     }
 }
 
+/// AI_CODE
 fn load_chart_document(path: &Path) -> Result<EditorDocument, String> {
     let contents = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     let chart = serde_json::from_str::<Chart>(&contents).map_err(|error| error.to_string())?;
@@ -106,6 +116,7 @@ fn load_chart_document(path: &Path) -> Result<EditorDocument, String> {
     })
 }
 
+/// AI_CODE
 pub(crate) fn new_track(kind: InstrumentKind) -> ChartTrack {
     ChartTrack {
         name: "New Track".into(),
@@ -126,6 +137,8 @@ pub(crate) fn new_track(kind: InstrumentKind) -> ChartTrack {
 }
 
 /// A filesystem-safe slug derived from a chart title, used as the save filename.
+///
+/// AI_CODE
 pub(crate) fn slugify(title: &str) -> String {
     let slug = title
         .to_lowercase()
@@ -150,6 +163,7 @@ pub(crate) fn slugify(title: &str) -> String {
     }
 }
 
+/// AI_CODE
 pub(crate) fn setup_editor(mut commands: Commands) {
     commands.insert_resource(EditorBrowser {
         entries: list_editable_charts(),
@@ -177,6 +191,7 @@ pub(crate) fn setup_editor(mut commands: Commands) {
     ));
 }
 
+/// AI_CODE
 pub(crate) fn cleanup_editor(
     mut commands: Commands,
     entities: Query<Entity, Or<(With<EditorCamera>, With<EditorText>)>>,
@@ -189,6 +204,7 @@ pub(crate) fn cleanup_editor(
     commands.remove_resource::<EditorLibraries>();
 }
 
+/// AI_CODE
 pub(crate) fn editor_browse_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut browser: ResMut<EditorBrowser>,
@@ -224,6 +240,7 @@ pub(crate) fn editor_browse_input(
     }
 }
 
+/// AI_CODE
 pub(crate) fn editor_browse_display(
     browser: Res<EditorBrowser>,
     mut text: Query<&mut Text, With<EditorText>>,
@@ -254,6 +271,7 @@ pub(crate) fn editor_browse_display(
     ));
 }
 
+/// AI_CODE
 pub(crate) fn cycle_track_tuning(track: &mut ChartTrack, library: &[NamedTuning], delta: i32) {
     if library.is_empty() || track.kind != InstrumentKind::Strings {
         return;
@@ -271,6 +289,7 @@ pub(crate) fn cycle_track_tuning(track: &mut ChartTrack, library: &[NamedTuning]
     track.tuning = Some(library[next].tuning());
 }
 
+/// AI_CODE
 pub(crate) fn cycle_track_kit(track: &mut ChartTrack, library: &[NamedKit], delta: i32) {
     if library.is_empty() || track.kind != InstrumentKind::Percussion {
         return;
@@ -288,6 +307,7 @@ pub(crate) fn cycle_track_kit(track: &mut ChartTrack, library: &[NamedKit], delt
     track.kit = Some(library[next].kit());
 }
 
+/// AI_CODE
 pub(crate) fn editor_tracks_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut keyboard_events: MessageReader<KeyboardInput>,
@@ -432,6 +452,7 @@ pub(crate) fn editor_tracks_input(
     }
 }
 
+/// AI_CODE
 pub(crate) fn editor_tracks_display(
     document: Res<EditorDocument>,
     mut text: Query<&mut Text, With<EditorText>>,

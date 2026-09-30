@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Resource)]
 /// Available devices and current choices in Input Setup.
+///
+/// AI_CODE
 pub(crate) struct DeviceSelection {
     pub(crate) audio_devices: Vec<DeviceChoice>,
     pub(crate) midi_devices: Vec<DeviceChoice>,
@@ -14,6 +16,8 @@ pub(crate) struct DeviceSelection {
 
 impl DeviceSelection {
     /// The device list a slot's device selection should cycle through.
+    ///
+    /// AI_CODE
     pub(crate) fn devices_for(&self, kind: InstrumentKind) -> &[DeviceChoice] {
         match kind {
             InstrumentKind::Percussion => &self.midi_devices,
@@ -24,6 +28,8 @@ impl DeviceSelection {
     /// The library preset name matching a slot's configured tuning/kit, if any (a slot
     /// loaded from an older settings file, or with a hand-edited tuning/kit, may not
     /// match a current library entry).
+    ///
+    /// AI_CODE
     pub(crate) fn preset_name_for(&self, slot: &InstrumentSlot) -> Option<&str> {
         match slot.kind {
             InstrumentKind::Strings => {
@@ -45,6 +51,7 @@ impl DeviceSelection {
     }
 }
 
+/// AI_CODE
 #[derive(Clone, Debug)]
 pub(crate) struct DeviceChoice {
     pub(crate) id: String,
@@ -53,6 +60,8 @@ pub(crate) struct DeviceChoice {
 
 #[derive(Resource, Serialize, Deserialize, Default, Debug)]
 /// Settings persisted between launches in `open-band-settings/settings.json`.
+///
+/// AI_CODE
 pub(crate) struct PersistentSettings {
     #[serde(default)]
     pub(crate) slots: Vec<InstrumentSlot>,
@@ -67,6 +76,8 @@ pub(crate) struct DeviceSelectionCamera;
 
 #[derive(Resource)]
 /// Signal and tuner state displayed during instrument calibration.
+///
+/// AI_CODE
 pub(crate) struct Calibration {
     /// Index into the configured `InstrumentSlot` list.
     pub(crate) selected: usize,
@@ -87,6 +98,8 @@ pub(crate) struct CalibrationCamera;
 
 #[derive(Resource)]
 /// Timing measurements collected by the latency calibration screen.
+///
+/// AI_CODE
 pub(crate) struct LatencyCalibration {
     pub(crate) started_at: f32,
     pub(crate) best_ms: Option<f32>,
@@ -105,6 +118,7 @@ pub(crate) struct LatencyEntity;
 #[derive(Component)]
 pub(crate) struct LatencyCamera;
 
+/// AI_CODE
 pub(crate) fn setup_device_selection(mut commands: Commands) {
     commands.spawn((Camera2d, DeviceSelectionCamera));
     commands.spawn((
@@ -124,6 +138,7 @@ pub(crate) fn setup_device_selection(mut commands: Commands) {
     ));
 }
 
+/// AI_CODE
 pub(crate) fn device_selection_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut selection: ResMut<DeviceSelection>,
@@ -197,6 +212,8 @@ pub(crate) fn device_selection_input(
 
 /// Cycles the focused `Percussion` slot's kit among the loaded `kits/` library, starting
 /// from whichever library entry currently matches (or the start of the list).
+///
+/// AI_CODE
 fn cycle_slot_kit(selection: &mut DeviceSelection, delta: i32) {
     if selection.kit_library.is_empty() {
         return;
@@ -226,6 +243,8 @@ fn cycle_slot_kit(selection: &mut DeviceSelection, delta: i32) {
 
 /// Cycles the focused `Strings` slot's tuning among the loaded `tunings/` library,
 /// starting from whichever library entry currently matches (or the start of the list).
+///
+/// AI_CODE
 fn cycle_slot_tuning(selection: &mut DeviceSelection, delta: i32) {
     if selection.tuning_library.is_empty() {
         return;
@@ -254,6 +273,8 @@ fn cycle_slot_tuning(selection: &mut DeviceSelection, delta: i32) {
 }
 
 /// Cycles the focused slot's device selection among the device list matching its kind.
+///
+/// AI_CODE
 fn cycle_slot_device(selection: &mut DeviceSelection, delta: i32) {
     let Some(slot) = selection.slots.get(selection.focus).cloned() else {
         return;
@@ -273,6 +294,7 @@ fn cycle_slot_device(selection: &mut DeviceSelection, delta: i32) {
     }
 }
 
+/// AI_CODE
 pub(crate) fn commit_device_selection(
     selection: &DeviceSelection,
     stream: &mut InstrumentStream,
@@ -301,6 +323,7 @@ pub(crate) fn commit_device_selection(
     next_state.set(AppState::Setup);
 }
 
+/// AI_CODE
 pub(crate) fn device_selection_display(
     selection: Res<DeviceSelection>,
     mut text: Query<&mut Text, With<DeviceSelectionText>>,
@@ -349,6 +372,7 @@ pub(crate) fn device_selection_display(
     ));
 }
 
+/// AI_CODE
 pub(crate) fn cleanup_device_selection(
     mut commands: Commands,
     entities: Query<Entity, Or<(With<DeviceSelectionText>, With<DeviceSelectionCamera>)>>,
@@ -358,6 +382,7 @@ pub(crate) fn cleanup_device_selection(
     }
 }
 
+/// AI_CODE
 pub(crate) fn setup_calibration(mut commands: Commands) {
     commands.spawn((Camera2d, CalibrationCamera));
     commands.spawn((
@@ -386,6 +411,7 @@ pub(crate) fn setup_calibration(mut commands: Commands) {
     ));
 }
 
+/// AI_CODE
 pub(crate) fn setup_latency_calibration(
     mut commands: Commands,
     time: Res<Time>,
@@ -436,6 +462,7 @@ pub(crate) fn setup_latency_calibration(
     ));
 }
 
+/// AI_CODE
 pub(crate) fn latency_calibration_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut latency: ResMut<LatencyCalibration>,
@@ -465,6 +492,7 @@ pub(crate) fn latency_calibration_input(
     }
 }
 
+/// AI_CODE
 pub(crate) fn latency_calibration_display(
     latency: Res<LatencyCalibration>,
     time: Res<Time>,
@@ -492,6 +520,7 @@ pub(crate) fn latency_calibration_display(
     ));
 }
 
+/// AI_CODE
 pub(crate) fn cleanup_latency_calibration(
     mut commands: Commands,
     entities: Query<
@@ -509,6 +538,7 @@ pub(crate) fn cleanup_latency_calibration(
     }
 }
 
+/// AI_CODE
 pub(crate) fn calibration_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut next_state: ResMut<NextState<AppState>>,
@@ -554,11 +584,12 @@ pub(crate) fn calibration_input(
             calibration.level = event.strength;
             calibration.peak = calibration.peak.max(event.strength);
             calibration.samples += 1;
-            calibration.last_pitch_hz = event.pitch_hz;
+            calibration.last_pitch_hz = Some(event.note.pitch_note());
         }
     }
 }
 
+/// AI_CODE
 pub(crate) fn calibration_display(
     calibration: Res<Calibration>,
     selection: Res<DeviceSelection>,
@@ -607,6 +638,7 @@ pub(crate) fn calibration_display(
     }
 }
 
+/// AI_CODE
 pub(crate) fn cleanup_calibration(
     mut commands: Commands,
     entities: Query<
@@ -623,6 +655,7 @@ pub(crate) fn cleanup_calibration(
     }
 }
 
+/// AI_CODE
 pub(crate) fn bass_tuner_reading(
     kind: InstrumentKind,
     tuning: Option<&Tuning>,
@@ -663,6 +696,7 @@ pub(crate) fn bass_tuner_reading(
     )
 }
 
+/// AI_CODE
 pub(crate) fn instrument_name(kind: InstrumentKind, strings: u8) -> String {
     match kind {
         InstrumentKind::Strings => format!("STRINGS ({strings}-STRING)"),

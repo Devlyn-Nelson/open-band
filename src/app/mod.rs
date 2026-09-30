@@ -5,6 +5,8 @@ pub(crate) use state::*;
 use super::*;
 
 /// Build and run the Bevy application.
+///
+/// AI_CODE
 pub(crate) fn run() {
     // Load persisted choices before scanning devices so saved IDs can be preselected.
     let (sender, receiver) = mpsc::channel();
@@ -124,7 +126,6 @@ pub(crate) fn run() {
             chart_review_display.run_if(in_state(AppState::ChartReview)),
         )
         .add_systems(OnExit(AppState::ChartReview), cleanup_chart_review)
-        .add_systems(Update, instrument_navigation)
         .add_systems(OnEnter(AppState::Gameplay), setup_gameplay)
         .add_systems(
             Update,

@@ -8,32 +8,78 @@ use super::InstrumentKind;
 #[derive(Clone, Copy, Debug, PartialEq)]
 /// A configured instrument input: which slot it came from, its kind, and (for `Strings`)
 /// its string count. Any number of slots of any kind may be configured at once.
+///
+/// AI_CODE
 pub(crate) struct Instrument {
     pub(crate) slot: usize,
     pub(crate) kind: InstrumentKind,
     pub(crate) strings: u8,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug)]
-/// Normalized input event sent from an audio or MIDI callback to Bevy.
-pub(crate) struct InstrumentEvent {
-    pub(crate) instrument: Instrument,
-    pub(crate) lane: usize,
-    pub(crate) strength: f32,
-    pub(crate) pitch_hz: Option<f32>,
-    pub(crate) noise_floor: f32,
-    pub(crate) phase: NotePhase,
-    pub(crate) duration_secs: f32,
+pub enum NoteData {
+    Midi(u8),
+    Pitch(f32),
 }
 
+/// AI_CODE
+impl NoteData {
+    /// Returns the stored MIDI note, or converts a frequency to its nearest MIDI note.
+    ///
+    /// The conversion uses A4 as the reference: 440 Hz is MIDI note 69. Each octave
+    /// contains 12 semitones, so `log2(frequency / 440)` gives the octave offset from
+    /// A4; multiplying by 12 converts that offset to semitones. The result is rounded
+    /// to the nearest semitone and clamped to MIDI's 0–127 note range.
+    ///
+    /// AI_CODE
+    pub fn midi_note(self) -> u8 {
+        match self {
+            Self::Midi(note) => note,
+            Self::Pitch(frequency_hz) => (69.0 + 12.0 * (frequency_hz / 440.0).log2())
+                .round()
+                .clamp(0.0, 127.0) as u8,
+        }
+    }
+
+    /// Returns the stored frequency in Hz, or converts a MIDI note to its frequency.
+    ///
+    /// The conversion uses A4 as the reference: MIDI note 69 is 440 Hz. Dividing the
+    /// note offset from 69 by 12 converts semitone distance to octaves; raising 2 to
+    /// that power scales the reference frequency by the corresponding octave ratio.
+    ///
+    /// AI_CODE
+    pub fn pitch_note(self) -> f32 {
+        match self {
+            Self::Midi(note) => 440.0 * 2.0_f32.powf((note as f32 - 69.0) / 12.0),
+            Self::Pitch(frequency_hz) => frequency_hz,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+/// Normalized input event sent from an audio or MIDI callback to Bevy.
+///
+/// AI_CODE
+pub struct InstrumentEvent {
+    pub instrument: Instrument,
+    pub strength: f32,
+    pub note: NoteData,
+    pub noise_floor: f32,
+    pub phase: NotePhase,
+    pub duration_secs: f32,
+}
+
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NotePhase {
+pub enum NotePhase {
     Started,
     Updated,
     Ended,
 }
 
-pub(crate) struct DetectedNote {
+/// AI_CODE
+pub struct DetectedNote {
     pub(crate) pitch_hz: f32,
     pub(crate) strength: f32,
     pub(crate) noise_floor: f32,
@@ -46,10 +92,13 @@ pub(crate) struct DetectedNote {
 pub(crate) const CONFIDENT_PITCH_THRESHOLD: f32 = 0.75;
 
 /// Estimate a fundamental frequency with a normalized YIN-style period search.
+///
+/// AI_CODE
 pub(crate) fn estimate_pitch(samples: &[f32], sample_rate: f32) -> Option<f32> {
     estimate_pitch_in_range(samples, sample_rate, 30.0, 1400.0)
 }
 
+/// AI_CODE
 fn estimate_pitch_in_range(
     samples: &[f32],
     sample_rate: f32,
@@ -62,6 +111,8 @@ fn estimate_pitch_in_range(
 
 /// Estimate a fundamental frequency along with a 0..1 confidence score, where
 /// 1.0 means the window was nearly perfectly periodic at the chosen lag.
+///
+/// AI_CODE
 pub(crate) fn estimate_pitch_with_confidence(
     samples: &[f32],
     sample_rate: f32,
@@ -140,8 +191,10 @@ pub(crate) fn estimate_pitch_with_confidence(
 
 /// Convert an instrument pitch into its gameplay lane. `open_frequencies` is the
 /// instrument's actual configured tuning (ignored for `Percussion`/`Voice`).
+///
+/// AI_CODE
 pub(crate) fn pitch_to_lane(
-    instrument: Instrument,
+    instrument: &Instrument,
     open_frequencies: &[f32],
     pitch_hz: f32,
 ) -> usize {
@@ -157,6 +210,8 @@ pub(crate) fn pitch_to_lane(
 }
 
 /// Map a string-instrument pitch to the nearest lane in its actual configured tuning.
+///
+/// AI_CODE
 pub(crate) fn string_lane(open_frequencies: &[f32], pitch_hz: f32) -> usize {
     open_frequencies
         .iter()

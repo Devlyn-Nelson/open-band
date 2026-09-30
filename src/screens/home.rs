@@ -2,6 +2,8 @@ use crate::*;
 
 #[derive(Resource, Default)]
 /// Selection state for the Home and Set Up menus.
+///
+/// AI_CODE
 pub(crate) struct MenuSelection {
     pub(crate) home_selected: usize,
     pub(crate) setup_selected: usize,
@@ -9,13 +11,19 @@ pub(crate) struct MenuSelection {
 
 #[derive(Component)]
 /// Text node used by the Home and Set Up menus.
+///
+/// AI_CODE
 pub(crate) struct MenuText;
 
 #[derive(Component)]
 /// Camera owned by a menu screen.
+///
+/// AI_CODE
 pub(crate) struct MenuCamera;
 
 /// Spawn the Home screen.
+///
+/// AI_CODE
 pub(crate) fn setup_home(mut commands: Commands) {
     // Create the two-entry application landing screen.
     commands.spawn((Camera2d, MenuCamera));
@@ -37,6 +45,8 @@ pub(crate) fn setup_home(mut commands: Commands) {
 }
 
 /// Spawn the Set Up screen.
+///
+/// AI_CODE
 pub(crate) fn setup_setup(mut commands: Commands) {
     // Create the submenu for all configuration tools.
     commands.spawn((Camera2d, MenuCamera));
@@ -58,6 +68,8 @@ pub(crate) fn setup_setup(mut commands: Commands) {
 }
 
 /// Navigate Home and open Live Session or Set Up.
+///
+/// AI_CODE
 pub(crate) fn home_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut menu: ResMut<MenuSelection>,
@@ -94,6 +106,8 @@ pub(crate) fn home_input(
 }
 
 /// Render the selected Home destination.
+///
+/// AI_CODE
 pub(crate) fn home_display(menu: Res<MenuSelection>, mut text: Query<&mut Text, With<MenuText>>) {
     // Keep the highlighted Home option synchronized with keyboard navigation.
     let Ok(mut text) = text.single_mut() else {
@@ -121,6 +135,8 @@ pub(crate) fn home_display(menu: Res<MenuSelection>, mut text: Query<&mut Text, 
 }
 
 /// Navigate Set Up and open a setup tool or Home.
+///
+/// AI_CODE
 pub(crate) fn setup_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut menu: ResMut<MenuSelection>,
@@ -161,6 +177,8 @@ pub(crate) fn setup_input(
 }
 
 /// Render the selected setup tool.
+///
+/// AI_CODE
 pub(crate) fn setup_display(menu: Res<MenuSelection>, mut text: Query<&mut Text, With<MenuText>>) {
     // Render the four setup destinations and their selection marker.
     let Ok(mut text) = text.single_mut() else {
@@ -188,6 +206,8 @@ pub(crate) fn setup_display(menu: Res<MenuSelection>, mut text: Query<&mut Text,
 }
 
 /// Despawn the shared menu camera and text entities.
+///
+/// AI_CODE
 pub(crate) fn cleanup_menu(
     mut commands: Commands,
     entities: Query<Entity, Or<(With<MenuText>, With<MenuCamera>)>>,

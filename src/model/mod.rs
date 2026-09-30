@@ -1,6 +1,7 @@
 use serde::{Deserialize, Deserializer, Serialize, de};
 use std::fmt;
 
+/// AI_CODE
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NoteDisplayMode {
@@ -9,10 +10,13 @@ pub(crate) enum NoteDisplayMode {
     Both,
 }
 
+/// AI_CODE
 pub(crate) const CHART_NOTE_DISPLAY: NoteDisplayMode = NoteDisplayMode::Both;
 
 /// Generic instrument category a chart track belongs to; string count, kit layout, and
 /// vocal range are all data (`Tuning`/`Kit`/`VocalRange`), not separate kinds.
+///
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum InstrumentKind {
@@ -21,6 +25,7 @@ pub(crate) enum InstrumentKind {
     Voice,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Clef {
@@ -30,6 +35,7 @@ pub(crate) enum Clef {
     Tenor,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum KeyMode {
@@ -37,6 +43,7 @@ pub(crate) enum KeyMode {
     Minor,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct KeySignature {
     /// Number of sharps (positive) or flats (negative), from -7 through 7.
@@ -51,6 +58,8 @@ fn default_key_mode() -> KeyMode {
 
 /// The notated rhythmic value of an event, expressed the way musicians say it: `1` for a
 /// whole note, `2` for a half, `4` for a quarter, `8` for an eighth, `16` for a sixteenth.
+///
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NoteValue {
     Whole,
@@ -61,6 +70,7 @@ pub(crate) enum NoteValue {
 }
 
 impl NoteValue {
+    /// AI_CODE
     pub(crate) fn ticks(self, resolution: u32) -> u32 {
         match self {
             NoteValue::Whole => resolution * 4,
@@ -76,9 +86,13 @@ impl NoteValue {
 /// (todo.md B3). Reuses `NoteValue` directly since both are the same whole/half/quarter/
 /// eighth/sixteenth palette; snapping only needs `resolution`, not `bpm`, so it stays
 /// correct across tempo changes.
+///
+/// AI_CODE
 pub(crate) type SnapInterval = NoteValue;
 
 /// Rounds a tick position to the nearest multiple of `interval`'s tick length.
+///
+/// AI_CODE
 pub(crate) fn snap_tick(tick: u32, interval: SnapInterval, resolution: u32) -> u32 {
     let step = interval.ticks(resolution).max(1);
     let remainder = tick % step;
@@ -89,6 +103,7 @@ pub(crate) fn snap_tick(tick: u32, interval: SnapInterval, resolution: u32) -> u
     }
 }
 
+/// AI_CODE
 impl<'de> Deserialize<'de> for NoteValue {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -107,6 +122,7 @@ impl<'de> Deserialize<'de> for NoteValue {
     }
 }
 
+/// AI_CODE
 impl Serialize for NoteValue {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -123,6 +139,7 @@ impl Serialize for NoteValue {
     }
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum NoteDynamics {
@@ -131,6 +148,7 @@ pub(crate) enum NoteDynamics {
     Ghost,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum DynamicLevel {
@@ -143,6 +161,7 @@ pub(crate) enum DynamicLevel {
     Fff,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Articulation {
@@ -154,6 +173,7 @@ pub(crate) enum Articulation {
     Grace,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum GraceKind {
@@ -161,6 +181,7 @@ pub(crate) enum GraceKind {
     Appoggiatura,
 }
 
+/// AI_CODE
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct GraceSpec {
     pub(crate) kind: GraceKind,
@@ -172,6 +193,7 @@ pub(crate) struct GraceSpec {
     pub(crate) order: u16,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum StemDirection {
@@ -180,6 +202,7 @@ pub(crate) enum StemDirection {
     Auto,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PercussionGrace {
@@ -187,6 +210,7 @@ pub(crate) enum PercussionGrace {
     Drag,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PercussionTechnique {
@@ -194,6 +218,7 @@ pub(crate) enum PercussionTechnique {
     CymbalChoke,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Sticking {
@@ -201,6 +226,7 @@ pub(crate) enum Sticking {
     Left,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum HiHatState {
@@ -209,6 +235,7 @@ pub(crate) enum HiHatState {
     Pedal,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum HarmonicKind {
@@ -217,6 +244,7 @@ pub(crate) enum HarmonicKind {
     Pinch,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum VibratoKind {
@@ -225,6 +253,7 @@ pub(crate) enum VibratoKind {
     Narrow,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Tuplet {
     pub(crate) actual: u16,
@@ -232,6 +261,7 @@ pub(crate) struct Tuplet {
 }
 
 impl Tuplet {
+    /// AI_CODE
     pub(crate) fn valid(self) -> bool {
         self.actual > 0 && self.normal > 0 && self.actual != self.normal
     }
@@ -243,6 +273,7 @@ impl Default for NoteDynamics {
     }
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum NoteAttack {
@@ -250,6 +281,7 @@ pub(crate) enum NoteAttack {
     Tap,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum NoteTransition {
@@ -258,6 +290,7 @@ pub(crate) enum NoteTransition {
     Slide,
 }
 
+/// AI_CODE
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct BendSpec {
     #[serde(default)]
@@ -268,6 +301,7 @@ pub(crate) struct BendSpec {
     pub(crate) points: Vec<BendPoint>,
 }
 
+/// AI_CODE
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct BendPoint {
     /// Normalized position through the event, from 0.0 to 1.0.
@@ -275,12 +309,14 @@ pub(crate) struct BendPoint {
     pub(crate) semitones: f32,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum MotionKind {
     Trill,
 }
 
+/// AI_CODE
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct PitchMotion {
     pub(crate) kind: MotionKind,
@@ -289,6 +325,8 @@ pub(crate) struct PitchMotion {
 
 /// Optional Open Band instructions for turning a written event into a playable target.
 /// These are deliberately separate from score pitch, rhythm, spelling, and notation.
+///
+/// AI_CODE
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct PerformanceHints {
     #[serde(default)]
@@ -325,6 +363,8 @@ pub(crate) struct PerformanceHints {
 
 /// Written pitch spelling retained alongside the sounding MIDI value so enharmonic names
 /// such as C-sharp and D-flat remain distinguishable to the notation layer.
+///
+/// AI_CODE
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PitchSpelling {
     pub(crate) step: char,
@@ -333,6 +373,8 @@ pub(crate) struct PitchSpelling {
 }
 
 /// A tempo change at a tick position; `tempo_map[0].start` should be `0`.
+///
+/// AI_CODE
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub(crate) struct TempoChange {
     pub(crate) start: u32,
@@ -340,6 +382,8 @@ pub(crate) struct TempoChange {
 }
 
 /// A time-signature change at a tick position; `time_signature_map[0].start` should be `0`.
+///
+/// AI_CODE
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub(crate) struct TimeSignatureChange {
     pub(crate) start: u32,
@@ -347,6 +391,7 @@ pub(crate) struct TimeSignatureChange {
     pub(crate) denominator: u8,
 }
 
+/// AI_CODE
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct TempoText {
     pub(crate) tick: u32,
@@ -355,6 +400,7 @@ pub(crate) struct TempoText {
     pub(crate) bpm: Option<f32>,
 }
 
+/// AI_CODE
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum ScoreExpression {
@@ -381,6 +427,8 @@ pub(crate) enum ScoreExpression {
 }
 
 /// Written score navigation markers. Runtime playback expands these into a linear sequence.
+///
+/// AI_CODE
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum ScoreMarker {
@@ -396,6 +444,7 @@ pub(crate) enum ScoreMarker {
     Rehearsal { tick: u32, label: String },
 }
 
+/// AI_CODE
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Chart {
     pub(crate) version: u8,
@@ -415,12 +464,15 @@ pub(crate) struct Chart {
 
 /// Ordered, low-string-first open-string notes (octave-qualified, e.g. `"B0"`). Covers any
 /// string count or tuning without code changes.
+///
+/// AI_CODE
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Tuning {
     pub(crate) strings: Vec<String>,
 }
 
 impl Tuning {
+    /// AI_CODE
     pub(crate) fn open_midi(&self) -> Result<Vec<u8>, String> {
         self.strings
             .iter()
@@ -430,6 +482,8 @@ impl Tuning {
 
     /// The real open-string frequencies for this tuning, used for lane assignment and
     /// per-string detection instead of guessing from a string count.
+    ///
+    /// AI_CODE
     pub(crate) fn open_frequencies(&self) -> Result<Vec<f32>, String> {
         Ok(self
             .open_midi()?
@@ -450,6 +504,8 @@ impl Default for Tuning {
 
 /// A single physical piece in a percussion kit; pieces are referenced by `name` from chart
 /// notes, not by index, so reordering a kit never invalidates existing notes.
+///
+/// AI_CODE
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct KitPiece {
     pub(crate) name: String,
@@ -464,6 +520,8 @@ pub(crate) struct KitPiece {
 
 /// A percussion kit: a fixed lane count plus named pieces, some sharing a lane
 /// (distinguished by `symbol`) and some spanning all lanes (`lane_span`, e.g. a kick).
+///
+/// AI_CODE
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Kit {
     pub(crate) lanes: usize,
@@ -471,6 +529,7 @@ pub(crate) struct Kit {
 }
 
 impl Kit {
+    /// AI_CODE
     fn piece(&self, name: &str) -> Option<&KitPiece> {
         self.pieces.iter().find(|piece| piece.name == name)
     }
@@ -479,6 +538,8 @@ impl Kit {
 impl Default for Kit {
     /// Last-resort fallback when no kit has been configured or loaded: the standard rock
     /// kit (kick, snare, 3 toms, hi-hat, crash, ride) across 4 lanes.
+    ///
+    /// AI_CODE
     fn default() -> Self {
         serde_json::from_str(EMBEDDED_KITS[0]).expect("embedded default kit parses")
     }
@@ -488,6 +549,8 @@ impl Default for Kit {
 /// tuning, e.g. `{"name": "Standard Guitar", "strings": [...]}`). Presets are resolved
 /// and copied into an `InstrumentSlot` on selection, so saved settings never depend on
 /// this list still existing on disk (see todo.md Part A6).
+///
+/// AI_CODE
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct NamedTuning {
     pub(crate) name: String,
@@ -514,6 +577,8 @@ const EMBEDDED_TUNINGS: &[&str] = &[
 /// Loads every `*.json` file in the working directory's `tunings/` folder, in sorted
 /// filename order. Invalid files are reported and skipped. Falls back to the embedded
 /// defaults if the directory is missing or yields no valid tunings.
+///
+/// AI_CODE
 pub(crate) fn load_tuning_library() -> Vec<NamedTuning> {
     let mut paths = std::fs::read_dir("tunings")
         .ok()
@@ -553,6 +618,8 @@ pub(crate) fn load_tuning_library() -> Vec<NamedTuning> {
 /// kit, e.g. `{"name": "Standard Rock Kit", "lanes": 4, "pieces": [...]}`). Presets are
 /// resolved and copied into an `InstrumentSlot` on selection, so saved settings never
 /// depend on this list still existing on disk (see todo.md Part A6).
+///
+/// AI_CODE
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct NamedKit {
     pub(crate) name: String,
@@ -576,6 +643,8 @@ const EMBEDDED_KITS: &[&str] = &[include_str!("../../kits/standard-rock.json")];
 /// Loads every `*.json` file in the working directory's `kits/` folder, in sorted
 /// filename order. Invalid files are reported and skipped. Falls back to the embedded
 /// defaults if the directory is missing or yields no valid kits.
+///
+/// AI_CODE
 pub(crate) fn load_kit_library() -> Vec<NamedKit> {
     let mut paths = std::fs::read_dir("kits")
         .ok()
@@ -612,12 +681,15 @@ pub(crate) fn load_kit_library() -> Vec<NamedKit> {
 }
 
 /// Descriptive-only vocal range; does not gate playability or detection.
+///
+/// AI_CODE
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct VocalRange {
     pub(crate) low: String,
     pub(crate) high: String,
 }
 
+/// AI_CODE
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct LyricVerse {
     pub(crate) number: u16,
@@ -626,6 +698,7 @@ pub(crate) struct LyricVerse {
     pub(crate) phrases: Vec<VocalPhrase>,
 }
 
+/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SyllableKind {
@@ -637,6 +710,8 @@ pub(crate) enum SyllableKind {
 
 /// A simple range marker; anything played during the span counts as part of the phrase.
 /// Used for both Star Power phrases and (via `VocalPhrase`) vocal lyric phrases.
+///
+/// AI_CODE
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub(crate) struct Phrase {
     pub(crate) start: u32,
@@ -644,12 +719,15 @@ pub(crate) struct Phrase {
 }
 
 /// A relationship between two score events, identified by their stable event IDs.
+///
+/// AI_CODE
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct EventRelation {
     pub(crate) from: String,
     pub(crate) to: String,
 }
 
+/// AI_CODE
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct ChartTrack {
     pub(crate) name: String,
@@ -680,6 +758,7 @@ pub(crate) struct ChartTrack {
     pub(crate) lyric_verses: Vec<LyricVerse>,
 }
 
+/// AI_CODE
 #[derive(Clone, Debug)]
 pub(crate) enum NoteContent {
     Pitched {
@@ -692,6 +771,7 @@ pub(crate) enum NoteContent {
     Rest,
 }
 
+/// AI_CODE
 #[derive(Clone, Debug)]
 pub(crate) struct ChartEvent {
     pub(crate) id: Option<String>,
@@ -714,6 +794,8 @@ pub(crate) struct ChartEvent {
 
 impl ChartEvent {
     /// The nominal notated duration in ticks, before following any tie chain.
+    ///
+    /// AI_CODE
     pub(crate) fn duration_ticks(&self, resolution: u32) -> u32 {
         let base = self.length.ticks(resolution);
         let mut total = base;
@@ -727,6 +809,7 @@ impl ChartEvent {
         })
     }
 
+    /// AI_CODE
     pub(crate) fn note(&self) -> Option<u8> {
         match &self.content {
             NoteContent::Pitched { note, .. } => Some(*note),
@@ -736,6 +819,8 @@ impl ChartEvent {
 }
 
 /// A pitch expressed either as a raw MIDI number or a readable name like `"B0"`.
+///
+/// AI_CODE
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum NoteInput {
@@ -744,6 +829,7 @@ enum NoteInput {
 }
 
 impl NoteInput {
+    /// AI_CODE
     fn resolve(&self) -> Result<u8, String> {
         match self {
             NoteInput::Midi(value) => Ok(*value),
@@ -751,6 +837,7 @@ impl NoteInput {
         }
     }
 
+    /// AI_CODE
     fn spelling(&self) -> Result<Option<PitchSpelling>, String> {
         match self {
             NoteInput::Midi(_) => Ok(None),
@@ -759,6 +846,7 @@ impl NoteInput {
     }
 }
 
+/// AI_CODE
 fn parse_pitch_spelling(note: &str) -> Result<PitchSpelling, String> {
     let mut characters = note.trim().chars();
     let step = characters
@@ -790,6 +878,7 @@ fn parse_pitch_spelling(note: &str) -> Result<PitchSpelling, String> {
     })
 }
 
+/// AI_CODE
 #[derive(Deserialize)]
 struct ChartEventFields {
     #[serde(default)]
@@ -828,20 +917,24 @@ struct ChartEventFields {
     rest: bool,
 }
 
+/// AI_CODE
 fn default_voice() -> u8 {
     1
 }
 
+/// AI_CODE
 fn default_staff() -> u8 {
     1
 }
 
+/// AI_CODE
 #[derive(Deserialize)]
 struct PitchMotionInput {
     kind: MotionKind,
     target: NoteInput,
 }
 
+/// AI_CODE
 #[derive(Deserialize)]
 struct PerformanceInput {
     #[serde(default)]
@@ -877,6 +970,7 @@ struct PerformanceInput {
 }
 
 impl PerformanceInput {
+    /// AI_CODE
     fn resolve(self) -> Result<PerformanceHints, String> {
         let motion = self
             .motion
@@ -910,6 +1004,7 @@ impl PerformanceInput {
     }
 }
 
+/// AI_CODE
 impl<'de> Deserialize<'de> for ChartEvent {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -1002,6 +1097,7 @@ impl<'de> Deserialize<'de> for ChartEvent {
     }
 }
 
+/// AI_CODE
 impl Serialize for ChartEvent {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -1090,6 +1186,7 @@ impl Serialize for ChartEvent {
     }
 }
 
+/// AI_CODE
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct VocalPhrase {
     pub(crate) start: u32,
@@ -1107,6 +1204,7 @@ pub(crate) struct VocalPhrase {
     pub(crate) notes: Vec<ChartEvent>,
 }
 
+/// AI_CODE
 #[derive(Clone, Debug)]
 pub(crate) struct ChartNoteData {
     pub(crate) start: f32,
@@ -1121,6 +1219,7 @@ pub(crate) struct ChartNoteData {
     pub(crate) motion: Option<PitchMotion>,
 }
 
+/// AI_CODE
 #[derive(Clone, Debug)]
 pub(crate) struct PercussionNoteData {
     pub(crate) start: f32,
@@ -1137,6 +1236,8 @@ pub(crate) struct PercussionNoteData {
 }
 
 /// Sums the nominal duration of `events[index]` forward across a `tied` chain.
+///
+/// AI_CODE
 pub(crate) fn resolved_duration_ticks(events: &[ChartEvent], index: usize, resolution: u32) -> u32 {
     let mut total = events[index].duration_ticks(resolution);
     let mut current = index;
@@ -1150,6 +1251,7 @@ pub(crate) fn resolved_duration_ticks(events: &[ChartEvent], index: usize, resol
     total
 }
 
+/// AI_CODE
 fn tie_content_matches(left: &ChartEvent, right: &ChartEvent) -> bool {
     match (&left.content, &right.content) {
         (NoteContent::Pitched { note: left, .. }, NoteContent::Pitched { note: right, .. }) => {
@@ -1166,6 +1268,8 @@ fn tie_content_matches(left: &ChartEvent, right: &ChartEvent) -> bool {
 
 impl Chart {
     /// The tempo at tick 0, defaulting to 120 BPM if `tempo_map` has no tick-0 entry.
+    ///
+    /// AI_CODE
     pub(crate) fn starting_bpm(&self) -> f32 {
         self.tempo_map
             .iter()
@@ -1175,6 +1279,8 @@ impl Chart {
 
     /// The time signature at tick 0, defaulting to 4/4 if `time_signature_map` has no
     /// tick-0 entry.
+    ///
+    /// AI_CODE
     pub(crate) fn starting_time_signature(&self) -> [u8; 2] {
         self.time_signature_map
             .iter()
@@ -1184,6 +1290,8 @@ impl Chart {
 
     /// Converts a tick position to elapsed seconds by walking the tempo map segment by
     /// segment, so tempo changes mid-song are handled correctly.
+    ///
+    /// AI_CODE
     pub(crate) fn tick_to_seconds(&self, tick: u32) -> f32 {
         let resolution = self.resolution.max(1) as f32;
         let mut changes = self.tempo_map.clone();
@@ -1212,6 +1320,7 @@ impl Chart {
         seconds
     }
 
+    /// AI_CODE
     pub(crate) fn string_notes(&self) -> Vec<ChartNoteData> {
         self.tracks
             .iter()
@@ -1220,6 +1329,7 @@ impl Chart {
             .collect()
     }
 
+    /// AI_CODE
     fn string_notes_for_track(&self, track: &ChartTrack) -> Vec<ChartNoteData> {
         let Some(tuning) = track.tuning.as_ref() else {
             eprintln!("Strings track {} has no tuning; skipping", track.name);
@@ -1283,6 +1393,7 @@ impl Chart {
             .collect()
     }
 
+    /// AI_CODE
     pub(crate) fn percussion_notes(&self) -> Vec<PercussionNoteData> {
         self.tracks
             .iter()
@@ -1291,6 +1402,7 @@ impl Chart {
             .collect()
     }
 
+    /// AI_CODE
     fn percussion_notes_for_track(&self, track: &ChartTrack) -> Vec<PercussionNoteData> {
         let Some(kit) = track.kit.as_ref() else {
             eprintln!("Percussion track {} has no kit; skipping", track.name);
@@ -1357,12 +1469,14 @@ impl Chart {
             .collect()
     }
 
+    /// AI_CODE
     pub(crate) fn primary_track_name(&self) -> &str {
         self.tracks
             .first()
             .map_or("unknown", |track| track.name.as_str())
     }
 
+    /// AI_CODE
     pub(crate) fn total_ticks(&self) -> u32 {
         self.tracks
             .iter()
@@ -1395,6 +1509,8 @@ impl Chart {
     /// load time (unplayable notes, missing tuning/kit, or unknown percussion pieces and
     /// roll targets).
     /// Non-blocking: intended for the editor to surface before saving.
+    ///
+    /// AI_CODE
     pub(crate) fn validate(&self) -> Vec<String> {
         let mut warnings = Vec::new();
         if !self.tempo_map.iter().any(|change| change.start == 0) {
@@ -1735,6 +1851,7 @@ impl Chart {
     }
 }
 
+/// AI_CODE
 fn best_string_fret(
     midi_note: u8,
     open_midi: &[u8],
@@ -1758,10 +1875,12 @@ fn best_string_fret(
         .or_else(|| candidates.into_iter().next())
 }
 
+/// AI_CODE
 pub(crate) fn midi_to_frequency(midi_note: u8) -> f32 {
     440.0 * 2.0_f32.powf((midi_note as f32 - 69.0) / 12.0)
 }
 
+/// AI_CODE
 pub(crate) fn midi_note_name(midi_note: u8) -> String {
     const NAMES: [&str; 12] = [
         "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
@@ -1769,6 +1888,7 @@ pub(crate) fn midi_note_name(midi_note: u8) -> String {
     format!("{}{}", NAMES[(midi_note % 12) as usize], midi_note / 12 - 1)
 }
 
+/// AI_CODE
 fn parse_note_name(note: &str) -> Result<u8, String> {
     let mut characters = note.trim().chars();
     let letter = characters
