@@ -51,7 +51,6 @@ pub(crate) struct DebugText;
 ///
 /// AI_CODE
 pub(crate) fn setup_gameplay(mut commands: Commands, debug: Res<DebugInputData>) {
-    commands.spawn((Camera2d, GameplayEntity));
     commands.spawn((
         Text::new("OPEN BAND  //  LIVE SESSION"),
         TextFont {

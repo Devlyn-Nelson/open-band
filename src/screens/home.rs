@@ -1,3 +1,5 @@
+use inlet::InletEvent;
+
 use crate::*;
 
 #[derive(Resource, Default)]
@@ -26,7 +28,6 @@ pub(crate) struct MenuCamera;
 /// AI_CODE
 pub(crate) fn setup_home(mut commands: Commands) {
     // Create the two-entry application landing screen.
-    commands.spawn((Camera2d, MenuCamera));
     commands.spawn((
         Text::new(""),
         TextFont {
@@ -49,7 +50,6 @@ pub(crate) fn setup_home(mut commands: Commands) {
 /// AI_CODE
 pub(crate) fn setup_setup(mut commands: Commands) {
     // Create the submenu for all configuration tools.
-    commands.spawn((Camera2d, MenuCamera));
     commands.spawn((
         Text::new(""),
         TextFont {
@@ -68,40 +68,34 @@ pub(crate) fn setup_setup(mut commands: Commands) {
 }
 
 /// Navigate Home and open Live Session or Set Up.
-///
-/// AI_CODE
 pub(crate) fn home_input(
-    keyboard: Res<ButtonInput<KeyCode>>,
+    mut nav_events: MessageReader<InletEvent<NavigationMessage>>,
     mut menu: ResMut<MenuSelection>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
     // Home routes to Live Session, Songs, Editor, or Set Up.
-    if keyboard.just_pressed(KeyCode::ArrowUp) {
-        menu.home_selected = menu.home_selected.checked_sub(1).unwrap_or(3);
-    }
-    if keyboard.just_pressed(KeyCode::ArrowDown) {
-        menu.home_selected = (menu.home_selected + 1) % 4;
-    }
-    for (index, key) in [
-        KeyCode::Digit1,
-        KeyCode::Digit2,
-        KeyCode::Digit3,
-        KeyCode::Digit4,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        if keyboard.just_pressed(key) {
-            menu.home_selected = index;
+    for event in nav_events.read() {
+        bevy::log::info!("event");
+        match event.kind {
+            NavigationMessage::Up => {
+                menu.home_selected = menu.home_selected.checked_sub(1).unwrap_or(3);
+            }
+            NavigationMessage::Down => {
+                menu.home_selected = (menu.home_selected + 1) % 4;
+            }
+            NavigationMessage::Select => {
+                next_state.set(match menu.home_selected {
+                    0 => AppState::Gameplay,
+                    1 => AppState::Songs,
+                    2 => AppState::Editor,
+                    _ => AppState::Setup,
+                });
+            }
+            NavigationMessage::Slot(num) => {
+                menu.home_selected = num.clamp(1, 4).checked_sub(1).unwrap_or(3);
+            }
+            _ => {}
         }
-    }
-    if keyboard.just_pressed(KeyCode::Enter) {
-        next_state.set(match menu.home_selected {
-            0 => AppState::Gameplay,
-            1 => AppState::Songs,
-            2 => AppState::Editor,
-            _ => AppState::Setup,
-        });
     }
 }
 
@@ -135,44 +129,38 @@ pub(crate) fn home_display(menu: Res<MenuSelection>, mut text: Query<&mut Text, 
 }
 
 /// Navigate Set Up and open a setup tool or Home.
-///
-/// AI_CODE
 pub(crate) fn setup_input(
-    keyboard: Res<ButtonInput<KeyCode>>,
+    mut nav_events: MessageReader<InletEvent<NavigationMessage>>,
     mut menu: ResMut<MenuSelection>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
     // Route each setup option to its tool or back to Home.
-    if keyboard.just_pressed(KeyCode::Escape) {
-        next_state.set(AppState::Home);
-        return;
-    }
-    if keyboard.just_pressed(KeyCode::ArrowUp) {
-        menu.setup_selected = menu.setup_selected.checked_sub(1).unwrap_or(3);
-    }
-    if keyboard.just_pressed(KeyCode::ArrowDown) {
-        menu.setup_selected = (menu.setup_selected + 1) % 4;
-    }
-    for (index, key) in [
-        KeyCode::Digit1,
-        KeyCode::Digit2,
-        KeyCode::Digit3,
-        KeyCode::Digit4,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        if keyboard.just_pressed(key) {
-            menu.setup_selected = index;
+    for event in nav_events.read() {
+        bevy::log::info!("event");
+        match event.kind {
+            NavigationMessage::Up => {
+                menu.setup_selected = menu.setup_selected.checked_sub(1).unwrap_or(3);
+            }
+            NavigationMessage::Down => {
+                menu.setup_selected = (menu.setup_selected + 1) % 4;
+            }
+            NavigationMessage::Select => {
+                next_state.set(match menu.setup_selected {
+                    0 => AppState::DeviceSelection,
+                    1 => AppState::Calibration,
+                    2 => AppState::LatencyCalibration,
+                    _ => AppState::Home,
+                });
+            }
+            NavigationMessage::Back => {
+                next_state.set(AppState::Home);
+                return;
+            }
+            NavigationMessage::Slot(num) => {
+                menu.setup_selected = num.clamp(1, 4).checked_sub(1).unwrap_or(3);
+            }
+            _ => {}
         }
-    }
-    if keyboard.just_pressed(KeyCode::Enter) {
-        next_state.set(match menu.setup_selected {
-            0 => AppState::DeviceSelection,
-            1 => AppState::Calibration,
-            2 => AppState::LatencyCalibration,
-            _ => AppState::Home,
-        });
     }
 }
 
@@ -210,7 +198,7 @@ pub(crate) fn setup_display(menu: Res<MenuSelection>, mut text: Query<&mut Text,
 /// AI_CODE
 pub(crate) fn cleanup_menu(
     mut commands: Commands,
-    entities: Query<Entity, Or<(With<MenuText>, With<MenuCamera>)>>,
+    entities: Query<Entity, With<MenuText>>,
 ) {
     // Both menu screens share the same text and camera marker types.
     for entity in &entities {

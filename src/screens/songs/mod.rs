@@ -1,3 +1,5 @@
+use inlet::InletEvent;
+
 use crate::*;
 
 pub(crate) const OPEN_STRINGS_CHART: &str = include_str!("../../../charts/open-strings.json");
@@ -114,7 +116,6 @@ pub(crate) fn setup_song_menu(mut commands: Commands) {
         selected: 0,
         charts: load_charts(),
     });
-    commands.spawn((Camera2d, ChartEntity));
     commands.spawn((
         Text::new(""),
         TextFont {
@@ -135,31 +136,36 @@ pub(crate) fn setup_song_menu(mut commands: Commands) {
 
 /// AI_CODE
 pub(crate) fn song_menu_input(
-    keyboard: Res<ButtonInput<KeyCode>>,
+    mut nav_events: MessageReader<InletEvent<NavigationMessage>>,
     mut menu: ResMut<SongMenuSelection>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<AppState>>,
     time: Res<Time>,
 ) {
-    if keyboard.just_pressed(KeyCode::Escape) {
-        next_state.set(AppState::Home);
-    }
-    if keyboard.just_pressed(KeyCode::ArrowUp) {
-        menu.selected = menu
-            .selected
-            .checked_sub(1)
-            .unwrap_or(menu.charts.len().saturating_sub(1));
-    }
-    if keyboard.just_pressed(KeyCode::ArrowDown) && !menu.charts.is_empty() {
-        menu.selected = (menu.selected + 1) % menu.charts.len();
-    }
-    if keyboard.just_pressed(KeyCode::Enter) {
-        if let Some(chart) = menu.charts.get(menu.selected).cloned() {
-            commands.insert_resource(ChartSession {
-                chart,
-                started_at: time.elapsed_secs() + 5.0,
-            });
-            next_state.set(AppState::ChartCountdown);
+    for event in nav_events.read() {
+        match event.kind {
+            NavigationMessage::Select => {
+                if let Some(chart) = menu.charts.get(menu.selected).cloned() {
+                    commands.insert_resource(ChartSession {
+                        chart,
+                        started_at: time.elapsed_secs() + 5.0,
+                    });
+                    next_state.set(AppState::ChartCountdown);
+                }
+            }
+            NavigationMessage::Back => {
+                next_state.set(AppState::Home);
+            }
+            NavigationMessage::Up => {
+                menu.selected = menu
+                    .selected
+                    .checked_sub(1)
+                    .unwrap_or(menu.charts.len().saturating_sub(1));
+            }
+            NavigationMessage::Down => {
+                menu.selected = (menu.selected + 1) % menu.charts.len();
+            }
+            _ => {}
         }
     }
 }
@@ -228,7 +234,6 @@ pub(crate) fn setup_chart_countdown(
         ..Default::default()
     });
     commands.insert_resource(ChartFeedback::default());
-    commands.spawn((Camera2d, ChartEntity));
     commands.spawn((
         Text2d::new("5"),
         TextFont {
@@ -262,7 +267,6 @@ pub(crate) fn chart_countdown_system(
 /// AI_CODE
 pub(crate) fn setup_chart_gameplay(mut commands: Commands, session: Res<ChartSession>) {
     let notes = session.chart.string_notes();
-    commands.spawn((Camera2d, ChartEntity));
     commands.spawn((
         Text2d::new(""),
         TextFont {
@@ -588,11 +592,16 @@ pub(crate) fn cents_error(actual_hz: f32, expected_hz: f32) -> f32 {
 
 /// AI_CODE
 pub(crate) fn chart_menu_input(
-    keyboard: Res<ButtonInput<KeyCode>>,
+    mut nav_events: MessageReader<InletEvent<NavigationMessage>>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    if keyboard.just_pressed(KeyCode::Escape) {
-        next_state.set(AppState::Songs);
+    for event in nav_events.read() {
+        match event.kind {
+            NavigationMessage::Back => {
+                next_state.set(AppState::Songs);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -608,7 +617,6 @@ pub(crate) fn cleanup_chart_entities(
 
 /// AI_CODE
 pub(crate) fn setup_chart_review(mut commands: Commands, session: Res<ChartSession>) {
-    commands.spawn((Camera2d, ChartReviewText));
     commands.spawn((
         Text::new(""),
         TextFont {
@@ -658,13 +666,19 @@ pub(crate) fn chart_review_display(
 
 /// AI_CODE
 pub(crate) fn chart_review_input(
-    keyboard: Res<ButtonInput<KeyCode>>,
+    mut nav_events: MessageReader<InletEvent<NavigationMessage>>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    if keyboard.just_pressed(KeyCode::Escape) {
-        next_state.set(AppState::Home);
-    } else if keyboard.just_pressed(KeyCode::Enter) {
-        next_state.set(AppState::Songs);
+    for event in nav_events.read() {
+        match event.kind {
+            NavigationMessage::Back => {
+                next_state.set(AppState::Home);
+            }
+            NavigationMessage::Select => {
+                next_state.set(AppState::Songs);
+            }
+            _ => {}
+        }
     }
 }
 

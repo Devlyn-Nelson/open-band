@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = "0.20.0-rc.1"
+bevy = "0.20.0-rc.2"
+inlet = "0.7.0-rc.2"
 cpal = "0.18.2"
 midir = "0.11.0"
 serde = { version = "1.0", features = ["derive"] }

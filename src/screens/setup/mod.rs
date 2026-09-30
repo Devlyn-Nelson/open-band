@@ -1,4 +1,7 @@
+use std::ops::Sub;
+
 use crate::*;
+use inlet::InletEvent;
 use serde::{Deserialize, Serialize};
 
 #[derive(Resource)]
@@ -120,7 +123,6 @@ pub(crate) struct LatencyCamera;
 
 /// AI_CODE
 pub(crate) fn setup_device_selection(mut commands: Commands) {
-    commands.spawn((Camera2d, DeviceSelectionCamera));
     commands.spawn((
         Text::new(""),
         TextFont {
@@ -140,29 +142,36 @@ pub(crate) fn setup_device_selection(mut commands: Commands) {
 
 /// AI_CODE
 pub(crate) fn device_selection_input(
+    mut nav_events: MessageReader<InletEvent<NavigationMessage>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut selection: ResMut<DeviceSelection>,
     mut stream: ResMut<InstrumentStream>,
     mut settings: ResMut<PersistentSettings>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    if !selection.slots.is_empty() {
-        if keyboard.just_pressed(KeyCode::ArrowUp) {
-            selection.focus = selection
-                .focus
-                .checked_sub(1)
-                .unwrap_or(selection.slots.len() - 1);
+    for event in nav_events.read() {
+        bevy::log::info!("event");
+        match event.kind {
+            NavigationMessage::Select => {
+                commit_device_selection(&selection, &mut stream, &mut settings);
+                next_state.set(AppState::Setup);
+            }
+            NavigationMessage::Back => next_state.set(AppState::Setup),
+            NavigationMessage::Up => {
+                selection.focus = selection
+                    .focus
+                    .checked_sub(1)
+                    .unwrap_or(selection.slots.len() - 1)
+            }
+            NavigationMessage::Down => {
+                selection.focus = (selection.focus + 1) % selection.slots.len()
+            }
+            NavigationMessage::Right => cycle_slot_device(&mut selection, 1),
+            NavigationMessage::Left => cycle_slot_device(&mut selection, -1),
+            NavigationMessage::Slot(_) => {}
         }
-        if keyboard.just_pressed(KeyCode::ArrowDown) {
-            selection.focus = (selection.focus + 1) % selection.slots.len();
-        }
     }
-    if keyboard.just_pressed(KeyCode::ArrowLeft) {
-        cycle_slot_device(&mut selection, -1);
-    }
-    if keyboard.just_pressed(KeyCode::ArrowRight) {
-        cycle_slot_device(&mut selection, 1);
-    }
+    // \/ AI_CODE \/
     if keyboard.just_pressed(KeyCode::KeyN) {
         selection
             .slots
@@ -204,10 +213,7 @@ pub(crate) fn device_selection_input(
         cycle_slot_tuning(&mut selection, 1);
         cycle_slot_kit(&mut selection, 1);
     }
-
-    if keyboard.just_pressed(KeyCode::Enter) {
-        commit_device_selection(&selection, &mut stream, &mut settings, &mut next_state);
-    }
+    // /\ AI_CODE /\
 }
 
 /// Cycles the focused `Percussion` slot's kit among the loaded `kits/` library, starting
@@ -299,7 +305,6 @@ pub(crate) fn commit_device_selection(
     selection: &DeviceSelection,
     stream: &mut InstrumentStream,
     settings: &mut PersistentSettings,
-    next_state: &mut NextState<AppState>,
 ) {
     let config = InputConfig {
         slots: selection.slots.clone(),
@@ -320,7 +325,6 @@ pub(crate) fn commit_device_selection(
     ));
     stream.stop_sender = Some(stop_sender);
     stream.started = true;
-    next_state.set(AppState::Setup);
 }
 
 /// AI_CODE
@@ -375,7 +379,7 @@ pub(crate) fn device_selection_display(
 /// AI_CODE
 pub(crate) fn cleanup_device_selection(
     mut commands: Commands,
-    entities: Query<Entity, Or<(With<DeviceSelectionText>, With<DeviceSelectionCamera>)>>,
+    entities: Query<Entity, With<DeviceSelectionText>>,
 ) {
     for entity in &entities {
         commands.entity(entity).despawn();
@@ -384,7 +388,6 @@ pub(crate) fn cleanup_device_selection(
 
 /// AI_CODE
 pub(crate) fn setup_calibration(mut commands: Commands) {
-    commands.spawn((Camera2d, CalibrationCamera));
     commands.spawn((
         Text::new("OPEN BAND  //  INPUT CALIBRATION"),
         TextFont {
@@ -422,7 +425,6 @@ pub(crate) fn setup_latency_calibration(
         best_ms: settings.latency_ms,
         attempts: 0,
     });
-    commands.spawn((Camera2d, LatencyCamera));
     commands.spawn((
         Text::new(""),
         TextFont {
@@ -464,31 +466,38 @@ pub(crate) fn setup_latency_calibration(
 
 /// AI_CODE
 pub(crate) fn latency_calibration_input(
-    keyboard: Res<ButtonInput<KeyCode>>,
+    mut nav_events: MessageReader<InletEvent<NavigationMessage>>,
     mut latency: ResMut<LatencyCalibration>,
     mut settings: ResMut<PersistentSettings>,
     mut next_state: ResMut<NextState<AppState>>,
     time: Res<Time>,
 ) {
-    if keyboard.just_pressed(KeyCode::Escape) {
-        next_state.set(AppState::Setup);
-        return;
-    }
-    if keyboard.just_pressed(KeyCode::Space) {
-        let beat = (time.elapsed_secs() - latency.started_at) % 0.5;
-        let offset = if beat > 0.25 { beat - 0.5 } else { beat };
-        let offset_ms = offset * 1000.0;
-        latency.best_ms = Some(
-            latency
-                .best_ms
-                .map_or(offset_ms.abs(), |best| best.min(offset_ms.abs())),
-        );
-        latency.attempts += 1;
-    }
-    if latency.attempts > 0 && keyboard.just_pressed(KeyCode::Enter) {
-        settings.latency_ms = latency.best_ms;
-        save_settings(&settings);
-        next_state.set(AppState::Setup);
+    for event in nav_events.read() {
+        match event.kind {
+            NavigationMessage::Back => {
+                next_state.set(AppState::Setup);
+                return;
+            }
+            NavigationMessage::Down | NavigationMessage::Up => {
+                let beat = (time.elapsed_secs() - latency.started_at) % 0.5;
+                let offset = if beat > 0.25 { beat - 0.5 } else { beat };
+                let offset_ms = offset * 1000.0;
+                latency.best_ms = Some(
+                    latency
+                        .best_ms
+                        .map_or(offset_ms.abs(), |best| best.min(offset_ms.abs())),
+                );
+                latency.attempts += 1;
+            }
+            NavigationMessage::Select => {
+                if latency.attempts > 0 {
+                    settings.latency_ms = latency.best_ms;
+                    save_settings(&settings);
+                    next_state.set(AppState::Setup);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -513,7 +522,7 @@ pub(crate) fn latency_calibration_display(
     *text = Text::new(format!(
         "OPEN BAND  //  LATENCY CALIBRATION\n\n\
         LIVE SESSION CHECK\n\n\
-        Tap SPACE as the yellow beat line crosses the center marker.\n\
+        Tap Up or Down as the yellow beat line crosses the center marker.\n\
         Attempts: {}\n{}\n\n\
         Press ENTER to accept and return to Set Up.",
         latency.attempts, result,
@@ -528,7 +537,6 @@ pub(crate) fn cleanup_latency_calibration(
         Or<(
             With<LatencyText>,
             With<LatencyPulse>,
-            With<LatencyCamera>,
             With<LatencyEntity>,
         )>,
     >,
@@ -540,39 +548,37 @@ pub(crate) fn cleanup_latency_calibration(
 
 /// AI_CODE
 pub(crate) fn calibration_input(
-    keyboard: Res<ButtonInput<KeyCode>>,
+    mut nav_events: MessageReader<InletEvent<NavigationMessage>>,
     mut next_state: ResMut<NextState<AppState>>,
     mut calibration: ResMut<Calibration>,
     selection: Res<DeviceSelection>,
     stream: Res<InstrumentStream>,
     time: Res<Time>,
 ) {
-    if keyboard.just_pressed(KeyCode::Escape) {
-        next_state.set(AppState::Setup);
-        return;
-    }
-    let digit_keys = [
-        KeyCode::Digit1,
-        KeyCode::Digit2,
-        KeyCode::Digit3,
-        KeyCode::Digit4,
-        KeyCode::Digit5,
-        KeyCode::Digit6,
-        KeyCode::Digit7,
-        KeyCode::Digit8,
-        KeyCode::Digit9,
-    ];
-    for (index, key) in digit_keys.into_iter().enumerate() {
-        if index < selection.slots.len() && keyboard.just_pressed(key) {
-            calibration.selected = index;
-            calibration.level = 0.0;
-            calibration.peak = 0.0;
-            calibration.samples = 0;
-            calibration.last_pitch_hz = None;
+    for event in nav_events.read() {
+        match event.kind {
+            NavigationMessage::Select | NavigationMessage::Back => {
+                next_state.set(AppState::Setup);
+            }
+            NavigationMessage::Up => {
+                calibration.selected = (calibration.selected + 1) % selection.slots.len();
+            }
+            NavigationMessage::Down => {
+                calibration.selected = calibration
+                    .selected
+                    .checked_sub(1)
+                    .unwrap_or(selection.slots.len().checked_sub(1).unwrap_or(0))
+            }
+            NavigationMessage::Slot(num) => {
+                let num = num.clamp(1, 9).checked_sub(1).unwrap_or(8);
+                calibration.selected = num;
+                calibration.level = 0.0;
+                calibration.peak = 0.0;
+                calibration.samples = 0;
+                calibration.last_pitch_hz = None;
+            }
+            _ => {}
         }
-    }
-    if keyboard.just_pressed(KeyCode::Enter) {
-        next_state.set(AppState::Setup);
     }
 
     calibration.level = (calibration.level - time.delta_secs() * 0.7).max(0.0);
@@ -646,7 +652,6 @@ pub(crate) fn cleanup_calibration(
         Or<(
             With<CalibrationText>,
             With<CalibrationMeter>,
-            With<CalibrationCamera>,
         )>,
     >,
 ) {

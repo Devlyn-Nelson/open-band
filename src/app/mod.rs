@@ -4,10 +4,14 @@ pub(crate) use state::*;
 
 use super::*;
 
+fn system_setup_camera(mut commands: Commands) {
+
+    commands.spawn((Camera2d, MenuCamera));
+}
+
 /// Build and run the Bevy application.
-///
-/// AI_CODE
 pub(crate) fn run() {
+    // \/ AI_CODE \/
     // Load persisted choices before scanning devices so saved IDs can be preselected.
     let (sender, receiver) = mpsc::channel();
     let settings = load_settings();
@@ -22,6 +26,10 @@ pub(crate) fn run() {
 
     // Start the input worker before Home so Live Session works immediately after launch.
     App::new()
+        // /\ AI_CODE /\
+        .add_plugins(NavigationPlugin::default())
+        .add_systems(Startup, system_setup_camera)
+        // \/ AI_CODE \/
         .insert_resource(ClearColor(Color::srgb(0.025, 0.035, 0.06)))
         .insert_resource(device_selection)
         .insert_resource(settings)
@@ -166,4 +174,5 @@ pub(crate) fn run() {
         )
         .add_systems(OnExit(AppState::Editor), cleanup_editor)
         .run();
+    // /\ AI_CODE /\
 }

@@ -173,7 +173,6 @@ pub(crate) fn setup_editor(mut commands: Commands) {
         tunings: load_tuning_library(),
         kits: load_kit_library(),
     });
-    commands.spawn((Camera2d, EditorCamera));
     commands.spawn((
         Text::new(""),
         TextFont {
@@ -194,7 +193,7 @@ pub(crate) fn setup_editor(mut commands: Commands) {
 /// AI_CODE
 pub(crate) fn cleanup_editor(
     mut commands: Commands,
-    entities: Query<Entity, Or<(With<EditorCamera>, With<EditorText>)>>,
+    entities: Query<Entity, With<EditorText>>,
 ) {
     for entity in &entities {
         commands.entity(entity).despawn();
