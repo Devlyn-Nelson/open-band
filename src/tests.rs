@@ -1,3 +1,5 @@
+use crate::audio::DetectedNote;
+
 use super::{
     Articulation, AudioDetector, AudioOnsetDetector, BendSpec, Chart, ChartEvent, Clef,
     DetectorProfile, DeviceChoice, DynamicLevel, EventRelation, GraceKind, HarmonicKind,
@@ -127,14 +129,14 @@ fn sustained_bass_note_produces_one_start() {
     assert_eq!(
         first
             .iter()
-            .filter(|event| event.phase == NotePhase::Started)
+            .filter(|event| event.phase == NotePhase::Start)
             .count(),
         1
     );
     assert_eq!(
         second
             .iter()
-            .filter(|event| event.phase == NotePhase::Started)
+            .filter(|event| event.phase == NotePhase::Start)
             .count(),
         0
     );
@@ -1458,7 +1460,7 @@ fn polyphonic_detector_tracks_chord_duration() {
     assert!(
         starts
             .iter()
-            .filter(|event| event.phase == NotePhase::Started)
+            .filter(|event| event.phase == NotePhase::Start)
             .count()
             >= 2
     );
@@ -1467,7 +1469,7 @@ fn polyphonic_detector_tracks_chord_duration() {
     assert!(
         updates
             .iter()
-            .any(|event| { event.phase == NotePhase::Updated && event.duration_secs > 0.0 })
+            .any(|event| { event.phase == NotePhase::Sustain && event.duration_secs > 0.0 })
     );
 
     let mut silence = detector.detect((0..4096).map(|_| 0.0));
@@ -1475,11 +1477,11 @@ fn polyphonic_detector_tracks_chord_duration() {
     assert!(
         silence
             .iter()
-            .any(|event| { event.phase == NotePhase::Ended && event.duration_secs > 0.0 })
+            .any(|event| { event.phase == NotePhase::End && event.duration_secs > 0.0 })
     );
 }
 
-fn detect_recording_pitches(path: &Path) -> Result<Vec<f32>, String> {
+fn detect_recording_pitches(path: &Path) -> Result<Vec<DetectedNote>, String> {
     let mut reader =
         hound::WavReader::open(path).map_err(|error| format!("recording should open: {error}"))?;
     let spec = reader.spec();
@@ -1493,9 +1495,7 @@ fn detect_recording_pitches(path: &Path) -> Result<Vec<f32>, String> {
     for sample in reader.samples::<i32>() {
         let sample = sample.map_err(|error| format!("recording samples should decode: {error}"))?;
         for note in detector.detect(std::iter::once(sample as f32 / 8_388_608.0)) {
-            if note.phase == NotePhase::Started {
-                pitches.push(note.pitch_hz);
-            }
+            pitches.push(note);
         }
     }
     Ok(pitches)
@@ -1670,8 +1670,26 @@ fn report_recording_errors(test_name: &str, errors: Vec<String>) {
     }
 }
 
+/// Converts pitch into the corresponding beadg string index.
+///
+/// 0 => B string
+/// 1 => E string
+/// 2 => A string
+/// 3 => D string
+/// 4 => G string
+fn pitch_to_beadg_string(pitch_hz: f32) -> Option<usize> {
+    match pitch_hz {
+        hz if (hz - 41.20).abs() < 1.0 => Some(4),
+        hz if (hz - 82.41).abs() < 1.0 => Some(3),
+        hz if (hz - 110.00).abs() < 1.0 => Some(2),
+        hz if (hz - 146.83).abs() < 1.0 => Some(1),
+        hz if (hz - 196.00).abs() < 1.0 => Some(0),
+        _ => None,
+    }
+}
+
 #[test]
-#[ignore = "the supplied recordings currently expose pitch-detector false positives; run explicitly while tuning DSP"]
+// #[ignore = "the supplied recordings currently expose pitch-detector false positives; run explicitly while tuning DSP"]
 /// Checks stable single-string detection and ordered multi-string detection.
 fn supplied_bass_recordings_detect_expected_open_strings() {
     let recording_directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("recordings");
@@ -1719,28 +1737,56 @@ fn supplied_bass_recordings_detect_expected_open_strings() {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             if expected_lanes.len() == 1 {
-                let plucks = detect_recording_plucks(&path)?;
-                if plucks.len() != 12 {
+                let detected_pitches = detect_recording_pitches(&path)?;
+                for (i, note) in detected_pitches.iter().enumerate() {
+                    let expected = expected_lanes[0];
+                    let Some(detected) = pitch_to_beadg_string(note.pitch_hz) else {
+                        return Err(format!(
+                            "pluck {i} could not be mapped to a string (pitch {})",
+                            note.pitch_hz,
+                        ));
+                    };
+                    if detected != expected {
+                        return Err(format!(
+                            "pluck {i} is not on the expected string: expected {expected}, got {detected}",
+                        ));
+                    }
+                }
+                let durations = detected_pitches
+                    .iter()
+                    .filter_map(|note| {
+                        if note.phase.is_end() {
+                            Some(note.duration_secs)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                if durations.len() != 12 {
                     return Err(format!(
                         "should contain exactly 12 plucks; detected {} plucks",
-                        plucks.len()
+                        durations.len()
                     ));
                 }
-                let durations = plucks
-                    .iter()
-                    .map(|(_, duration)| *duration)
-                    .collect::<Vec<_>>();
-                if durations.iter().any(|duration| *duration <= 0.0)
-                    || durations.iter().copied().fold(0.0, f32::max)
-                        - durations.iter().copied().fold(f32::MAX, f32::min)
-                        < 0.1
-                {
-                    return Err(format!(
-                        "unexpected pluck durations; expected short and long sustain groups, detected={durations:?}"
-                    ));
+                for (i, duration) in durations.iter().enumerate() {
+                    if *duration <= 0.05 {
+                        return Err(format!("pluck {i} has duration <= 0.05: {duration}"));
+                    } else if *duration > 0.75 {
+                        return Err(format!("pluck {i} has duration > 0.75: {duration}"));
+                    }
                 }
             } else {
-                let detected_pitches = detect_recording_pitches(&path)?;
+                let detected_pitches = detect_recording_pitches(&path)?
+                    .into_iter()
+                    .filter_map(|note| {
+                        if note.phase.is_start() {
+                            Some(note.pitch_hz)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
                 let bass5 = Instrument {
                     slot: 0,
                     kind: InstrumentKind::Strings,
@@ -1822,6 +1868,13 @@ fn supplied_bass_fret_recordings_detect_open_through_fret_24() {
                 .collect::<Vec<_>>();
             let mut detected_frets = detect_recording_pitches(&path)?
                 .into_iter()
+                .filter_map(|note| {
+                    if note.phase.is_start() {
+                        Some(note.pitch_hz)
+                    } else {
+                        None
+                    }
+                })
                 .map(|pitch| {
                     expected_pitches
                         .iter()

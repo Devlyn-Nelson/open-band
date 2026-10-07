@@ -190,7 +190,7 @@ pub(crate) fn receive_instrument_events(
         debug.strength = event.strength;
         debug.noise_floor = event.noise_floor;
         debug.duration_secs = event.duration_secs;
-        if event.phase == NotePhase::Started {
+        if event.phase == NotePhase::Start {
             debug.event_count += 1;
             let x = -360.0 + lane as f32 * 180.0;
             commands.spawn((
@@ -208,7 +208,7 @@ pub(crate) fn receive_instrument_events(
                 },
                 GameplayEntity,
             ));
-        } else if event.phase == NotePhase::Updated {
+        } else if event.phase == NotePhase::Sustain {
             let mut latest_spawn = f32::NEG_INFINITY;
             for (mut note, mut sprite) in &mut notes {
                 if note.instrument == event.instrument

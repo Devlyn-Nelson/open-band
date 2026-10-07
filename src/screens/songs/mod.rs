@@ -501,7 +501,7 @@ pub(crate) fn chart_gameplay_system(
     }
     for (phase, pitch, duration) in detected_events {
         match phase {
-            NotePhase::Started => {
+            NotePhase::Start => {
                 let mut best_match = None;
                 for (entity, note, _, _) in &mut notes {
                     if !note.matched
@@ -530,14 +530,14 @@ pub(crate) fn chart_gameplay_system(
                     feedback.until = time.elapsed_secs() + 0.75;
                 }
             }
-            NotePhase::Updated => {
+            NotePhase::Sustain => {
                 for (_, mut note, _, _) in &mut notes {
                     if note.matched {
                         note.sustain_observed = note.sustain_observed.max(duration);
                     }
                 }
             }
-            NotePhase::Ended => {
+            NotePhase::End => {
                 let mut ended = None;
                 for (entity, note, _, _) in &mut notes {
                     if note.matched {

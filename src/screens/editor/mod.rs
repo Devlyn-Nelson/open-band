@@ -191,10 +191,7 @@ pub(crate) fn setup_editor(mut commands: Commands) {
 }
 
 /// AI_CODE
-pub(crate) fn cleanup_editor(
-    mut commands: Commands,
-    entities: Query<Entity, With<EditorText>>,
-) {
+pub(crate) fn cleanup_editor(mut commands: Commands, entities: Query<Entity, With<EditorText>>) {
     for entity in &entities {
         commands.entity(entity).despawn();
     }

@@ -79,7 +79,7 @@ impl PolyphonicAudioDetector {
                     pitch_hz,
                     strength,
                     noise_floor: self.noise_floor,
-                    phase: NotePhase::Updated,
+                    phase: NotePhase::Sustain,
                     duration_secs: (self.processed_samples - track.started_sample) as f32
                         / self.sample_rate,
                 });
@@ -95,7 +95,7 @@ impl PolyphonicAudioDetector {
                     pitch_hz,
                     strength,
                     noise_floor: self.noise_floor,
-                    phase: NotePhase::Started,
+                    phase: NotePhase::Start,
                     duration_secs: 0.0,
                 });
             }
@@ -112,7 +112,7 @@ impl PolyphonicAudioDetector {
                     pitch_hz: track.pitch_hz,
                     strength: track.strength,
                     noise_floor: self.noise_floor,
-                    phase: NotePhase::Ended,
+                    phase: NotePhase::End,
                     duration_secs: (self.processed_samples - track.started_sample) as f32
                         / self.sample_rate,
                 });
@@ -244,7 +244,7 @@ impl BassDetector {
         let mut events = self.mono.detect_with_duration(samples.iter().copied());
         let mono_lanes = events
             .iter()
-            .filter(|event| event.phase == NotePhase::Started)
+            .filter(|event| event.phase == NotePhase::Start)
             .map(|event| string_lane(&self.open_frequencies, event.pitch_hz))
             .collect::<Vec<_>>();
         for note in self.strings_detector.detect(samples.into_iter()) {
@@ -361,7 +361,7 @@ impl BassStringDetector {
                 pitch_hz: self.targets[lane],
                 strength: (level * 4.0).clamp(0.15, 1.0),
                 noise_floor: 0.0,
-                phase: NotePhase::Started,
+                phase: NotePhase::Start,
                 duration_secs: 0.0,
             });
         }
@@ -513,7 +513,7 @@ impl AudioOnsetDetector {
                     pitch_hz: active_pitch_hz,
                     strength: self.last_level,
                     noise_floor,
-                    phase: NotePhase::Ended,
+                    phase: NotePhase::End,
                     duration_secs: (self.processed_samples - self.active_started_sample) as f32
                         / self.sample_rate,
                 });
@@ -525,7 +525,7 @@ impl AudioOnsetDetector {
                 pitch_hz,
                 strength,
                 noise_floor,
-                phase: NotePhase::Started,
+                phase: NotePhase::Start,
                 duration_secs: (self.processed_samples - self.active_started_sample) as f32
                     / self.sample_rate,
             });
@@ -546,7 +546,7 @@ impl AudioOnsetDetector {
                 pitch_hz,
                 strength: (self.last_level * 4.0).clamp(0.15, 1.0),
                 noise_floor: self.noise_floor,
-                phase: NotePhase::Updated,
+                phase: NotePhase::Sustain,
                 duration_secs: (self.processed_samples - self.active_started_sample) as f32
                     / self.sample_rate,
             }];
@@ -556,7 +556,7 @@ impl AudioOnsetDetector {
             pitch_hz,
             strength: 0.0,
             noise_floor: self.noise_floor,
-            phase: NotePhase::Ended,
+            phase: NotePhase::End,
             duration_secs: (self.processed_samples - self.active_started_sample) as f32
                 / self.sample_rate,
         }]

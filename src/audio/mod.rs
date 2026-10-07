@@ -70,12 +70,23 @@ pub struct InstrumentEvent {
     pub duration_secs: f32,
 }
 
-/// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NotePhase {
-    Started,
-    Updated,
-    Ended,
+    Start,
+    Sustain,
+    End,
+}
+
+impl NotePhase {
+    pub fn is_start(self) -> bool {
+        self == Self::Start
+    }
+    pub fn is_sustain(self) -> bool {
+        self == Self::Sustain
+    }
+    pub fn is_end(self) -> bool {
+        self == Self::End
+    }
 }
 
 /// AI_CODE

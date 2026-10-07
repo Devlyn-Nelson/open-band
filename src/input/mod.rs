@@ -356,7 +356,7 @@ fn open_midi_input(
                         strength: message[2] as f32 / 127.0,
                         note: NoteData::Midi(message[1]),
                         noise_floor: 0.0,
-                        phase: NotePhase::Started,
+                        phase: NotePhase::Start,
                         duration_secs: 0.0,
                     });
                 }
