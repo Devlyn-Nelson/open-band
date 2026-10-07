@@ -8,10 +8,7 @@ use bevy::{
         system::{Commands, Res, ResMut},
     },
     input::{gamepad::GamepadButton, keyboard::KeyCode},
-    state::{
-        condition::in_state,
-        state::{EnterSchedules, State, StateTransition, StateTransitionEvent},
-    },
+    state::state::{EnterSchedules, State, StateTransition, StateTransitionEvent},
     time::Time,
 };
 use inlet::{InletEvent, InputBindings, InputManagementPlugin, button::ButtonEventBinding};
@@ -234,7 +231,7 @@ pub fn system_note_to_navigation(
     };
     if !matches!(
         state.get(),
-        AppState::ChartReview | AppState::DeviceSelection | AppState::Home | AppState::Setup
+        AppState::ChartReview | AppState::DeviceSelection | AppState::Home | AppState::Settings
     ) {
         return;
     }

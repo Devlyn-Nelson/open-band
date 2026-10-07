@@ -8,12 +8,12 @@ pub(crate) mod editor;
 pub(crate) mod home;
 pub(crate) mod live;
 pub(crate) mod navigation;
-pub(crate) mod setup;
+pub(crate) mod settings;
 pub(crate) mod songs;
 
 pub(crate) use editor::*;
 pub(crate) use home::*;
 pub(crate) use live::*;
 pub(crate) use navigation::*;
-pub(crate) use setup::*;
+pub(crate) use settings::*;
 pub(crate) use songs::*;

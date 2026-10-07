@@ -7,7 +7,7 @@ use bevy::prelude::*;
 pub(crate) enum AppState {
     #[default]
     Home,
-    Setup,
+    Settings,
     DeviceSelection,
     Calibration,
     LatencyCalibration,

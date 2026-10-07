@@ -5,7 +5,6 @@ pub(crate) use state::*;
 use super::*;
 
 fn system_setup_camera(mut commands: Commands) {
-
     commands.spawn((Camera2d, MenuCamera));
 }
 
@@ -27,7 +26,6 @@ pub(crate) fn run() {
     // Start the input worker before Home so Live Session works immediately after launch.
     App::new()
         // /\ AI_CODE /\
-        .add_plugins(NavigationPlugin::default())
         .add_systems(Startup, system_setup_camera)
         // \/ AI_CODE \/
         .insert_resource(ClearColor(Color::srgb(0.025, 0.035, 0.06)))
@@ -58,15 +56,27 @@ pub(crate) fn run() {
             }),
             ..default()
         }))
+        // \/ AI_CODE \/
+        // Must come after DefaultPlugins: NavigationPlugin adds a system to the
+        // `StateTransition` schedule, and if that schedule exists before `StatesPlugin`
+        // builds it, the Exit -> Transition -> Enter ordering is never configured.
+        .add_plugins(NavigationPlugin::default())
+        // /\ AI_CODE /\
         .insert_state(startup_state)
         .add_systems(OnEnter(AppState::Home), setup_home)
-        .add_systems(Update, home_input.run_if(in_state(AppState::Home)))
+        .add_systems(Update, system_home_input.run_if(in_state(AppState::Home)))
         .add_systems(Update, home_display.run_if(in_state(AppState::Home)))
         .add_systems(OnExit(AppState::Home), cleanup_menu)
-        .add_systems(OnEnter(AppState::Setup), setup_setup)
-        .add_systems(Update, setup_input.run_if(in_state(AppState::Setup)))
-        .add_systems(Update, setup_display.run_if(in_state(AppState::Setup)))
-        .add_systems(OnExit(AppState::Setup), cleanup_menu)
+        .add_systems(OnEnter(AppState::Settings), setup_settings)
+        .add_systems(
+            Update,
+            system_settings_input.run_if(in_state(AppState::Settings)),
+        )
+        .add_systems(
+            Update,
+            system_settings_display.run_if(in_state(AppState::Settings)),
+        )
+        .add_systems(OnExit(AppState::Settings), cleanup_menu)
         .add_systems(OnEnter(AppState::DeviceSelection), setup_device_selection)
         .add_systems(
             Update,
@@ -89,7 +99,7 @@ pub(crate) fn run() {
         .add_systems(OnExit(AppState::Calibration), cleanup_calibration)
         .add_systems(
             OnEnter(AppState::LatencyCalibration),
-            setup_latency_calibration,
+            settings_latency_calibration,
         )
         .add_systems(
             Update,

@@ -48,7 +48,7 @@ pub(crate) fn setup_home(mut commands: Commands) {
 /// Spawn the Set Up screen.
 ///
 /// AI_CODE
-pub(crate) fn setup_setup(mut commands: Commands) {
+pub(crate) fn setup_settings(mut commands: Commands) {
     // Create the submenu for all configuration tools.
     commands.spawn((
         Text::new(""),
@@ -68,7 +68,7 @@ pub(crate) fn setup_setup(mut commands: Commands) {
 }
 
 /// Navigate Home and open Live Session or Set Up.
-pub(crate) fn home_input(
+pub(crate) fn system_home_input(
     mut nav_events: MessageReader<InletEvent<NavigationMessage>>,
     mut menu: ResMut<MenuSelection>,
     mut next_state: ResMut<NextState<AppState>>,
@@ -88,7 +88,7 @@ pub(crate) fn home_input(
                     0 => AppState::Gameplay,
                     1 => AppState::Songs,
                     2 => AppState::Editor,
-                    _ => AppState::Setup,
+                    _ => AppState::Settings,
                 });
             }
             NavigationMessage::Slot(num) => {
@@ -119,7 +119,7 @@ pub(crate) fn home_display(menu: Res<MenuSelection>, mut text: Query<&mut Text, 
         {} [1] LIVE SESSION\n\
         {} [2] SONGS\n\
         {} [3] EDITOR\n\
-        {} [4] SET UP\n\n\
+        {} [4] SETTINGS\n\n\
         Up/Down: navigate     Enter: open",
         marker(0),
         marker(1),
@@ -129,7 +129,7 @@ pub(crate) fn home_display(menu: Res<MenuSelection>, mut text: Query<&mut Text, 
 }
 
 /// Navigate Set Up and open a setup tool or Home.
-pub(crate) fn setup_input(
+pub(crate) fn system_settings_input(
     mut nav_events: MessageReader<InletEvent<NavigationMessage>>,
     mut menu: ResMut<MenuSelection>,
     mut next_state: ResMut<NextState<AppState>>,
@@ -167,7 +167,10 @@ pub(crate) fn setup_input(
 /// Render the selected setup tool.
 ///
 /// AI_CODE
-pub(crate) fn setup_display(menu: Res<MenuSelection>, mut text: Query<&mut Text, With<MenuText>>) {
+pub(crate) fn system_settings_display(
+    menu: Res<MenuSelection>,
+    mut text: Query<&mut Text, With<MenuText>>,
+) {
     // Render the four setup destinations and their selection marker.
     let Ok(mut text) = text.single_mut() else {
         return;
@@ -196,10 +199,7 @@ pub(crate) fn setup_display(menu: Res<MenuSelection>, mut text: Query<&mut Text,
 /// Despawn the shared menu camera and text entities.
 ///
 /// AI_CODE
-pub(crate) fn cleanup_menu(
-    mut commands: Commands,
-    entities: Query<Entity, With<MenuText>>,
-) {
+pub(crate) fn cleanup_menu(mut commands: Commands, entities: Query<Entity, With<MenuText>>) {
     // Both menu screens share the same text and camera marker types.
     for entity in &entities {
         commands.entity(entity).despawn();

@@ -154,9 +154,9 @@ pub(crate) fn device_selection_input(
         match event.kind {
             NavigationMessage::Select => {
                 commit_device_selection(&selection, &mut stream, &mut settings);
-                next_state.set(AppState::Setup);
+                next_state.set(AppState::Settings);
             }
-            NavigationMessage::Back => next_state.set(AppState::Setup),
+            NavigationMessage::Back => next_state.set(AppState::Settings),
             NavigationMessage::Up => {
                 selection.focus = selection
                     .focus
@@ -415,7 +415,7 @@ pub(crate) fn setup_calibration(mut commands: Commands) {
 }
 
 /// AI_CODE
-pub(crate) fn setup_latency_calibration(
+pub(crate) fn settings_latency_calibration(
     mut commands: Commands,
     time: Res<Time>,
     settings: Res<PersistentSettings>,
@@ -475,7 +475,7 @@ pub(crate) fn latency_calibration_input(
     for event in nav_events.read() {
         match event.kind {
             NavigationMessage::Back => {
-                next_state.set(AppState::Setup);
+                next_state.set(AppState::Settings);
                 return;
             }
             NavigationMessage::Down | NavigationMessage::Up => {
@@ -493,7 +493,7 @@ pub(crate) fn latency_calibration_input(
                 if latency.attempts > 0 {
                     settings.latency_ms = latency.best_ms;
                     save_settings(&settings);
-                    next_state.set(AppState::Setup);
+                    next_state.set(AppState::Settings);
                 }
             }
             _ => {}
@@ -524,7 +524,7 @@ pub(crate) fn latency_calibration_display(
         LIVE SESSION CHECK\n\n\
         Tap Up or Down as the yellow beat line crosses the center marker.\n\
         Attempts: {}\n{}\n\n\
-        Press ENTER to accept and return to Set Up.",
+        Press ENTER to accept and return to Settings.",
         latency.attempts, result,
     ));
 }
@@ -532,14 +532,7 @@ pub(crate) fn latency_calibration_display(
 /// AI_CODE
 pub(crate) fn cleanup_latency_calibration(
     mut commands: Commands,
-    entities: Query<
-        Entity,
-        Or<(
-            With<LatencyText>,
-            With<LatencyPulse>,
-            With<LatencyEntity>,
-        )>,
-    >,
+    entities: Query<Entity, Or<(With<LatencyText>, With<LatencyPulse>, With<LatencyEntity>)>>,
 ) {
     for entity in &entities {
         commands.entity(entity).despawn();
@@ -558,7 +551,7 @@ pub(crate) fn calibration_input(
     for event in nav_events.read() {
         match event.kind {
             NavigationMessage::Select | NavigationMessage::Back => {
-                next_state.set(AppState::Setup);
+                next_state.set(AppState::Settings);
             }
             NavigationMessage::Up => {
                 calibration.selected = (calibration.selected + 1) % selection.slots.len();
@@ -647,13 +640,7 @@ pub(crate) fn calibration_display(
 /// AI_CODE
 pub(crate) fn cleanup_calibration(
     mut commands: Commands,
-    entities: Query<
-        Entity,
-        Or<(
-            With<CalibrationText>,
-            With<CalibrationMeter>,
-        )>,
-    >,
+    entities: Query<Entity, Or<(With<CalibrationText>, With<CalibrationMeter>)>>,
 ) {
     for entity in &entities {
         commands.entity(entity).despawn();
