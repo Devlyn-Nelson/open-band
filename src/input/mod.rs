@@ -3,7 +3,7 @@ pub(crate) const RECORDING_ENVIRONMENT_VARIABLE: &str = "BAND_HERO_RECORDING";
 use crate::audio::NoteData;
 use crate::{
     AudioDetector, Instrument, InstrumentEvent, InstrumentKind, InstrumentSlot, Kit, LANES,
-    NotePhase, pitch_to_lane,
+    NotePhase,
 };
 
 /// Runtime device configuration consumed by the input worker.

@@ -103,6 +103,15 @@ pub(crate) fn snap_tick(tick: u32, interval: SnapInterval, resolution: u32) -> u
     }
 }
 
+#[test]
+/// Rounds a tick position to the nearest snap-interval multiple, tempo-independent.
+fn snap_tick_rounds_to_the_nearest_interval() {
+    assert_eq!(snap_tick(100, SnapInterval::Quarter, 960), 0);
+    assert_eq!(snap_tick(500, SnapInterval::Quarter, 960), 960);
+    assert_eq!(snap_tick(960, SnapInterval::Quarter, 960), 960);
+    assert_eq!(snap_tick(240, SnapInterval::Sixteenth, 960), 240);
+}
+
 /// AI_CODE
 impl<'de> Deserialize<'de> for NoteValue {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -678,6 +687,58 @@ pub(crate) fn load_kit_library() -> Vec<NamedKit> {
         }
     }
     kits
+}
+
+#[test]
+/// The kit library's pieces all reference a valid lane or a lane-spanning color, and the
+/// standard rock kit specifically has 3 toms, snare, hi-hat, crash, ride, and a kick.
+fn kit_library_pieces_are_placed_and_standard_kit_has_expected_pieces() {
+    let library = load_kit_library();
+    assert!(!library.is_empty());
+    for named in &library {
+        for piece in &named.pieces {
+            assert!(
+                piece.lane.is_some() != piece.lane_span.is_some(),
+                "{} piece {} should have exactly one of lane/lane_span",
+                named.name,
+                piece.name
+            );
+            if let Some(lane) = piece.lane {
+                assert!(
+                    lane < named.lanes,
+                    "{} piece {} lane out of range",
+                    named.name,
+                    piece.name
+                );
+            }
+        }
+    }
+
+    let standard = library
+        .iter()
+        .find(|named| named.name == "Standard Rock Kit")
+        .expect("standard rock kit should be in the library");
+    let symbol_counts = |symbol: &str| {
+        standard
+            .pieces
+            .iter()
+            .filter(|piece| piece.symbol.as_deref() == Some(symbol))
+            .count()
+    };
+    assert_eq!(
+        symbol_counts("tom"),
+        4,
+        "expected snare + 3 toms tagged as toms"
+    );
+    assert_eq!(symbol_counts("cymbal"), 2, "expected crash and ride");
+    assert_eq!(symbol_counts("hihat"), 1);
+    assert!(
+        standard
+            .pieces
+            .iter()
+            .any(|piece| piece.name == "kick" && piece.lane_span.is_some()),
+        "expected a lane-spanning kick"
+    );
 }
 
 /// Descriptive-only vocal range; does not gate playability or detection.
@@ -1929,4 +1990,1114 @@ impl fmt::Display for ChartTrack {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.name)
     }
+}
+
+#[test]
+fn bass_projection_falls_back_when_preferred_string_cannot_play_note() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+                {
+                    "version": 1,
+                    "title": "Projection",
+                    "resolution": 960,
+                    "tempo_map": [{ "start": 0, "bpm": 90.0 }],
+                    "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+                    "tracks": [{
+                        "name": "Bass",
+                        "kind": "strings",
+                        "tuning": { "strings": ["B0", "E1", "A1", "D2", "G2"] },
+                        "notes": [{
+                            "start": 960,
+                            "length": 4,
+                            "note": "C1",
+                            "performance": { "preferred_string": 2 }
+                        }]
+                    }]
+                }
+                "#,
+    )
+    .expect("projection chart should parse");
+
+    let notes = chart.string_notes();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].string, 0);
+    assert_eq!(notes[0].fret, 1);
+}
+
+#[test]
+fn string_techniques_parse_resolve_and_round_trip() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Techniques",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": [{
+                "name": "Bass",
+                "kind": "strings",
+                "tuning": { "strings": ["E1", "A1", "D2", "G2"] },
+                "notes": [{
+                    "start": 0,
+                    "length": 4,
+                    "note": "E2",
+                    "performance": {
+                        "preferred_string": 0,
+                        "attack": "tap",
+                        "transition": "slide",
+                        "bend": { "semitones": 2.0, "release": true },
+                        "motion": { "kind": "trill", "target": "F#2" }
+                    }
+                }]
+            }]
+        }
+        "#,
+    )
+    .expect("string techniques chart should parse");
+
+    let notes = chart.string_notes();
+    assert_eq!(notes[0].attack, Some(NoteAttack::Tap));
+    assert_eq!(notes[0].transition, Some(NoteTransition::Slide));
+    assert_eq!(
+        notes[0].bend,
+        Some(BendSpec {
+            semitones: 2.0,
+            release: true,
+            points: Vec::new(),
+        })
+    );
+    assert_eq!(
+        notes[0].motion.as_ref().map(|motion| motion.kind),
+        Some(MotionKind::Trill)
+    );
+    assert_eq!(
+        notes[0].motion.as_ref().map(|motion| motion.target),
+        Some(42)
+    );
+
+    let serialized = serde_json::to_string(&chart).expect("techniques chart should serialize");
+    assert!(serialized.contains("\"attack\":\"tap\""));
+    assert!(serialized.contains("\"transition\":\"slide\""));
+    assert!(serialized.contains("\"target\":42"));
+    serde_json::from_str::<Chart>(&serialized).expect("serialized techniques chart should reparse");
+}
+
+#[test]
+fn performance_hints_parse_resolve_and_round_trip() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Performance Hints",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": [{
+                "name": "Bass",
+                "kind": "strings",
+                "tuning": { "strings": ["E1", "A1", "D2", "G2"] },
+                "notes": [{
+                    "start": 0,
+                    "length": 4,
+                    "note": "E2",
+                    "performance": {
+                        "preferred_string": 1,
+                        "attack": "tap",
+                        "motion": { "kind": "trill", "target": "F#2" }
+                    }
+                }]
+            }]
+        }
+        "#,
+    )
+    .expect("performance hints chart should parse");
+
+    let NoteContent::Pitched { note, .. } = &chart.tracks[0].notes[0].content else {
+        panic!("expected a pitched event");
+    };
+    assert_eq!(*note, 40);
+    assert_eq!(
+        chart.tracks[0].notes[0]
+            .performance
+            .as_ref()
+            .and_then(|hints| hints.attack),
+        Some(NoteAttack::Tap)
+    );
+    let resolved = chart.string_notes();
+    assert_eq!(resolved[0].string, 1);
+    assert_eq!(resolved[0].attack, Some(NoteAttack::Tap));
+    assert_eq!(
+        resolved[0].motion.as_ref().map(|motion| motion.target),
+        Some(42)
+    );
+
+    let serialized = serde_json::to_string(&chart).expect("performance hints should serialize");
+    assert!(serialized.contains("\"performance\""));
+    serde_json::from_str::<Chart>(&serialized).expect("performance hints should reload");
+
+    let _typed_hint = PerformanceHints {
+        preferred_string: Some(1),
+        attack: Some(NoteAttack::Tap),
+        transition: None,
+        bend: None,
+        motion: None,
+        percussion_dynamics: None,
+        roll: None,
+        droll: None,
+        percussion_grace: None,
+        percussion_technique: None,
+        sticking: None,
+        hi_hat: None,
+        harmonic: None,
+        palm_mute: false,
+        vibrato: None,
+    };
+}
+
+#[test]
+fn instrument_notation_metadata_round_trips() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Instrument Notation",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": [{
+                "name": "Guitar",
+                "kind": "strings",
+                "tuning": { "strings": ["E2", "A2", "D3", "G3", "B3", "E4"] },
+                "capo": 3,
+                "notes": [{
+                    "start": 0,
+                    "length": 4,
+                    "note": "E3",
+                    "grace": { "kind": "acciaccatura", "slash": true },
+                    "performance": {
+                        "harmonic": "natural",
+                        "palm_mute": true,
+                        "vibrato": "wide"
+                    }
+                }]
+            }, {
+                "name": "Drums",
+                "kind": "percussion",
+                "kit": { "lanes": 2, "pieces": [
+                    { "name": "snare", "trigger": "midi:38", "lane": 0 },
+                    { "name": "hihat", "trigger": "midi:42", "lane": 1 }
+                ] },
+                "notes": [{
+                    "start": 0,
+                    "length": 8,
+                    "piece": "snare",
+                    "performance": {
+                        "percussion_grace": "flam",
+                        "percussion_technique": "buzz",
+                        "sticking": "right",
+                        "hi_hat": "closed"
+                    }
+                }]
+            }]
+        }
+        "#,
+    )
+    .expect("instrument notation chart should parse");
+    assert_eq!(chart.tracks[0].capo, Some(3));
+    assert_eq!(
+        chart.tracks[0].notes[0].grace.as_ref().unwrap().kind,
+        GraceKind::Acciaccatura
+    );
+    let guitar_hints = chart.tracks[0].notes[0].performance.as_ref().unwrap();
+    assert_eq!(guitar_hints.harmonic, Some(HarmonicKind::Natural));
+    assert!(guitar_hints.palm_mute);
+    assert_eq!(guitar_hints.vibrato, Some(VibratoKind::Wide));
+    let drum_hints = chart.tracks[1].notes[0].performance.as_ref().unwrap();
+    assert_eq!(drum_hints.percussion_grace, Some(PercussionGrace::Flam));
+    assert_eq!(drum_hints.hi_hat, Some(HiHatState::Closed));
+
+    let serialized = serde_json::to_string(&chart).expect("instrument notation should serialize");
+    serde_json::from_str::<Chart>(&serialized).expect("instrument notation should reload");
+}
+
+#[test]
+fn chord_validation_reports_inconsistent_groups() {
+    let chart: Chart = serde_json::from_str(
+        r#"{
+            "version": 1,
+            "title": "Bad Chords",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": [{
+                "name": "Lead",
+                "kind": "strings",
+                "tuning": { "strings": ["E1", "A1", "D2", "G2"] },
+                "notes": [
+                    { "start": 0, "length": 4, "chord": "c1", "note": "E2" },
+                    { "start": 480, "length": 4, "chord": "c1", "note": "G2" }
+                ]
+            }]
+        }"#,
+    )
+    .expect("chord chart should parse");
+    assert!(
+        chart
+            .validate()
+            .iter()
+            .any(|warning| warning.contains("chord \"c1\" has inconsistent"))
+    );
+}
+
+#[test]
+fn notation_features_parse_and_layout() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Notation Features",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": [{
+                "name": "Lead",
+                "kind": "strings",
+                "tuning": { "strings": ["E1", "A1", "D2", "G2"] },
+                "clef": "bass",
+                "key_signature": { "fifths": -2, "mode": "major" },
+                "notes": [
+                    {
+                        "start": 0,
+                        "length": 8,
+                        "tuplet": { "actual": 3, "normal": 2 },
+                        "chord": "c1",
+                        "note": "E2",
+                        "dynamic": "mf",
+                        "articulations": ["accent"]
+                    },
+                    {
+                        "start": 320,
+                        "length": 8,
+                        "tuplet": { "actual": 3, "normal": 2 },
+                        "chord": "c1",
+                        "note": "G2"
+                    }
+                ],
+                "phrases": [{
+                    "start": 0,
+                    "duration_ticks": 960,
+                    "text": "hel",
+                    "syllable": "begin",
+                    "melisma": true,
+                    "notes": []
+                }]
+            }]
+        }
+        "#,
+    )
+    .expect("notation features should parse");
+
+    let track = &chart.tracks[0];
+    assert_eq!(track.clef, Some(Clef::Bass));
+    assert_eq!(
+        track.key_signature,
+        Some(KeySignature {
+            fifths: -2,
+            mode: KeyMode::Major
+        })
+    );
+    assert_eq!(track.notes[0].duration_ticks(960), 320);
+    assert_eq!(track.notes[0].chord.as_deref(), Some("c1"));
+    assert_eq!(track.notes[0].dynamic, Some(DynamicLevel::Mf));
+    assert_eq!(track.notes[0].articulations, vec![Articulation::Accent]);
+    assert_eq!(track.phrases[0].syllable, Some(SyllableKind::Begin));
+    assert!(track.phrases[0].melisma);
+
+    let layout = layout_track(&chart, track);
+    assert_eq!(layout.clef, Some(Clef::Bass));
+    assert_eq!(layout.key_signature, track.key_signature);
+    assert_eq!(layout.tuplets, vec![vec![0, 1]]);
+}
+
+#[test]
+fn explicit_rest_events_parse_and_round_trip() {
+    let event: ChartEvent = serde_json::from_str(
+        r#"{
+            "id": "rest-1",
+            "start": 960,
+            "length": 4,
+            "voice": 2,
+            "staff": 1,
+            "dots": 1,
+            "rest": true
+        }"#,
+    )
+    .expect("explicit rest should parse");
+    assert!(matches!(event.content, NoteContent::Rest));
+    assert_eq!(event.duration_ticks(960), 1440);
+    assert_eq!(event.voice, 2);
+
+    let serialized = serde_json::to_string(&event).expect("rest should serialize");
+    assert!(serialized.contains("\"rest\":true"));
+    let reloaded: ChartEvent = serde_json::from_str(&serialized).expect("rest should reload");
+    assert!(matches!(reloaded.content, NoteContent::Rest));
+
+    let chart: Chart = serde_json::from_str(
+        r#"{
+            "version": 1,
+            "title": "Rest Layout",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": [{
+                "name": "Lead",
+                "kind": "strings",
+                "tuning": { "strings": ["E1", "A1", "D2", "G2"] },
+                "notes": [{ "start": 960, "length": 4, "rest": true }]
+            }]
+        }"#,
+    )
+    .expect("rest layout chart should parse");
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert!(layout.rests.iter().any(|rest| rest.start == 960));
+
+    for invalid in [
+        r#"{ "start": 0, "length": 4, "rest": true, "note": "C4" }"#,
+        r#"{ "start": 0, "length": 4, "rest": true, "piece": "snare" }"#,
+    ] {
+        assert!(serde_json::from_str::<ChartEvent>(invalid).is_err());
+    }
+}
+
+#[test]
+fn score_navigation_markers_round_trip_and_validate() {
+    let mut chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Navigation",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "structure": [
+                { "type": "repeat_start", "tick": 0 },
+                { "type": "repeat_end", "tick": 3840, "times": 2 },
+                { "type": "ending_start", "tick": 3840, "number": 1 },
+                { "type": "ending_end", "tick": 4800, "number": 1 },
+                { "type": "segno", "tick": 0 },
+                { "type": "coda", "tick": 4800 },
+                { "type": "fine", "tick": 5760 },
+                { "type": "da_capo", "tick": 5760 },
+                { "type": "dal_segno", "tick": 5760 },
+                { "type": "rehearsal", "tick": 0, "label": "A" }
+            ],
+            "tracks": [{
+                "name": "Bass",
+                "kind": "strings",
+                "tuning": { "strings": ["E1", "A1", "D2", "G2"] },
+                "notes": [
+                    { "start": 0, "length": 4, "note": "E1" },
+                    { "start": 5760, "length": 4, "note": "E1" }
+                ]
+            }]
+        }
+        "#,
+    )
+    .expect("navigation chart should parse");
+    assert!(matches!(
+        chart.structure[1],
+        ScoreMarker::RepeatEnd { times: 2, .. }
+    ));
+    assert!(chart.validate().is_empty());
+
+    let serialized = serde_json::to_string(&chart).expect("navigation chart should serialize");
+    chart
+        .structure
+        .push(ScoreMarker::RepeatEnd { tick: 0, times: 1 });
+    assert!(
+        chart
+            .validate()
+            .iter()
+            .any(|warning| warning.contains("repeat end must have times"))
+    );
+    serde_json::from_str::<Chart>(&serialized).expect("navigation chart should reload");
+}
+
+#[test]
+fn tempo_text_and_score_expressions_round_trip_and_validate() {
+    let mut chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Expressions",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tempo_text": [{ "tick": 0, "text": "Andante", "bpm": 80.0 }],
+            "expressions": [
+                { "type": "accelerando", "start": 0, "duration_ticks": 1920, "from_bpm": 80.0, "to_bpm": 120.0 },
+                { "type": "crescendo", "start": 0, "duration_ticks": 1920 }
+            ],
+            "tracks": [{
+                "name": "Bass",
+                "kind": "strings",
+                "tuning": { "strings": ["E1", "A1", "D2", "G2"] },
+                "notes": [{ "start": 0, "length": 4, "note": "E1" }, { "start": 1920, "length": 4, "note": "E1" }]
+            }]
+        }
+        "#,
+    )
+    .expect("expression chart should parse");
+    assert_eq!(chart.tempo_text[0].text, "Andante");
+    assert!(matches!(
+        chart.expressions[0],
+        ScoreExpression::Accelerando { .. }
+    ));
+    assert!(chart.validate().is_empty());
+
+    let serialized = serde_json::to_string(&chart).expect("expression chart should serialize");
+    let reloaded: Chart =
+        serde_json::from_str(&serialized).expect("expression chart should reload");
+    assert_eq!(
+        reloaded.tempo_text[0],
+        TempoText {
+            tick: 0,
+            text: "Andante".into(),
+            bpm: Some(80.0)
+        }
+    );
+
+    chart.tempo_text.push(TempoText {
+        tick: 0,
+        text: String::new(),
+        bpm: None,
+    });
+    chart.expressions.push(ScoreExpression::Ritardando {
+        start: 0,
+        duration_ticks: 0,
+        from_bpm: 120.0,
+        to_bpm: 90.0,
+    });
+    let warnings = chart.validate();
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("empty label"))
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("invalid range"))
+    );
+}
+
+#[test]
+fn written_pitch_spelling_survives_chart_round_trip() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Enharmonic Spelling",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": [{
+                "name": "Lead",
+                "kind": "strings",
+                "tuning": { "strings": ["E1", "A1", "D2", "G2"] },
+                "notes": [
+                    { "start": 0, "length": 4, "voice": 2, "staff": 1, "note": "C#4" },
+                    { "start": 960, "length": 4, "note": "Db4" },
+                    { "start": 1920, "length": 4, "note": 61 }
+                ]
+            }]
+        }
+        "#,
+    )
+    .expect("spelled chart should parse");
+
+    let notes = &chart.tracks[0].notes;
+    let NoteContent::Pitched {
+        spelling: sharp,
+        note: sharp_midi,
+        ..
+    } = &notes[0].content
+    else {
+        panic!("expected a pitched event");
+    };
+    let NoteContent::Pitched {
+        spelling: flat,
+        note: flat_midi,
+        ..
+    } = &notes[1].content
+    else {
+        panic!("expected a pitched event");
+    };
+    assert_eq!(*sharp_midi, 61);
+    assert_eq!(*flat_midi, 61);
+    assert_eq!(sharp.as_ref().map(|pitch| pitch.step), Some('C'));
+    assert_eq!(sharp.as_ref().map(|pitch| pitch.alter), Some(1));
+    assert_eq!(flat.as_ref().map(|pitch| pitch.step), Some('D'));
+    assert_eq!(flat.as_ref().map(|pitch| pitch.alter), Some(-1));
+    assert_eq!(notes[0].voice, 2);
+    assert_eq!(notes[0].staff, 1);
+    assert_eq!(notes[2].note(), Some(61));
+    assert!(matches!(
+        &notes[2].content,
+        NoteContent::Pitched { spelling: None, .. }
+    ));
+
+    let serialized = serde_json::to_string(&chart).expect("spelled chart should serialize");
+    assert!(serialized.contains("\"spelling\":{"));
+    let reloaded: Chart = serde_json::from_str(&serialized).expect("spelled chart should reload");
+    let NoteContent::Pitched { spelling, .. } = &reloaded.tracks[0].notes[1].content else {
+        panic!("expected a pitched event");
+    };
+    assert_eq!(
+        spelling,
+        &Some(PitchSpelling {
+            step: 'D',
+            alter: -1,
+            octave: 4,
+        })
+    );
+}
+
+#[test]
+fn score_event_ids_and_relationships_round_trip_and_validate() {
+    let mut chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Relationships",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": [{
+                "name": "Lead",
+                "kind": "strings",
+                "tuning": { "strings": ["E1", "A1", "D2", "G2"] },
+                "notes": [
+                    { "id": "n1", "start": 0, "length": 4, "note": "E2" },
+                    { "id": "n2", "start": 960, "length": 4, "note": "E2" }
+                ],
+                "ties": [{ "from": "n1", "to": "n2" }],
+                "slurs": [{ "from": "n1", "to": "n2" }]
+            }]
+        }
+        "#,
+    )
+    .expect("relationship chart should parse");
+
+    assert_eq!(chart.tracks[0].notes[0].id.as_deref(), Some("n1"));
+    assert_eq!(
+        chart.tracks[0].ties[0],
+        EventRelation {
+            from: "n1".into(),
+            to: "n2".into()
+        }
+    );
+    assert!(chart.validate().is_empty());
+
+    let serialized = serde_json::to_string(&chart).expect("relationship chart should serialize");
+    let reloaded: Chart =
+        serde_json::from_str(&serialized).expect("relationship chart should reload");
+    assert_eq!(reloaded.tracks[0].slurs.len(), 1);
+
+    chart.tracks[0].ties.push(EventRelation {
+        from: "n2".into(),
+        to: "missing".into(),
+    });
+    assert!(
+        chart
+            .validate()
+            .iter()
+            .any(|warning| warning.contains("tie references an unknown event ID"))
+    );
+}
+
+#[test]
+fn chart_validation_reports_invalid_ties_and_bend_curves() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Invalid Notation",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": [{
+                "name": "Bass",
+                "kind": "strings",
+                "tuning": { "strings": ["E1", "A1", "D2", "G2"] },
+                "notes": [
+                    { "start": 0, "length": 4, "tied": true, "note": "E2", "performance": { "bend": {
+                        "points": [
+                            { "offset": 0.75, "semitones": 2.0 },
+                            { "offset": 0.25, "semitones": 0.0 }
+                        ]
+                    } } },
+                    { "start": 1920, "length": 4, "note": "F2" }
+                ]
+            }]
+        }
+        "#,
+    )
+    .expect("invalid notation should still parse");
+    let warnings = chart.validate();
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("tie does not start"))
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("tie changes pitch"))
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("invalid bend curve"))
+    );
+}
+
+#[test]
+/// Loads the built-in chart with ordered, playable bass notes.
+fn built_in_chart_has_playable_notes() {
+    const OPEN_STRINGS_CHART: &str = include_str!("../../../charts/open-strings.json");
+    let chart: Chart =
+        serde_json::from_str(OPEN_STRINGS_CHART).expect("built-in chart should parse");
+    assert_eq!(chart.version, 1);
+    assert_eq!(chart.tracks.len(), 1);
+    assert_eq!(chart.tracks[0].kind, InstrumentKind::Strings);
+    assert_eq!(
+        chart.tracks[0].tuning.as_ref().map(|tuning| tuning
+            .strings
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()),
+        Some(vec!["B0", "E1", "A1", "D2", "G2"])
+    );
+    let notes = chart.string_notes();
+    assert_eq!(notes.len(), 10);
+    assert_eq!(notes[0].note, "B0");
+    assert_eq!(notes[5].note, "D1");
+    assert!(
+        notes
+            .windows(2)
+            .all(|notes| notes[0].start < notes[1].start)
+    );
+}
+#[test]
+fn chart_directory_loads_all_valid_charts() {
+    let charts = load_charts();
+    let chart_files = std::fs::read_dir("charts")
+        .expect("charts directory should exist")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .count();
+    assert_eq!(
+        charts.len(),
+        chart_files,
+        "every JSON chart in the charts directory should load"
+    );
+    assert!(!charts.is_empty(), "expected at least one chart");
+}
+
+#[test]
+/// The drum-only test chart hits every standard rock kit piece at least twice.
+fn drum_kit_workout_chart_covers_every_piece_at_least_twice() {
+    let charts = load_charts();
+    let Some(chart) = charts
+        .iter()
+        .find(|chart| chart.title == "Drum Kit Workout")
+    else {
+        return;
+    };
+    let notes = chart.percussion_notes();
+    for piece in [
+        "kick", "snare", "tom1", "hihat", "tom2", "ride", "tom3", "crash",
+    ] {
+        let count = notes.iter().filter(|note| note.piece == piece).count();
+        assert!(
+            count >= 2,
+            "expected {piece} to appear at least twice, got {count}"
+        );
+    }
+}
+
+#[test]
+/// The three-track jam chart is roughly 30 seconds and has a part for each instrument.
+fn easy_band_jam_chart_has_three_tracks_and_is_about_thirty_seconds() {
+    let charts = load_charts();
+    let chart = charts
+        .iter()
+        .find(|chart| chart.title == "Easy Band Jam")
+        .expect("easy band jam chart should load");
+    assert_eq!(chart.tracks.len(), 3);
+    assert!(chart.tracks.iter().any(|track| track.name == "Bass"));
+    assert!(chart.tracks.iter().any(|track| track.name == "Guitar"));
+    assert!(chart.tracks.iter().any(|track| track.name == "Drums"));
+    let seconds = chart.tick_to_seconds(chart.total_ticks());
+    assert!(
+        (25.0..=35.0).contains(&seconds),
+        "expected roughly 30 seconds, got {seconds}"
+    );
+}
+
+#[test]
+fn chart_supports_multiple_instrument_tracks_and_vocal_phrases() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+                {
+                    "version": 1,
+                    "title": "Band Test",
+                    "resolution": 960,
+                    "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+                    "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+                    "tracks": [
+                        {
+                            "name": "Bass",
+                            "kind": "strings",
+                            "tuning": { "strings": ["B0", "E1", "A1", "D2", "G2"] },
+                            "notes": [{ "start": 960, "length": 4, "note": 23 }]
+                        },
+                        {
+                            "name": "Lead Vocal",
+                            "kind": "voice",
+                            "phrases": [{
+                                "start": 1920,
+                                "duration_ticks": 1920,
+                                "text": "Hello",
+                                "notes": [{ "start": 1920, "length": 2, "note": "C4" }]
+                            }]
+                        }
+                    ]
+                }
+                "#,
+    )
+    .expect("multi-track chart should parse");
+
+    assert_eq!(chart.starting_time_signature(), [4, 4]);
+    assert_eq!(chart.tracks.len(), 2);
+    assert_eq!(chart.tracks[1].phrases[0].text, "Hello");
+    assert_eq!(chart.tracks[1].phrases[0].notes[0].note(), Some(60));
+    assert_eq!(chart.total_ticks(), 3840);
+    assert_eq!(chart.string_notes()[0].note, "B0");
+}
+
+#[test]
+/// Resolves shared-lane percussion pieces (tom vs. cymbal) and a lane-spanning kick by name.
+fn percussion_track_resolves_pieces_by_name() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Drums Test",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": [{
+                "name": "Drums",
+                "kind": "percussion",
+                "kit": {
+                    "lanes": 4,
+                    "pieces": [
+                        { "name": "kick", "trigger": "midi:36", "lane_span": "yellow" },
+                        { "name": "snare", "trigger": "midi:38", "lane": 0, "symbol": "tom" },
+                        { "name": "crash", "trigger": "midi:49", "lane": 1, "symbol": "cymbal" }
+                    ]
+                },
+                "notes": [
+                    { "start": 0, "length": 4, "piece": "kick" },
+                    { "start": 960, "length": 4, "piece": "snare", "performance": { "percussion_dynamics": "accent" } },
+                    { "start": 1920, "length": 4, "piece": "crash", "performance": { "roll": "crash" } },
+                    { "start": 2880, "length": 4, "piece": "snare", "performance": { "droll": "crash" } }
+                ]
+            }]
+        }
+        "#,
+    )
+    .expect("percussion chart should parse");
+
+    let notes = chart.percussion_notes();
+    assert_eq!(notes.len(), 4);
+    assert_eq!(notes[0].piece, "kick");
+    assert_eq!(notes[0].lane_span_color.as_deref(), Some("yellow"));
+    assert_eq!(notes[1].dynamics, NoteDynamics::Accent);
+    assert_eq!(notes[1].symbol.as_deref(), Some("tom"));
+    assert_eq!(notes[2].symbol.as_deref(), Some("cymbal"));
+    assert_eq!(notes[2].roll.as_deref(), Some("crash"));
+    assert_eq!(notes[2].droll, None);
+    assert_eq!(notes[3].roll, None);
+    assert_eq!(notes[3].droll.as_deref(), Some("crash"));
+}
+
+#[test]
+fn chart_rejects_conflicting_or_pitched_roll_fields() {
+    for json in [
+        r#"{ "start": 0, "length": 4, "piece": "kick", "performance": { "roll": "snare", "droll": "tom1" } }"#,
+        r#"{ "start": 0, "length": 4, "note": "E2", "performance": { "roll": "snare" } }"#,
+    ] {
+        assert!(
+            serde_json::from_str::<ChartEvent>(json).is_err(),
+            "expected rejection: {json}"
+        );
+    }
+}
+
+#[test]
+/// Walks a mid-song tempo change when converting ticks to seconds.
+fn tick_to_seconds_honors_a_mid_song_tempo_change() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Tempo Change",
+            "resolution": 960,
+            "tempo_map": [
+                { "start": 0, "bpm": 120.0 },
+                { "start": 1920, "bpm": 60.0 }
+            ],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": []
+        }
+        "#,
+    )
+    .expect("tempo-change chart should parse");
+
+    // Two quarter notes at 120 BPM (0.5s each) land exactly on the tempo change.
+    assert!((chart.tick_to_seconds(1920) - 1.0).abs() < 1e-4);
+    // One further quarter note at 60 BPM adds a full second.
+    assert!((chart.tick_to_seconds(2880) - 2.0).abs() < 1e-4);
+}
+
+#[test]
+/// Star Power phrases are simple range markers with no nested note list.
+fn star_power_phrase_parses_as_a_range_marker() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Star Power",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": [{
+                "name": "Bass",
+                "kind": "strings",
+                "tuning": { "strings": ["E1", "A1", "D2", "G2"] },
+                "notes": [],
+                "star_power_phrases": [{ "start": 0, "duration_ticks": 3840 }]
+            }]
+        }
+        "#,
+    )
+    .expect("star power chart should parse");
+
+    assert_eq!(chart.tracks[0].star_power_phrases.len(), 1);
+    assert_eq!(chart.tracks[0].star_power_phrases[0].duration_ticks, 3840);
+}
+
+#[test]
+/// Chart validation flags unplayable notes, missing tuning/kit, and unknown pieces.
+fn chart_validate_reports_expected_problems() {
+    let chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Broken Chart",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": [
+                {
+                    "name": "Bass",
+                    "kind": "strings",
+                    "tuning": { "strings": ["E1", "A1", "D2", "G2"] },
+                    "notes": [{ "start": 0, "length": 4, "note": 100 }]
+                },
+                {
+                    "name": "Drums",
+                    "kind": "percussion",
+                    "kit": { "lanes": 1, "pieces": [{ "name": "kick", "trigger": "midi:36", "lane": 0 }] },
+                    "notes": [{ "start": 0, "length": 4, "piece": "kick", "performance": { "droll": "nonexistent" } }]
+                }
+            ]
+        }
+        "#,
+    )
+    .expect("broken chart should still parse");
+
+    let warnings = chart.validate();
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("unplayable note"))
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("unknown performance roll target"))
+    );
+}
+
+fn simple_chart(resolution: u32) -> Chart {
+    serde_json::from_str(&format!(
+        r#"{{
+            "version": 1,
+            "title": "Notation Test",
+            "resolution": {resolution},
+            "tempo_map": [{{ "start": 0, "bpm": 120.0 }}],
+            "time_signature_map": [{{ "start": 0, "numerator": 4, "denominator": 4 }}],
+            "tracks": []
+        }}"#
+    ))
+    .expect("simple chart should parse")
+}
+
+#[test]
+/// Builds sequential 4/4 measures covering the requested tick span.
+fn measures_covers_the_requested_span_in_4_4() {
+    let chart = simple_chart(960);
+    let built = measures(&chart, 7680);
+    assert_eq!(built.len(), 2);
+    assert_eq!(built[0].start_tick, 0);
+    assert_eq!(built[0].end_tick, 3840);
+    assert_eq!(built[1].start_tick, 3840);
+    assert_eq!(built[1].end_tick, 7680);
+}
+
+#[test]
+/// A tied pair of quarter notes forms one tie chain, and the rest of the measure is
+/// filled with inferred rests that don't cross the barline.
+fn layout_track_ties_notes_and_infers_rests() {
+    let mut chart = simple_chart(960);
+    chart.tracks = vec![new_track(InstrumentKind::Strings)];
+    chart.tracks[0].notes = serde_json::from_str(
+        r#"[
+            { "start": 0, "length": 4, "note": "E1", "tied": true },
+            { "start": 960, "length": 4, "note": "E1" }
+        ]"#,
+    )
+    .expect("notes should parse");
+
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert_eq!(layout.ties, vec![vec![0, 1]]);
+    // The tie chain occupies ticks 0..1920; the rest of the 3840-tick measure is silent.
+    let rest_ticks = layout
+        .rests
+        .iter()
+        .map(|rest| rest.value.ticks(960))
+        .sum::<u32>();
+    assert_eq!(rest_ticks, 3840 - 1920);
+    assert!(layout.rests.iter().all(|rest| rest.start >= 1920));
+}
+
+#[test]
+/// Consecutive eighth notes within the same beat are grouped into one beam.
+fn layout_track_beams_eighth_notes_within_a_beat() {
+    let mut chart = simple_chart(960);
+    chart.tracks = vec![new_track(InstrumentKind::Strings)];
+    chart.tracks[0].notes = serde_json::from_str(
+        r#"[
+            { "start": 0, "length": 8, "note": "E1" },
+            { "start": 480, "length": 8, "note": "E1" },
+            { "start": 960, "length": 8, "note": "E1" },
+            { "start": 1440, "length": 8, "note": "E1" }
+        ]"#,
+    )
+    .expect("notes should parse");
+
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert_eq!(layout.beams, vec![vec![0, 1], vec![2, 3]]);
+}
+
+#[test]
+/// Bass tunings default to bass clef, guitar tunings (even 7-string) to treble, and
+/// percussion tracks have no clef at all.
+fn default_clef_distinguishes_bass_from_guitar_and_percussion() {
+    let mut bass = new_track(InstrumentKind::Strings);
+    bass.tuning = Some(Tuning {
+        strings: vec!["E1".into(), "A1".into(), "D2".into(), "G2".into()],
+    });
+    assert_eq!(default_clef(&bass), Some(Clef::Bass));
+
+    let mut guitar = new_track(InstrumentKind::Strings);
+    guitar.tuning = Some(Tuning {
+        strings: vec![
+            "B1".into(),
+            "E2".into(),
+            "A2".into(),
+            "D3".into(),
+            "G3".into(),
+            "B3".into(),
+            "E4".into(),
+        ],
+    });
+    assert_eq!(default_clef(&guitar), Some(Clef::Treble));
+
+    let percussion = new_track(InstrumentKind::Percussion);
+    assert_eq!(default_clef(&percussion), None);
+}
+
+#[test]
+/// A chart edited in memory round-trips through serialize/deserialize without losing
+/// pitched notes, percussive notes, dynamics, or ties.
+fn chart_round_trips_through_serialize_and_deserialize() {
+    let mut chart: Chart = serde_json::from_str(
+        r#"
+        {
+            "version": 1,
+            "title": "Round Trip",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [{ "start": 0, "numerator": 4, "denominator": 4 }],
+            "tracks": []
+        }
+        "#,
+    )
+    .expect("empty chart should parse");
+    chart.tracks.push(new_track(InstrumentKind::Strings));
+    chart.tracks.push(new_track(InstrumentKind::Percussion));
+    chart.tracks[0].notes.push(
+        serde_json::from_str(
+            r#"{ "start": 0, "length": 4, "dots": 1, "tied": true, "note": "E1", "performance": { "preferred_string": 0 } }"#,
+        )
+        .unwrap(),
+    );
+    chart.tracks[1].notes.push(
+        serde_json::from_str(r#"{ "start": 0, "length": 8, "piece": "kick", "performance": { "percussion_dynamics": "accent", "droll": "snare" } }"#)
+            .unwrap(),
+    );
+
+    let serialized = serde_json::to_string(&chart).expect("chart should serialize");
+    let reloaded: Chart =
+        serde_json::from_str(&serialized).expect("serialized chart should reparse");
+
+    assert_eq!(reloaded.title, "Round Trip");
+    assert_eq!(reloaded.tracks.len(), 2);
+    assert_eq!(reloaded.tracks[0].notes[0].note(), Some(28));
+    assert_eq!(reloaded.tracks[0].notes[0].dots, 1);
+    assert!(reloaded.tracks[0].notes[0].tied);
+    assert_eq!(reloaded.tracks[1].kind, InstrumentKind::Percussion);
+    assert_eq!(
+        reloaded.tracks[1].notes[0]
+            .performance
+            .as_ref()
+            .and_then(|hints| hints.droll.as_deref()),
+        Some("snare")
+    );
+}
+
+#[test]
+/// Accepts a detected pitch within the chart matcher tolerance.
+fn chart_pitch_matching_uses_cents() {
+    assert!(cents_error(56.0, 55.0).abs() < 90.0);
+    assert!(cents_error(65.4, 55.0).abs() > 90.0);
 }

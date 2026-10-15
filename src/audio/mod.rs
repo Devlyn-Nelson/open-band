@@ -57,6 +57,15 @@ impl NoteData {
     }
 }
 
+#[test]
+fn note_data_converts_pitch_to_nearest_midi_note() {
+    assert_eq!(NoteData::Midi(60).midi_note(), 60);
+    assert_eq!(NoteData::Pitch(440.0).midi_note(), 69);
+    assert_eq!(NoteData::Pitch(466.16).midi_note(), 70);
+    assert!((NoteData::Midi(69).pitch_note() - 440.0).abs() < 0.001);
+    assert_eq!(NoteData::Pitch(123.45).pitch_note(), 123.45);
+}
+
 #[derive(Clone, Copy, Debug)]
 /// Normalized input event sent from an audio or MIDI callback to Bevy.
 ///
@@ -105,12 +114,12 @@ pub(crate) const CONFIDENT_PITCH_THRESHOLD: f32 = 0.75;
 /// Estimate a fundamental frequency with a normalized YIN-style period search.
 ///
 /// AI_CODE
-pub(crate) fn estimate_pitch(samples: &[f32], sample_rate: f32) -> Option<f32> {
+pub fn estimate_pitch(samples: &[f32], sample_rate: f32) -> Option<f32> {
     estimate_pitch_in_range(samples, sample_rate, 30.0, 1400.0)
 }
 
 /// AI_CODE
-fn estimate_pitch_in_range(
+pub fn estimate_pitch_in_range(
     samples: &[f32],
     sample_rate: f32,
     min_pitch_hz: f32,
@@ -118,6 +127,62 @@ fn estimate_pitch_in_range(
 ) -> Option<f32> {
     estimate_pitch_with_confidence(samples, sample_rate, min_pitch_hz, max_pitch_hz)
         .map(|(pitch_hz, _)| pitch_hz)
+}
+
+#[test]
+/// Keeps the same pitch stable when its amplitude changes.
+fn pitch_estimation_is_stable_across_signal_strengths() {
+    let sample_rate = 44_100.0;
+    let pitches = [0.15, 0.9].map(|amplitude| {
+        let samples = (0..4096)
+            .map(|index| amplitude * (TAU * 55.0 * index as f32 / sample_rate).sin())
+            .collect::<Vec<_>>();
+        estimate_pitch(&samples, sample_rate).expect("a clear bass tone should be detected")
+    });
+
+    assert!(
+        (pitches[0] - 55.0).abs() < 1.0,
+        "quiet pitch: {}",
+        pitches[0]
+    );
+    assert!(
+        (pitches[1] - 55.0).abs() < 1.0,
+        "loud pitch: {}",
+        pitches[1]
+    );
+    assert!(
+        (pitches[0] - pitches[1]).abs() < 0.5,
+        "pitch drift: {pitches:?}"
+    );
+}
+
+#[test]
+/// Confirms that each bass open string owns a distinct lane.
+fn pitch_estimation_detects_five_string_low_b() {
+    let sample_rate = 44_100.0;
+    let samples = (0..4096)
+        .map(|index| (TAU * 30.87 * index as f32 / sample_rate).sin())
+        .collect::<Vec<_>>();
+
+    let pitch = estimate_pitch(&samples, sample_rate).expect("low B should be detected");
+    assert!((pitch - 30.87).abs() < 0.75, "detected pitch: {pitch}");
+}
+
+#[test]
+/// Confirms the bass fundamental estimator covers every five-string open note.
+fn pitch_estimation_detects_all_five_string_open_notes() {
+    let sample_rate = 44_100.0;
+    for expected in [30.87, 41.20, 55.00, 73.42, 98.00] {
+        let samples = (0..4096)
+            .map(|index| (TAU * expected * index as f32 / sample_rate).sin())
+            .collect::<Vec<_>>();
+        let detected = estimate_pitch(&samples, sample_rate)
+            .expect("each five-string open note should be detected");
+        assert!(
+            (detected - expected).abs() < 1.0,
+            "expected={expected}, detected={detected}"
+        );
+    }
 }
 
 /// Estimate a fundamental frequency along with a 0..1 confidence score, where
@@ -234,4 +299,28 @@ pub(crate) fn string_lane(open_frequencies: &[f32], pitch_hz: f32) -> usize {
                 .total_cmp(&(pitch_hz / **right).ln().abs())
         })
         .map_or(0, |(lane, _)| lane.min(LANES - 1))
+}
+
+#[test]
+/// Confirms four- and five-string open-note lane assignments.
+fn bass_open_strings_map_to_their_string_lanes() {
+    let five_string_open_notes = [30.87, 41.20, 55.00, 73.42, 98.00];
+    for (lane, pitch) in five_string_open_notes.into_iter().enumerate() {
+        assert_eq!(string_lane(&five_string_open_notes, pitch), lane);
+    }
+
+    let four_string_open_notes = [41.20, 55.00, 73.42, 98.00];
+    for (lane, pitch) in four_string_open_notes.into_iter().enumerate() {
+        assert_eq!(string_lane(&four_string_open_notes, pitch), lane);
+    }
+}
+
+#[test]
+/// Documents the physical-string lanes used for instrument navigation.
+fn instrument_navigation_string_mapping() {
+    let five_string_open_notes = [30.87, 41.20, 55.00, 73.42, 98.00];
+    assert_eq!(string_lane(&five_string_open_notes, 98.0), 4);
+    assert_eq!(string_lane(&five_string_open_notes, 73.42), 3);
+    assert_eq!(string_lane(&five_string_open_notes, 55.0), 2);
+    assert_eq!(string_lane(&five_string_open_notes, 41.20), 1);
 }

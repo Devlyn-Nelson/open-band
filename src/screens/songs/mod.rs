@@ -2,7 +2,6 @@ use inlet::InletEvent;
 
 use crate::*;
 
-pub(crate) const OPEN_STRINGS_CHART: &str = include_str!("../../../charts/open-strings.json");
 pub(crate) const CHART_HIT_LINE_Y: f32 = -250.0;
 pub(crate) const CHART_NOTE_SPEED: f32 = 260.0;
 
@@ -99,12 +98,6 @@ pub(crate) fn load_charts() -> Vec<Chart> {
             }) {
             Ok(chart) => charts.push(chart),
             Err(error) => eprintln!("Could not load chart {}: {error}", path.display()),
-        }
-    }
-    if charts.is_empty() {
-        match serde_json::from_str(OPEN_STRINGS_CHART) {
-            Ok(chart) => charts.push(chart),
-            Err(error) => eprintln!("Could not load embedded starter chart: {error}"),
         }
     }
     charts
@@ -220,7 +213,7 @@ pub(crate) fn setup_chart_countdown(
 ) {
     let chart = menu
         .and_then(|menu| menu.charts.get(menu.selected).cloned())
-        .unwrap_or_else(|| serde_json::from_str(OPEN_STRINGS_CHART).expect("built-in chart JSON"));
+        .expect("failed retrieving chart");
     let notes = chart.string_notes();
     let total_notes = notes.len();
     let sustain_expected = notes.iter().filter(|note| note.duration > 0.0).count();

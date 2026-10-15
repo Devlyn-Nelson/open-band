@@ -13,14 +13,10 @@ mod notation;
 mod screens;
 mod settings;
 
-#[cfg(test)]
-mod tests;
-
 use app::*;
 use audio::*;
 use input::*;
 use model::*;
-#[cfg(test)]
 use notation::*;
 use screens::*;
 use settings::*;

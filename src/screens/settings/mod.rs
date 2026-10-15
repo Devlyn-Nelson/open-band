@@ -1,5 +1,3 @@
-use std::ops::Sub;
-
 use crate::*;
 use inlet::InletEvent;
 use serde::{Deserialize, Serialize};
@@ -59,6 +57,25 @@ impl DeviceSelection {
 pub(crate) struct DeviceChoice {
     pub(crate) id: String,
     pub(crate) label: String,
+}
+
+#[test]
+/// Selects the exact stable ID when display names are duplicated.
+fn device_selection_prefers_stable_id_over_duplicate_name() {
+    let devices = vec![
+        DeviceChoice {
+            id: "alsa:hw:1,0".into(),
+            label: "USB Audio".into(),
+        },
+        DeviceChoice {
+            id: "alsa:hw:2,0".into(),
+            label: "USB Audio".into(),
+        },
+    ];
+    assert_eq!(
+        selected_device_index(&devices, Some("alsa:hw:2,0"), "MISSING"),
+        1
+    );
 }
 
 #[derive(Resource, Serialize, Deserialize, Default, Debug)]

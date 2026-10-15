@@ -136,6 +136,22 @@ pub(crate) fn new_track(kind: InstrumentKind) -> ChartTrack {
     }
 }
 
+#[test]
+/// New tracks default to a sensible tuning/kit for their kind, and none for others.
+fn new_track_has_expected_defaults_per_kind() {
+    let strings = new_track(InstrumentKind::Strings);
+    assert!(strings.tuning.is_some());
+    assert!(strings.kit.is_none());
+
+    let percussion = new_track(InstrumentKind::Percussion);
+    assert!(percussion.kit.is_some());
+    assert!(percussion.tuning.is_none());
+
+    let voice = new_track(InstrumentKind::Voice);
+    assert!(voice.tuning.is_none());
+    assert!(voice.kit.is_none());
+}
+
 /// A filesystem-safe slug derived from a chart title, used as the save filename.
 ///
 /// AI_CODE
@@ -161,6 +177,14 @@ pub(crate) fn slugify(title: &str) -> String {
     } else {
         slug
     }
+}
+
+#[test]
+/// Chart titles slugify into filesystem-safe, non-empty save filenames.
+fn slugify_produces_filesystem_safe_names() {
+    assert_eq!(slugify("Easy Band Jam"), "easy-band-jam");
+    assert_eq!(slugify("  Weird!! Title??  "), "weird-title");
+    assert_eq!(slugify(""), "untitled");
 }
 
 /// AI_CODE
@@ -301,6 +325,31 @@ pub(crate) fn cycle_track_kit(track: &mut ChartTrack, library: &[NamedKit], delt
         .unwrap_or(0);
     let next = (current as i32 + delta).rem_euclid(library.len() as i32) as usize;
     track.kit = Some(library[next].kit());
+}
+
+#[test]
+/// Cycling a track's tuning/kit steps through the library and wraps around.
+fn cycle_track_tuning_and_kit_step_through_the_library() {
+    let tunings = load_tuning_library();
+    let mut track = new_track(InstrumentKind::Strings);
+    let first = track.tuning.clone();
+    cycle_track_tuning(&mut track, &tunings, 1);
+    assert_ne!(track.tuning, first, "cycling should change the tuning");
+    for _ in 0..tunings.len().saturating_sub(1) {
+        cycle_track_tuning(&mut track, &tunings, 1);
+    }
+    assert_eq!(
+        track.tuning, first,
+        "cycling all the way around should return to start"
+    );
+
+    let kits = load_kit_library();
+    let mut drum_track = new_track(InstrumentKind::Percussion);
+    let first_kit = drum_track.kit.clone();
+    cycle_track_kit(&mut drum_track, &kits, 1);
+    if kits.len() > 1 {
+        assert_ne!(drum_track.kit, first_kit);
+    }
 }
 
 /// AI_CODE
