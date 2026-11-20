@@ -2,7 +2,7 @@
 
 Depends on Part A2 engraving semantics being complete and merged.
 
-### 2. Score document management
+### 2. Score document management (completed)
 
 - Replace event-only document assumptions with score documents containing measures, staves,
   voices, explicit rests, score structure markers, and stable event IDs.
@@ -11,7 +11,7 @@ Depends on Part A2 engraving semantics being complete and merged.
 - Keep `performance` hints visible as optional instrument guidance without making them the
   source of notation truth.
 
-### 3. Shared snapping model
+### 3. Shared snapping model (completed)
 
 - Use the existing `SnapInterval` and `snap_tick()` implementation for the editor, mapped to
   exact tick fractions via the chart's `resolution`) shared by both sheet view and tab

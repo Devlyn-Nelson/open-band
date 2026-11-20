@@ -110,6 +110,44 @@ pub(crate) fn snap_tick(tick: u32, interval: SnapInterval, resolution: u32) -> u
     }
 }
 
+/// Snap a score tick to the nearest interval within its active measure.
+///
+/// Measure boundaries come from `time_signature_map` and `resolution`; tempo is not
+/// involved, so tempo changes cannot move the notation grid.
+///
+/// AI_CODE
+pub(crate) fn snap_tick_in_chart(tick: u32, interval: SnapInterval, chart: &Chart) -> u32 {
+    let mut signatures = chart.time_signature_map.iter().collect::<Vec<_>>();
+    signatures.sort_by_key(|signature| signature.start);
+    if signatures
+        .first()
+        .is_none_or(|signature| signature.start != 0)
+    {
+        return snap_tick(tick, interval, chart.resolution);
+    }
+
+    let mut measure_start = 0u32;
+    let mut signature_index = 0usize;
+    loop {
+        while signature_index + 1 < signatures.len()
+            && signatures[signature_index + 1].start <= measure_start
+        {
+            signature_index += 1;
+        }
+        let signature = signatures[signature_index];
+        let beat_ticks = (chart.resolution as u64 * 4 / signature.denominator.max(1) as u64).max(1);
+        let measure_ticks = beat_ticks
+            .saturating_mul(signature.numerator.max(1) as u64)
+            .min(u32::MAX as u64) as u32;
+        let next_measure = measure_start.saturating_add(measure_ticks.max(1));
+        if tick < next_measure || next_measure == u32::MAX {
+            let snapped = snap_tick(tick - measure_start, interval, chart.resolution);
+            return measure_start.saturating_add(snapped).min(next_measure);
+        }
+        measure_start = next_measure;
+    }
+}
+
 #[test]
 /// Rounds a tick position to the nearest snap-interval multiple, tempo-independent.
 fn snap_tick_rounds_to_the_nearest_interval() {
@@ -117,6 +155,43 @@ fn snap_tick_rounds_to_the_nearest_interval() {
     assert_eq!(snap_tick(500, SnapInterval::Quarter, 960), 960);
     assert_eq!(snap_tick(960, SnapInterval::Quarter, 960), 960);
     assert_eq!(snap_tick(240, SnapInterval::Sixteenth, 960), 240);
+}
+
+#[test]
+/// Snap grids restart at meter changes and never depend on the tempo map.
+/// AI_CODE
+fn chart_snap_uses_meter_boundaries_and_resolution_not_tempo() {
+    let mut chart: Chart = serde_json::from_str(
+        r#"{
+            "version": 1,
+            "title": "Snap",
+            "resolution": 960,
+            "tempo_map": [{ "start": 0, "bpm": 120.0 }],
+            "time_signature_map": [
+                { "start": 0, "numerator": 4, "denominator": 4 },
+                { "start": 3840, "numerator": 3, "denominator": 4 }
+            ],
+            "tracks": []
+        }"#,
+    )
+    .expect("snap chart should parse");
+    assert_eq!(
+        snap_tick_in_chart(4080, SnapInterval::Quarter, &chart),
+        3840
+    );
+    assert_eq!(
+        snap_tick_in_chart(4320, SnapInterval::Quarter, &chart),
+        4800
+    );
+
+    chart.tempo_map.push(TempoChange {
+        start: 1920,
+        bpm: 73.0,
+    });
+    assert_eq!(
+        snap_tick_in_chart(4320, SnapInterval::Quarter, &chart),
+        4800
+    );
 }
 
 /// AI_CODE

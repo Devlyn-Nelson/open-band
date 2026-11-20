@@ -157,10 +157,23 @@ Once a chart is open, its track list is shown:
 | `[` / `]` | Cycle the focused track's tuning (`Strings`, from `tunings/`) or kit (`Percussion`, from `kits/`) |
 | `,` / `.` | Move the focused track up/down in the list |
 | `R` | Rename the focused track (type the new name, `Enter` to confirm, `Esc` to cancel) |
+| `M` | Open score metadata for the chart and focused track |
+| `Tab` | Cycle the shared snap interval (whole, half, quarter, eighth, sixteenth) |
 | `S` | Save the chart (writes to its original file, or `charts/<slugified-title>.json` for a new chart) |
 | `Esc` | Back to the chart picker |
 
-Saving runs validation (unplayable notes, missing tuning/kit, unknown percussion pieces) and reports any warnings in the status line without blocking the save. Note placement (sheet/tab views) is not yet implemented — the editor currently manages chart metadata and tracks only.
+In score metadata, `Up` / `Down` selects a field, `Left` / `Right` adjusts numeric and
+track metadata, and `Enter` edits text fields or inserts the selected score marker or
+expression at the end of the score. `Delete` removes the selected tempo text, rehearsal
+mark, navigation marker, or expression. Metadata includes title, resolution, tempo, time
+signature, tempo text, rehearsal marks, navigation markers, expressions, clef, key
+signature, capo, tuning, kit, and descriptive vocal range. Missing event IDs are assigned
+when a chart is saved; existing IDs, explicit rests, voice/staff assignments, relationships,
+and performance hints are preserved. Performance hints remain separate from notation fields.
+The snap interval is shared by the document and its tick positions are calculated from
+resolution and the active time signature; tempo changes do not move the grid.
+
+Saving runs validation (unplayable notes, missing tuning/kit, unknown percussion pieces) and reports any warnings in the status line without blocking the save. Note placement (sheet/tab views) is not yet implemented.
 
 ## Saved Settings
 
