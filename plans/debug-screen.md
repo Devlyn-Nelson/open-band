@@ -94,7 +94,7 @@ diagnostic stream. Keep the callback → worker → Bevy boundary: DSP stays on 
 - `AGENTS.md`: replace `src/screens/live/mod.rs` entry with `src/screens/waterfall/mod.rs`; note the
   diagnostic channel in the Runtime Flow diagram.
 - Validate: `cargo test`, then `cargo run` and check with a live instrument and with
-  `BAND_HERO_RECORDING=recordings/<file>.wav`.
+  `BAND_HERO_RECORDING=tests/recordings/<file>.wav`.
 
 ## Risks / open points
 - FFT resolution: a 4096-sample window at 44.1 kHz gives ~10.8 Hz bins; below ~100 Hz

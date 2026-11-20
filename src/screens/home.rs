@@ -75,7 +75,6 @@ pub(crate) fn system_home_input(
 ) {
     // Home routes to Live Session, Songs, Editor, or Set Up.
     for event in nav_events.read() {
-        bevy::log::info!("event");
         match event.kind {
             NavigationMessage::Up => {
                 menu.home_selected = menu.home_selected.checked_sub(1).unwrap_or(3);
@@ -135,20 +134,21 @@ pub(crate) fn system_settings_input(
     mut next_state: ResMut<NextState<AppState>>,
 ) {
     // Route each setup option to its tool or back to Home.
+    // \/ AI_CODE \/
     for event in nav_events.read() {
-        bevy::log::info!("event");
         match event.kind {
             NavigationMessage::Up => {
-                menu.setup_selected = menu.setup_selected.checked_sub(1).unwrap_or(3);
+                menu.setup_selected = menu.setup_selected.checked_sub(1).unwrap_or(4);
             }
             NavigationMessage::Down => {
-                menu.setup_selected = (menu.setup_selected + 1) % 4;
+                menu.setup_selected = (menu.setup_selected + 1) % 5;
             }
             NavigationMessage::Select => {
                 next_state.set(match menu.setup_selected {
                     0 => AppState::DeviceSelection,
                     1 => AppState::Calibration,
                     2 => AppState::LatencyCalibration,
+                    3 => AppState::Recorder,
                     _ => AppState::Home,
                 });
             }
@@ -157,11 +157,12 @@ pub(crate) fn system_settings_input(
                 return;
             }
             NavigationMessage::Slot(num) => {
-                menu.setup_selected = num.clamp(1, 4).checked_sub(1).unwrap_or(3);
+                menu.setup_selected = num.clamp(1, 5).checked_sub(1).unwrap_or(4);
             }
             _ => {}
         }
     }
+    // /\ AI_CODE /\
 }
 
 /// Render the selected setup tool.
@@ -171,7 +172,7 @@ pub(crate) fn system_settings_display(
     menu: Res<MenuSelection>,
     mut text: Query<&mut Text, With<MenuText>>,
 ) {
-    // Render the four setup destinations and their selection marker.
+    // Render the setup destinations and their selection marker.
     let Ok(mut text) = text.single_mut() else {
         return;
     };
@@ -182,18 +183,22 @@ pub(crate) fn system_settings_display(
             " "
         }
     };
+    // \/ AI_CODE \/
     *text = Text::new(format!(
         "OPEN BAND  //  SET UP\n\n\
         {} [1] INPUT SETUP\n\
         {} [2] TUNER\n\
         {} [3] LATENCY CALIBRATION\n\
-        {} [4] BACK\n\n\
+        {} [4] RECORDING\n\
+        {} [5] BACK\n\n\
         Up/Down: navigate     Enter: open     Esc: home",
         marker(0),
         marker(1),
         marker(2),
         marker(3),
+        marker(4),
     ));
+    // /\ AI_CODE /\
 }
 
 /// Despawn the shared menu camera and text entities.

@@ -17,6 +17,7 @@ use crate::{
     app::AppState,
     audio::pitch_to_lane,
     input::InstrumentStream,
+    model::InstrumentKind,
     screens::{DeviceSelection, LatencyCalibration},
 };
 
@@ -244,6 +245,9 @@ pub fn system_note_to_navigation(
         }
     };
     for event in events.iter() {
+        if !instrument_kind_navigates(event.instrument.kind) {
+            continue;
+        }
         if selected_devices.slots.len() > event.instrument.slot {
             let of = selected_devices.slots[event.instrument.slot].open_frequencies();
             let lane = pitch_to_lane(&event.instrument, &of, event.note.pitch_note());
@@ -271,4 +275,18 @@ pub fn system_note_to_navigation(
             );
         }
     }
+}
+
+/// AI_CODE
+fn instrument_kind_navigates(kind: InstrumentKind) -> bool {
+    matches!(kind, InstrumentKind::Strings | InstrumentKind::Percussion)
+}
+
+#[test]
+/// Voice notes must not trigger instrument-driven menu navigation.
+/// AI_CODE
+fn only_strings_and_percussion_navigate_menus() {
+    assert!(instrument_kind_navigates(InstrumentKind::Strings));
+    assert!(instrument_kind_navigates(InstrumentKind::Percussion));
+    assert!(!instrument_kind_navigates(InstrumentKind::Voice));
 }

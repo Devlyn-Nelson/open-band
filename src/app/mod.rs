@@ -16,10 +16,16 @@ pub(crate) fn run() {
     let settings = load_settings();
     let startup_state = initial_app_state();
     let device_selection = scan_devices(&settings);
+    let input_levels = InputLevels::new(settings.slots.len());
+    let (recording_commands, recording_receiver) = mpsc::channel();
+    let recording_status = RecordingStatusHandle::new();
     let (stop_sender, stop_receiver) = mpsc::channel();
     let input_thread = spawn_instrument_thread(
         sender.clone(),
         input_config_from_settings(&settings),
+        input_levels.clone(),
+        recording_receiver,
+        recording_status.clone(),
         stop_receiver,
     );
 
@@ -31,20 +37,27 @@ pub(crate) fn run() {
         .insert_resource(ClearColor(Color::srgb(0.025, 0.035, 0.06)))
         .insert_resource(device_selection)
         .insert_resource(settings)
+        // \/ AI_CODE \/
         .insert_resource(InstrumentStream {
             sender,
             events: Mutex::new(receiver),
+            input_levels,
+            recording_commands,
+            recording_status,
             _thread: Some(input_thread),
             stop_sender: Some(stop_sender),
             started: true,
         })
+        // /\ AI_CODE /\
         .init_resource::<MenuSelection>()
+        .init_resource::<RecordingMenu>()
         .insert_resource(Calibration {
             selected: 0,
             level: 0.0,
             peak: 0.0,
             samples: 0,
             last_pitch_hz: None,
+            input_active: false,
         })
         .init_resource::<Score>()
         .init_resource::<DebugInputData>()
@@ -77,6 +90,18 @@ pub(crate) fn run() {
             system_settings_display.run_if(in_state(AppState::Settings)),
         )
         .add_systems(OnExit(AppState::Settings), cleanup_menu)
+        // \/ AI_CODE \/
+        .add_systems(OnEnter(AppState::Recorder), setup_recording_screen)
+        .add_systems(
+            Update,
+            recording_screen_input.run_if(in_state(AppState::Recorder)),
+        )
+        .add_systems(
+            Update,
+            recording_screen_display.run_if(in_state(AppState::Recorder)),
+        )
+        .add_systems(OnExit(AppState::Recorder), cleanup_recording_screen)
+        // /\ AI_CODE /\
         .add_systems(OnEnter(AppState::DeviceSelection), setup_device_selection)
         .add_systems(
             Update,

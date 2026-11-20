@@ -21,7 +21,8 @@
 - `charts/`: built-in chart data loaded at compile time.
 - `tunings/`: named string tunings loaded at runtime for Input Setup and the chart editor (embedded fallback if missing).
 - `kits/`: named percussion kits loaded at runtime for Input Setup and the chart editor (embedded fallback if missing).
-- `recordings/`: optional WAV fixtures used only by ignored detector tests.
+- `tests/recordings/`: WAV fixtures used by detector tests and manual DSP playback.
+- `recordings/`: WAV files produced by the in-app recorder.
 - `README.md`: user-facing controls, device setup, chart format, and current limitations.
 
 Read only the owning section first. The executable is intentionally split so chart changes do not require loading the input pipeline, and vice versa.

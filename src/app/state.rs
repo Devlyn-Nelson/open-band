@@ -11,6 +11,9 @@ pub(crate) enum AppState {
     DeviceSelection,
     Calibration,
     LatencyCalibration,
+    // \/ AI_CODE \/
+    Recorder,
+    // /\ AI_CODE /\
     Songs,
     ChartCountdown,
     ChartGameplay,

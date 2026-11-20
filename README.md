@@ -24,7 +24,8 @@ The current project is an input and gameplay prototype. It proves the real-time 
 - A dedicated per-string energy tracker for open-string navigation (menu/song selection), independent from the general pitch detector, so a fresh pluck registers even while another string is still ringing. This tracker is menu-navigation only; chart gameplay and fretted notes still use the general YIN detector.
 - Pitch-to-lane mapping for strings and vocals.
 - MIDI drum note mapping to gameplay lanes.
-- String tuner with string, frequency, and cents-offset feedback.
+- Calibration tuners with open-string feedback for strings and nearest-note/cents feedback for voice.
+- Voice tuning rejects low-level input and clears the detected note when a confident pitch or sufficient level is no longer present.
 - Timing calibration screen with a moving beat target before chart gameplay.
 - Home screen with direct access to the live session and setup tools.
 - Persistent setup settings stored in `open-band-settings/settings.json`.
@@ -50,7 +51,7 @@ To feed a WAV recording through the detector instead of a hardware input, set
 slot, or a 4-string default if none is configured):
 
 ```bash
-BAND_HERO_RECORDING=recordings/open-gdeab.wav BAND_HERO_BASS_STRINGS=5 cargo run
+BAND_HERO_RECORDING=tests/recordings/open-gdeab.wav BAND_HERO_BASS_STRINGS=5 cargo run
 ```
 
 The recording input uses the same onset and pitch detector as CPAL input. The supplied
@@ -58,6 +59,9 @@ filename convention is covered by an ignored diagnostic test while detector accu
 being tuned; run it with `cargo test supplied_bass_recordings_detect_expected_open_strings -- --ignored`.
 
 Recording test filenames use these conventions:
+
+Test WAV fixtures live in `tests/recordings/`, separate from WAV files created by the
+application in `recordings/`.
 
 - `open-<strings>-<suffix>.wav`: open strings, in the order named. A suffix may be a version number or `no-mute`.
 - `fret-<string>-<suffix>.wav`: the open string followed by one pluck at each fret from 1 through 24. The suffix is optional.
@@ -89,6 +93,8 @@ are supported (e.g. two `Strings` slots for guitar and bass).
 
 Calibration lists the currently configured slots; press the number key matching a slot
 (`1`-`9`, in configured order) to select it for calibration.
+For audio slots, the meter shows raw microphone RMS separately from pitch detection, so
+an active input stream is visible even when the tuner cannot identify a note.
 
 | Key | Action |
 | --- | --- |
@@ -115,9 +121,18 @@ Set Up contains the following options:
 | `1` | Input setup |
 | `2` | Tuner |
 | `3` | Latency calibration |
-| `4` | Back to Home |
+| `4` | Recorder |
+| `5` | Back to Home |
 
 Each setup tool returns to Set Up when accepted or exited. Returning to Input Setup stops the current input worker before reconnecting the newly selected devices. Press `Esc` from Set Up to return Home, and press `Esc` from the live session to return Home.
+
+### Recorder
+
+The Recorder screen lists configured inputs. Use `Up` / `Down` and `Enter` to arm or
+disarm audio inputs, then select `START RECORDING`; press `Enter` on that row again to
+stop. Active recordings are mixed to a timestamped mono 16-bit WAV in `recordings/`.
+MIDI percussion slots are shown but cannot be armed because they provide note events,
+not an audio waveform. Leaving the Recorder screen stops and finalizes an active file.
 
 ### Chart Editor
 
@@ -556,7 +571,7 @@ Audio callbacks stay real-time safe: they downmix samples and enqueue bounded au
 - Strum direction is not detected.
 - MIDI drum mapping is a small General MIDI-style mapping and is not configurable yet.
 - Vocal gameplay does not yet compare pitch against lyric or melody targets.
-- The calibration screen displays signal activity and persists the selected devices, bass mode, and accepted latency result, but it does not yet save gain, noise-floor, or pitch calibration values.
+- The calibration screen displays signal activity and instrument-specific tuner feedback, and persists the selected devices, bass mode, and accepted latency result; it does not yet save gain, noise-floor, or pitch calibration values.
 - The gameplay highway is still a visual and keyboard-test prototype.
 
 ## Likely Next Steps

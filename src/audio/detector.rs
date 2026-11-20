@@ -1,4 +1,6 @@
 use crate::*;
+#[cfg(test)]
+use std::f32::consts::TAU;
 
 /// AI_CODE
 pub(crate) struct PolyphonicAudioDetector {
@@ -203,6 +205,33 @@ fn polyphonic_detector_tracks_chord_duration() {
     );
 }
 
+#[test]
+/// Rejects quiet Voice noise, accepts a stronger tone, and releases it after silence.
+/// AI_CODE
+fn voice_detector_gates_quiet_noise_and_reports_release() {
+    let sample_rate = 44_100.0;
+    let tone = |amplitude: f32| {
+        (0..4096).map(move |index| {
+            amplitude * (std::f32::consts::TAU * 220.0 * index as f32 / sample_rate).sin()
+        })
+    };
+    let mut detector = AudioDetector::new(
+        InstrumentKind::Voice,
+        &[],
+        DetectorProfile::PerString,
+        sample_rate,
+    );
+
+    assert!(detector.detect(tone(0.005)).is_empty());
+    let mut detected = detector.detect(tone(0.015));
+    detected.extend(detector.detect(std::iter::empty()));
+    assert!(detected.iter().any(|event| event.phase == NotePhase::Start));
+
+    let mut released = detector.detect((0..6144).map(|_| 0.0));
+    released.extend(detector.detect(std::iter::empty()));
+    assert!(released.iter().any(|event| event.phase == NotePhase::End));
+}
+
 /// AI_CODE
 enum AudioDetectorKind {
     Mono(AudioOnsetDetector),
@@ -227,6 +256,11 @@ impl AudioDetector {
                     sample_rate,
                     min_pitch_hz: 60.0,
                     max_pitch_hz: 1400.0,
+                    minimum_level: if kind == InstrumentKind::Voice {
+                        0.008
+                    } else {
+                        0.005
+                    },
                     ..Default::default()
                 }))
             }
@@ -446,11 +480,13 @@ pub(crate) struct AudioOnsetDetector {
     pub(crate) sample_rate: f32,
     pub(crate) samples: Vec<f32>,
     pub(crate) last_level: f32,
+    pub(crate) last_pitch_confident: bool,
     pub(crate) active_pitch_hz: Option<f32>,
     pub(crate) active_started_sample: usize,
     pub(crate) silent_windows: usize,
     pub(crate) min_pitch_hz: f32,
     pub(crate) max_pitch_hz: f32,
+    pub(crate) minimum_level: f32,
 }
 
 impl AudioOnsetDetector {
@@ -493,10 +529,11 @@ impl AudioOnsetDetector {
         } else {
             None
         };
+        self.last_pitch_confident = pitch_hz.is_some();
         let ready = self.last_event_sample.map_or(true, |event| {
             self.processed_samples.saturating_sub(event) > (self.sample_rate * 0.12) as usize
         });
-        let minimum_level = (self.noise_floor * 2.5).max(0.005);
+        let minimum_level = (self.noise_floor * 2.5).max(self.minimum_level.max(0.005));
         let pitch_changed = self
             .last_pitch_hz
             .zip(pitch_hz)
@@ -571,8 +608,8 @@ impl AudioOnsetDetector {
         let Some(pitch_hz) = self.active_pitch_hz else {
             return Vec::new();
         };
-        let minimum_level = (self.noise_floor * 2.5).max(0.005);
-        if self.last_level <= minimum_level {
+        let minimum_level = (self.noise_floor * 2.5).max(self.minimum_level.max(0.005));
+        if self.last_level <= minimum_level || !self.last_pitch_confident {
             self.silent_windows += 1;
         } else {
             self.silent_windows = 0;
@@ -731,12 +768,13 @@ fn pitch_to_beadg_string(pitch_hz: f32) -> Option<usize> {
 }
 
 #[test]
-// #[ignore = "the supplied recordings currently expose pitch-detector false positives; run explicitly while tuning DSP"]
+#[ignore = "the supplied recordings currently expose pitch-detector false positives; run explicitly while tuning DSP"]
 /// Checks stable single-string detection and ordered multi-string detection.
 fn supplied_bass_recordings_detect_expected_open_strings() {
-    let recording_directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("recordings");
+    let recording_directory =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/recordings");
     let mut paths = std::fs::read_dir(&recording_directory)
-        .expect("recordings directory should exist")
+        .expect("test recordings directory should exist")
         .map(|entry| entry.expect("recording entry should be readable").path())
         .filter(|path| path.extension().is_some_and(|extension| extension == "wav"))
         .filter(|path| {
@@ -862,9 +900,10 @@ fn supplied_bass_recordings_detect_expected_open_strings() {
 #[ignore = "run explicitly as fret recordings are added and the detector is tuned"]
 /// Checks fret recordings for open string through fret 24 in order.
 fn supplied_bass_fret_recordings_detect_open_through_fret_24() {
-    let recording_directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("recordings");
+    let recording_directory =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/recordings");
     let mut paths = std::fs::read_dir(&recording_directory)
-        .expect("recordings directory should exist")
+        .expect("test recordings directory should exist")
         .map(|entry| entry.expect("recording entry should be readable").path())
         .filter(|path| {
             path.file_name()

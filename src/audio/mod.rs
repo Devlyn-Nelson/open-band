@@ -4,6 +4,8 @@ pub(crate) use detector::*;
 pub(crate) const LANES: usize = 5;
 
 use super::InstrumentKind;
+#[cfg(test)]
+use std::f32::consts::TAU;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 /// A configured instrument input: which slot it came from, its kind, and (for `Strings`)

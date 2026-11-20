@@ -1,3 +1,10 @@
+#[cfg(test)]
+use crate::notation::{default_clef, layout_track, measures};
+#[cfg(test)]
+use crate::screens::{
+    editor::new_track,
+    songs::{cents_error, load_charts},
+};
 use serde::{Deserialize, Deserializer, Serialize, de};
 use std::fmt;
 
@@ -2666,7 +2673,7 @@ fn chart_validation_reports_invalid_ties_and_bend_curves() {
 #[test]
 /// Loads the built-in chart with ordered, playable bass notes.
 fn built_in_chart_has_playable_notes() {
-    const OPEN_STRINGS_CHART: &str = include_str!("../../../charts/open-strings.json");
+    const OPEN_STRINGS_CHART: &str = include_str!("../../charts/open-strings.json");
     let chart: Chart =
         serde_json::from_str(OPEN_STRINGS_CHART).expect("built-in chart should parse");
     assert_eq!(chart.version, 1);

@@ -13,11 +13,15 @@ pub(crate) struct InputConfig {
 use bevy::prelude::*;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use midir::{Ignore, MidiInput};
+use std::fs::{self, File};
+use std::io::BufWriter;
+use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, SyncSender, sync_channel};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Resource)]
 /// Shared event channel and lifetime handles for the input worker.
@@ -26,9 +30,110 @@ use std::time::Duration;
 pub(crate) struct InstrumentStream {
     pub(crate) sender: Sender<InstrumentEvent>,
     pub(crate) events: Mutex<Receiver<InstrumentEvent>>,
+    pub(crate) input_levels: InputLevels,
+    pub(crate) recording_commands: Sender<RecordingCommand>,
+    pub(crate) recording_status: RecordingStatusHandle,
     pub(crate) _thread: Option<thread::JoinHandle<()>>,
     pub(crate) stop_sender: Option<Sender<()>>,
     pub(crate) started: bool,
+}
+
+/// Commands sent from the recorder screen to the input worker.
+///
+/// AI_CODE
+pub(crate) enum RecordingCommand {
+    Start(Vec<usize>),
+    Stop,
+}
+
+/// Current recorder state displayed by the recorder screen.
+///
+/// AI_CODE
+#[derive(Clone, Debug)]
+pub(crate) enum RecordingStatus {
+    Inactive(Option<String>),
+    Starting,
+    Active(String),
+    Stopping(Option<String>),
+    Error(String),
+}
+
+/// Thread-safe recorder status shared between UI and input worker.
+///
+/// AI_CODE
+#[derive(Clone)]
+pub(crate) struct RecordingStatusHandle(Arc<Mutex<RecordingStatus>>);
+
+impl RecordingStatusHandle {
+    /// AI_CODE
+    pub(crate) fn new() -> Self {
+        Self(Arc::new(Mutex::new(RecordingStatus::Inactive(None))))
+    }
+
+    /// AI_CODE
+    pub(crate) fn get(&self) -> RecordingStatus {
+        self.0
+            .lock()
+            .map(|status| status.clone())
+            .unwrap_or_else(|_| RecordingStatus::Error("Recorder status unavailable".into()))
+    }
+
+    /// AI_CODE
+    pub(crate) fn set(&self, status: RecordingStatus) {
+        if let Ok(mut current) = self.0.lock() {
+            *current = status;
+        }
+    }
+}
+
+/// Latest raw audio level and frame timestamp for each input slot.
+///
+/// AI_CODE
+#[derive(Clone)]
+pub(crate) struct InputLevels(Arc<Mutex<Vec<Option<InputLevelReading>>>>);
+
+/// AI_CODE
+struct InputLevelReading {
+    rms: f32,
+    updated_at: Instant,
+}
+
+impl InputLevels {
+    /// AI_CODE
+    pub(crate) fn new(slot_count: usize) -> Self {
+        let mut levels = Vec::new();
+        levels.resize_with(slot_count, || None);
+        Self(Arc::new(Mutex::new(levels)))
+    }
+
+    /// AI_CODE
+    pub(crate) fn resize(&self, slot_count: usize) {
+        if let Ok(mut levels) = self.0.lock() {
+            levels.resize_with(slot_count, || None);
+        }
+    }
+
+    /// AI_CODE
+    pub(crate) fn latest(&self, slot: usize) -> Option<(f32, bool)> {
+        let levels = self.0.lock().ok()?;
+        let reading = levels.get(slot)?.as_ref()?;
+        Some((
+            reading.rms,
+            reading.updated_at.elapsed() < Duration::from_millis(500),
+        ))
+    }
+
+    /// AI_CODE
+    fn update(&self, slot: usize, rms: f32) {
+        if let Ok(mut levels) = self.0.lock()
+            && let Some(level) = levels.get_mut(slot)
+        {
+            *level = Some(InputLevelReading {
+                rms,
+                updated_at: Instant::now(),
+            });
+        }
+    }
 }
 
 /// AI_CODE
@@ -38,7 +143,10 @@ pub(crate) struct AudioInput {
     pub(crate) detector: AudioDetector,
     pub(crate) instrument: Instrument,
     pub(crate) open_frequencies: Vec<f32>,
+    pub(crate) sample_rate: u32,
 }
+
+type WavRecorder = hound::WavWriter<BufWriter<File>>;
 
 /// Open configured audio and MIDI inputs on a dedicated worker thread.
 ///
@@ -46,6 +154,9 @@ pub(crate) struct AudioInput {
 pub(crate) fn spawn_instrument_thread(
     sender: Sender<InstrumentEvent>,
     config: InputConfig,
+    input_levels: InputLevels,
+    recording_commands: Receiver<RecordingCommand>,
+    recording_status: RecordingStatusHandle,
     stop_receiver: Receiver<()>,
 ) -> thread::JoinHandle<()> {
     // Keep device ownership on a worker so real-time callbacks never block Bevy.
@@ -64,6 +175,7 @@ pub(crate) fn spawn_instrument_thread(
         let host = cpal::default_host();
         let mut streams = Vec::new();
         let mut midi_connections = Vec::new();
+        let mut recorder: Option<(WavRecorder, String, Vec<usize>)> = None;
 
         for (index, slot) in config.slots.iter().enumerate() {
             match slot.kind {
@@ -91,8 +203,51 @@ pub(crate) fn spawn_instrument_thread(
         }
 
         loop {
+            while let Ok(command) = recording_commands.try_recv() {
+                match command {
+                    RecordingCommand::Start(armed_slots) => {
+                        if recorder.is_none() {
+                            let active_slots = armed_slots
+                                .into_iter()
+                                .filter(|slot| {
+                                    streams.iter().any(|input| input.instrument.slot == *slot)
+                                })
+                                .collect::<Vec<_>>();
+                            if active_slots.is_empty() {
+                                recording_status.set(RecordingStatus::Error(
+                                    "None of the armed audio inputs are active.".into(),
+                                ));
+                                continue;
+                            }
+                            match create_wav_recorder() {
+                                Ok((writer, path)) => {
+                                    recording_status.set(RecordingStatus::Active(path.clone()));
+                                    recorder = Some((writer, path, active_slots));
+                                }
+                                Err(error) => {
+                                    recording_status.set(RecordingStatus::Error(error));
+                                }
+                            }
+                        }
+                    }
+                    RecordingCommand::Stop => {
+                        if let Some((writer, path, _)) = recorder.take() {
+                            match writer.finalize() {
+                                Ok(()) => {
+                                    recording_status.set(RecordingStatus::Inactive(Some(path)));
+                                }
+                                Err(error) => {
+                                    recording_status.set(RecordingStatus::Error(error.to_string()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             let mut stopping = false;
             let mut processed_frame = false;
+            let mut recording_frames = Vec::new();
+            let recording_active = recorder.is_some();
             for input in &mut streams {
                 if stop_receiver.try_recv().is_ok() {
                     stopping = true;
@@ -104,18 +259,49 @@ pub(crate) fn spawn_instrument_thread(
                         stopping = true;
                         break;
                     }
-                    send_detected_events(
-                        &mut input.detector,
-                        frame.into_iter(),
-                        input.instrument,
-                        &sender,
-                    );
+                    let rms = (frame.iter().map(|sample| sample * sample).sum::<f32>()
+                        / frame.len().max(1) as f32)
+                        .sqrt();
+                    input_levels.update(input.instrument.slot, rms);
+                    if recording_active {
+                        if recorder
+                            .as_ref()
+                            .is_some_and(|(_, _, armed)| armed.contains(&input.instrument.slot))
+                        {
+                            recording_frames.push((
+                                input.instrument.slot,
+                                input.sample_rate,
+                                frame,
+                            ));
+                        }
+                    } else {
+                        send_detected_events(
+                            &mut input.detector,
+                            frame.into_iter(),
+                            input.instrument,
+                            &sender,
+                        );
+                    }
                 }
                 if stopping {
                     break;
                 }
             }
+            if let Some((writer, _, armed_slots)) = recorder.as_mut()
+                && let Err(error) = write_mixed_frames(writer, &recording_frames, armed_slots)
+            {
+                let path = recorder.as_ref().map(|(_, path, _)| path.clone());
+                recording_status.set(RecordingStatus::Error(format!(
+                    "Could not write WAV file{}: {error}",
+                    path.map_or_else(String::new, |path| format!(" {path}"))
+                )));
+                recorder = None;
+            }
             if stopping {
+                if let Some((writer, path, _)) = recorder.take() {
+                    let _ = writer.finalize();
+                    recording_status.set(RecordingStatus::Inactive(Some(path)));
+                }
                 break;
             }
             if !processed_frame
@@ -156,7 +342,7 @@ fn open_audio_input(
     let config = supported.config();
     let channels = config.channels as usize;
     let error_callback = |error| eprintln!("audio input error: {error}");
-    let (frame_sender, frame_receiver) = sync_channel(32);
+    let (frame_sender, frame_receiver) = sync_channel(256);
 
     let stream = match supported.sample_format() {
         cpal::SampleFormat::F32 => build_audio_stream::<f32>(
@@ -167,6 +353,13 @@ fn open_audio_input(
             error_callback,
         ),
         cpal::SampleFormat::I16 => build_audio_stream::<i16>(
+            &device,
+            &config,
+            channels,
+            frame_sender.clone(),
+            error_callback,
+        ),
+        cpal::SampleFormat::I32 => build_audio_stream::<i32>(
             &device,
             &config,
             channels,
@@ -196,7 +389,121 @@ fn open_audio_input(
         ),
         instrument,
         open_frequencies,
+        sample_rate: config.sample_rate,
     })
+}
+
+/// Create a mono 16-bit WAV recorder under the local `recordings` directory.
+///
+/// AI_CODE
+fn create_wav_recorder() -> Result<(WavRecorder, String), String> {
+    fs::create_dir_all("recordings").map_err(|error| error.to_string())?;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_millis();
+    let path = PathBuf::from("recordings").join(format!("open-band-{timestamp}.wav"));
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 44_100,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let writer = hound::WavWriter::create(&path, spec).map_err(|error| error.to_string())?;
+    Ok((writer, path.to_string_lossy().into_owned()))
+}
+
+/// Resample and average the currently available armed input frames into the WAV mix.
+///
+/// AI_CODE
+fn write_mixed_frames(
+    writer: &mut WavRecorder,
+    frames: &[(usize, u32, Vec<f32>)],
+    armed_slots: &[usize],
+) -> Result<(), hound::Error> {
+    let frames = frames
+        .iter()
+        .filter(|(slot, _, _)| armed_slots.contains(slot))
+        .collect::<Vec<_>>();
+    if frames.is_empty() || armed_slots.is_empty() {
+        return Ok(());
+    }
+    let resampled = frames
+        .iter()
+        .map(|(_, sample_rate, samples)| resample_mono(samples, *sample_rate, 44_100))
+        .collect::<Vec<_>>();
+    let output_len = resampled.iter().map(Vec::len).max().unwrap_or_default();
+    for index in 0..output_len {
+        let mixed = resampled
+            .iter()
+            .map(|samples| samples.get(index).copied().unwrap_or(0.0))
+            .sum::<f32>()
+            / armed_slots.len() as f32;
+        writer.write_sample((mixed.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16)?;
+    }
+    Ok(())
+}
+
+/// Linearly resample one mono frame to the recording's fixed sample rate.
+///
+/// AI_CODE
+fn resample_mono(samples: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
+    if samples.is_empty() || source_rate == 0 || target_rate == 0 {
+        return Vec::new();
+    }
+    let output_len = (samples.len() as u64 * target_rate as u64 / source_rate as u64) as usize;
+    (0..output_len)
+        .map(|index| {
+            let source_position = index as f32 * source_rate as f32 / target_rate as f32;
+            let left = source_position.floor() as usize;
+            let right = (left + 1).min(samples.len() - 1);
+            let fraction = source_position - left as f32;
+            samples[left] * (1.0 - fraction) + samples[right] * fraction
+        })
+        .collect()
+}
+
+#[test]
+/// Writes a mono WAV containing only the armed, averaged audio sources.
+/// AI_CODE
+fn mixed_recording_wav_averages_armed_audio_frames() {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock should be after Unix epoch")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "open-band-mix-test-{}-{timestamp}.wav",
+        std::process::id()
+    ));
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 44_100,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(&path, spec).expect("create test WAV");
+    write_mixed_frames(
+        &mut writer,
+        &[
+            (0, 44_100, vec![0.4; 4]),
+            (1, 44_100, vec![0.4; 4]),
+            (2, 44_100, vec![0.9; 4]),
+        ],
+        &[0, 1],
+    )
+    .expect("write mixed samples");
+    writer.finalize().expect("finalize test WAV");
+
+    let mut reader = hound::WavReader::open(&path).expect("open test WAV");
+    assert_eq!(reader.spec().channels, 1);
+    assert_eq!(reader.spec().sample_rate, 44_100);
+    let samples = reader
+        .samples::<i16>()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("read test samples");
+    assert_eq!(samples.len(), 4);
+    assert!(samples.iter().all(|sample| (*sample - 13_107).abs() <= 1));
+    fs::remove_file(path).expect("remove test WAV");
 }
 
 /// Build a typed CPAL callback that converts samples into normalized events.
