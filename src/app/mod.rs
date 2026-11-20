@@ -16,7 +16,9 @@ pub(crate) fn run() {
     let settings = load_settings();
     let startup_state = initial_app_state();
     let device_selection = scan_devices(&settings);
-    let input_levels = InputLevels::new(settings.slots.len());
+    let input_slot_count = device_selection.slots.len();
+    let input_levels = InputLevels::new(input_slot_count);
+    let monitor_mixer = MonitorMixer::new(input_slot_count);
     let (recording_commands, recording_receiver) = mpsc::channel();
     let recording_status = RecordingStatusHandle::new();
     let (stop_sender, stop_receiver) = mpsc::channel();
@@ -24,6 +26,7 @@ pub(crate) fn run() {
         sender.clone(),
         input_config_from_settings(&settings),
         input_levels.clone(),
+        monitor_mixer.clone(),
         recording_receiver,
         recording_status.clone(),
         stop_receiver,
@@ -42,6 +45,7 @@ pub(crate) fn run() {
             sender,
             events: Mutex::new(receiver),
             input_levels,
+            monitor_mixer,
             recording_commands,
             recording_status,
             _thread: Some(input_thread),

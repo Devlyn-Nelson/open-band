@@ -565,6 +565,7 @@ pub(crate) fn commit_device_selection(
         }
     }
     stream.input_levels.resize(selection.slots.len());
+    stream.monitor_mixer.resize(selection.slots.len());
     let (recording_commands, recording_receiver) = mpsc::channel();
     stream.recording_commands = recording_commands;
     let (stop_sender, stop_receiver) = mpsc::channel();
@@ -572,6 +573,7 @@ pub(crate) fn commit_device_selection(
         stream.sender.clone(),
         config,
         stream.input_levels.clone(),
+        stream.monitor_mixer.clone(),
         recording_receiver,
         stream.recording_status.clone(),
         stop_receiver,

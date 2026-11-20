@@ -11,6 +11,7 @@ pub(crate) struct InputConfig {
     pub(crate) slots: Vec<InstrumentSlot>,
 }
 use bevy::prelude::*;
+use cpal::Sample;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use midir::{Ignore, MidiInput};
 use std::fs::{self, File};
@@ -19,6 +20,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, SyncSender, sync_channel};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -31,6 +33,7 @@ pub(crate) struct InstrumentStream {
     pub(crate) sender: Sender<InstrumentEvent>,
     pub(crate) events: Mutex<Receiver<InstrumentEvent>>,
     pub(crate) input_levels: InputLevels,
+    pub(crate) monitor_mixer: MonitorMixer,
     pub(crate) recording_commands: Sender<RecordingCommand>,
     pub(crate) recording_status: RecordingStatusHandle,
     pub(crate) _thread: Option<thread::JoinHandle<()>>,
@@ -146,6 +149,219 @@ pub(crate) struct AudioInput {
     pub(crate) sample_rate: u32,
 }
 
+/// Shared bounded audio rings used to monitor live audio inputs.
+///
+/// AI_CODE
+#[derive(Clone)]
+pub(crate) struct MonitorMixer(Arc<Mutex<Vec<Arc<MonitorSource>>>>);
+
+/// AI_CODE
+struct MonitorSource {
+    samples: Box<[AtomicU32]>,
+    write_index: AtomicUsize,
+    read_index: AtomicUsize,
+    sample_rate: AtomicU32,
+    phase_bits: AtomicU64,
+}
+
+const MONITOR_RING_CAPACITY: usize = 2048;
+
+impl MonitorSource {
+    /// AI_CODE
+    fn new() -> Self {
+        Self {
+            samples: (0..MONITOR_RING_CAPACITY)
+                .map(|_| AtomicU32::new(0.0f32.to_bits()))
+                .collect(),
+            write_index: AtomicUsize::new(0),
+            read_index: AtomicUsize::new(0),
+            sample_rate: AtomicU32::new(0),
+            phase_bits: AtomicU64::new(0.0f64.to_bits()),
+        }
+    }
+
+    /// Publish input samples without locking or waiting for the output callback.
+    /// If the ring overruns, discard the oldest samples so monitoring stays live.
+    ///
+    /// AI_CODE
+    fn push(&self, sample_rate: u32, samples: &[f32]) {
+        let previous_rate = self.sample_rate.swap(sample_rate, Ordering::AcqRel);
+        if previous_rate != 0 && previous_rate != sample_rate {
+            self.read_index.store(0, Ordering::Release);
+            self.write_index.store(0, Ordering::Release);
+            self.phase_bits.store(0.0f64.to_bits(), Ordering::Release);
+        }
+
+        for sample in samples {
+            let write = self.write_index.load(Ordering::Relaxed);
+            let mut read = self.read_index.load(Ordering::Acquire);
+            if write.wrapping_sub(read) >= MONITOR_RING_CAPACITY {
+                let earliest = write + 1 - MONITOR_RING_CAPACITY;
+                loop {
+                    if read >= earliest {
+                        break;
+                    }
+                    match self.read_index.compare_exchange_weak(
+                        read,
+                        earliest,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    ) {
+                        Ok(_) => break,
+                        Err(current) => read = current,
+                    }
+                }
+            }
+            self.samples[write & (MONITOR_RING_CAPACITY - 1)]
+                .store(sample.to_bits(), Ordering::Relaxed);
+            self.write_index
+                .store(write.wrapping_add(1), Ordering::Release);
+        }
+    }
+
+    /// Read one linearly resampled sample from this source's lock-free ring.
+    ///
+    /// AI_CODE
+    fn next_sample(&self, output_rate: u32) -> Option<f32> {
+        let source_rate = self.sample_rate.load(Ordering::Acquire);
+        if source_rate == 0 || output_rate == 0 {
+            return None;
+        }
+
+        for _ in 0..2 {
+            let read = self.read_index.load(Ordering::Acquire);
+            let write = self.write_index.load(Ordering::Acquire);
+            let available = write.wrapping_sub(read).min(MONITOR_RING_CAPACITY);
+            if available == 0 {
+                return None;
+            }
+
+            let first = f32::from_bits(
+                self.samples[read & (MONITOR_RING_CAPACITY - 1)].load(Ordering::Relaxed),
+            );
+            let second = if available > 1 {
+                f32::from_bits(
+                    self.samples[(read + 1) & (MONITOR_RING_CAPACITY - 1)].load(Ordering::Relaxed),
+                )
+            } else {
+                first
+            };
+            let phase = f64::from_bits(self.phase_bits.load(Ordering::Relaxed));
+            let sample = first + (second - first) * phase as f32;
+            let next_phase = phase + source_rate as f64 / output_rate as f64;
+            let consumed = (next_phase.floor() as usize).min(available);
+            if consumed > 0
+                && self
+                    .read_index
+                    .compare_exchange(
+                        read,
+                        read.wrapping_add(consumed),
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_err()
+            {
+                continue;
+            }
+            self.phase_bits
+                .store((next_phase - consumed as f64).to_bits(), Ordering::Relaxed);
+            return Some(sample);
+        }
+        None
+    }
+}
+
+impl MonitorMixer {
+    /// AI_CODE
+    pub(crate) fn new(slot_count: usize) -> Self {
+        Self(Arc::new(Mutex::new(
+            (0..slot_count)
+                .map(|_| Arc::new(MonitorSource::new()))
+                .collect(),
+        )))
+    }
+
+    /// AI_CODE
+    pub(crate) fn resize(&self, slot_count: usize) {
+        if let Ok(mut sources) = self.0.lock() {
+            sources.resize_with(slot_count, || Arc::new(MonitorSource::new()));
+        }
+    }
+
+    /// Get the input ring for one slot while opening its audio stream.
+    ///
+    /// AI_CODE
+    fn source(&self, slot: usize) -> Option<Arc<MonitorSource>> {
+        self.0.lock().ok()?.get(slot).cloned()
+    }
+
+    /// Snapshot output rings when opening the output stream.
+    ///
+    /// AI_CODE
+    fn sources(&self) -> Vec<Arc<MonitorSource>> {
+        self.0
+            .lock()
+            .map_or_else(|_| Vec::new(), |sources| sources.clone())
+    }
+
+    /// Mix currently available sources into interleaved output-rate samples.
+    ///
+    /// AI_CODE
+    fn render<T>(
+        sources: &[Arc<MonitorSource>],
+        output: &mut [T],
+        channels: usize,
+        output_rate: u32,
+    ) where
+        T: cpal::Sample + cpal::SizedSample + cpal::FromSample<f32>,
+    {
+        let channels = channels.max(1);
+        for frame in output.chunks_mut(channels) {
+            let mut mixed = 0.0;
+            let active_sources = sources
+                .iter()
+                .filter(|source| source.sample_rate.load(Ordering::Acquire) > 0)
+                .count();
+            for source in sources {
+                if let Some(sample) = source.next_sample(output_rate) {
+                    mixed += sample;
+                }
+            }
+            let sample = if active_sources == 0 {
+                0.0
+            } else {
+                (mixed / active_sources as f32).clamp(-1.0, 1.0)
+            };
+            for output_sample in frame {
+                *output_sample = sample.to_sample::<T>();
+            }
+        }
+    }
+}
+
+#[test]
+fn monitor_mixer_averages_sources_and_outputs_stereo() {
+    let mixer = MonitorMixer::new(2);
+    mixer.source(0).unwrap().push(48_000, &[0.25; 4]);
+    mixer.source(1).unwrap().push(48_000, &[0.75; 4]);
+    let mut output = [0.0; 8];
+    MonitorMixer::render(&mixer.sources(), &mut output, 2, 48_000);
+    assert_eq!(output, [0.5; 8]);
+}
+
+#[test]
+fn monitor_ring_drops_old_audio_on_overrun() {
+    let source = MonitorSource::new();
+    let mut samples = vec![0.25; MONITOR_RING_CAPACITY];
+    samples[0] = 0.75;
+    source.push(48_000, &samples);
+    source.push(48_000, &[0.5]);
+    let mixer = MonitorMixer(Arc::new(Mutex::new(vec![Arc::new(source)])));
+    let mut output = [0.0; 1];
+    MonitorMixer::render(&mixer.sources(), &mut output, 1, 48_000);
+    assert_eq!(output[0], 0.25);
+}
+
 type WavRecorder = hound::WavWriter<BufWriter<File>>;
 
 /// Open configured audio and MIDI inputs on a dedicated worker thread.
@@ -155,6 +371,7 @@ pub(crate) fn spawn_instrument_thread(
     sender: Sender<InstrumentEvent>,
     config: InputConfig,
     input_levels: InputLevels,
+    monitor_mixer: MonitorMixer,
     recording_commands: Receiver<RecordingCommand>,
     recording_status: RecordingStatusHandle,
     stop_receiver: Receiver<()>,
@@ -173,6 +390,7 @@ pub(crate) fn spawn_instrument_thread(
         }
 
         let host = cpal::default_host();
+        let output_stream = open_monitor_output(&host, monitor_mixer.clone());
         let mut streams = Vec::new();
         let mut midi_connections = Vec::new();
         let mut recorder: Option<(WavRecorder, String, Vec<usize>)> = None;
@@ -180,7 +398,11 @@ pub(crate) fn spawn_instrument_thread(
         for (index, slot) in config.slots.iter().enumerate() {
             match slot.kind {
                 InstrumentKind::Strings | InstrumentKind::Voice => {
-                    match open_audio_input(&host, index, slot) {
+                    match monitor_mixer
+                        .source(index)
+                        .ok_or_else(|| "monitor source is unavailable".to_string())
+                        .and_then(|source| open_audio_input(&host, index, slot, source))
+                    {
                         Ok(input) => streams.push(input),
                         Err(error) => {
                             eprintln!("slot {index} ({:?}) input unavailable: {error}", slot.kind)
@@ -318,6 +540,7 @@ pub(crate) fn spawn_instrument_thread(
                 break;
             }
         }
+        drop(output_stream);
     })
 }
 
@@ -328,6 +551,7 @@ fn open_audio_input(
     host: &cpal::Host,
     slot_index: usize,
     slot: &InstrumentSlot,
+    monitor_source: Arc<MonitorSource>,
 ) -> Result<AudioInput, String> {
     let open_frequencies = slot.open_frequencies();
     let instrument = Instrument {
@@ -350,6 +574,8 @@ fn open_audio_input(
             &config,
             channels,
             frame_sender.clone(),
+            monitor_source.clone(),
+            config.sample_rate,
             error_callback,
         ),
         cpal::SampleFormat::I16 => build_audio_stream::<i16>(
@@ -357,6 +583,8 @@ fn open_audio_input(
             &config,
             channels,
             frame_sender.clone(),
+            monitor_source.clone(),
+            config.sample_rate,
             error_callback,
         ),
         cpal::SampleFormat::I32 => build_audio_stream::<i32>(
@@ -364,11 +592,19 @@ fn open_audio_input(
             &config,
             channels,
             frame_sender.clone(),
+            monitor_source.clone(),
+            config.sample_rate,
             error_callback,
         ),
-        cpal::SampleFormat::U16 => {
-            build_audio_stream::<u16>(&device, &config, channels, frame_sender, error_callback)
-        }
+        cpal::SampleFormat::U16 => build_audio_stream::<u16>(
+            &device,
+            &config,
+            channels,
+            frame_sender,
+            monitor_source,
+            config.sample_rate,
+            error_callback,
+        ),
         format => return Err(format!("unsupported sample format {format:?}")),
     }
     .map_err(|error| error.to_string())?;
@@ -391,6 +627,93 @@ fn open_audio_input(
         open_frequencies,
         sample_rate: config.sample_rate,
     })
+}
+
+/// Open the default output device and render the live audio monitor mix.
+///
+/// AI_CODE
+fn open_monitor_output(host: &cpal::Host, mixer: MonitorMixer) -> Option<cpal::Stream> {
+    let device = host.default_output_device()?;
+    let supported = match device.default_output_config() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("audio monitor output unavailable: {error}");
+            return None;
+        }
+    };
+    let config = supported.config();
+    let channels = config.channels as usize;
+    let sample_rate = config.sample_rate;
+    let sources = mixer.sources();
+    let error_callback = |error| eprintln!("audio monitor output error: {error}");
+    let stream = match supported.sample_format() {
+        cpal::SampleFormat::F32 => build_monitor_output_stream::<f32>(
+            &device,
+            config,
+            channels,
+            sample_rate,
+            sources,
+            error_callback,
+        ),
+        cpal::SampleFormat::I16 => build_monitor_output_stream::<i16>(
+            &device,
+            config,
+            channels,
+            sample_rate,
+            sources,
+            error_callback,
+        ),
+        cpal::SampleFormat::U16 => build_monitor_output_stream::<u16>(
+            &device,
+            config,
+            channels,
+            sample_rate,
+            sources,
+            error_callback,
+        ),
+        format => {
+            eprintln!("audio monitor output unavailable: unsupported sample format {format:?}");
+            return None;
+        }
+    };
+    match stream {
+        Ok(stream) => match stream.play() {
+            Ok(()) => {
+                println!("Audio input monitoring on {device}");
+                Some(stream)
+            }
+            Err(error) => {
+                eprintln!("audio monitor output unavailable: {error}");
+                None
+            }
+        },
+        Err(error) => {
+            eprintln!("audio monitor output unavailable: {error}");
+            None
+        }
+    }
+}
+
+/// Build one output callback that converts directly from the normalized monitor mix.
+///
+/// AI_CODE
+fn build_monitor_output_stream<T>(
+    device: &cpal::Device,
+    config: cpal::StreamConfig,
+    channels: usize,
+    sample_rate: u32,
+    sources: Vec<Arc<MonitorSource>>,
+    error_callback: impl FnMut(cpal::Error) + Send + 'static,
+) -> Result<cpal::Stream, cpal::Error>
+where
+    T: cpal::Sample + cpal::SizedSample + cpal::FromSample<f32>,
+{
+    device.build_output_stream::<T, _, _>(
+        config,
+        move |data: &mut [T], _| MonitorMixer::render(&sources, data, channels, sample_rate),
+        error_callback,
+        None,
+    )
 }
 
 /// Create a mono 16-bit WAV recorder under the local `recordings` directory.
@@ -514,6 +837,8 @@ fn build_audio_stream<T>(
     config: &cpal::StreamConfig,
     channels: usize,
     sender: SyncSender<Vec<f32>>,
+    monitor_source: Arc<MonitorSource>,
+    sample_rate: u32,
     error_callback: impl FnMut(cpal::Error) + Send + 'static,
 ) -> Result<cpal::Stream, cpal::Error>
 where
@@ -533,6 +858,7 @@ where
                         / frame.len().max(1) as f32
                 })
                 .collect::<Vec<_>>();
+            monitor_source.push(sample_rate, &mono);
             let _ = sender.try_send(mono);
         },
         error_callback,

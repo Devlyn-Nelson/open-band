@@ -26,6 +26,7 @@ The current project is an input and gameplay prototype. It proves the real-time 
 - MIDI drum note mapping to gameplay lanes.
 - Calibration tuners with open-string feedback for strings and nearest-note/cents feedback for voice.
 - Voice tuning rejects low-level input and clears the detected note when a confident pitch or sufficient level is no longer present.
+- Live audio inputs are monitored through the default output while the application is running. Use headphones or mute nearby speakers to prevent microphone feedback.
 - Timing calibration screen with a moving beat target before chart gameplay.
 - Home screen with direct access to the live session and setup tools.
 - Persistent setup settings stored in `open-band-settings/settings.json`.
@@ -613,7 +614,6 @@ Audio callbacks stay real-time safe: they downmix samples and enqueue bounded au
 - Add profile management around the existing persistent settings file.
 - Add audio playback, song loading, pause, restart, and practice mode.
 - Add visual feedback for hit quality, combo, multiplier, and per-instrument score.
-- Add an audio monitor toggle with feedback protection.
 - Add diagnostics showing device sample rate, channel count, buffer size, and measured latency.
 
 ### 6. Test the real-time path
