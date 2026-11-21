@@ -18,7 +18,7 @@ Depends on Part A2 engraving semantics being complete and merged.
   view, rather than two separate implementations. Snapping is tempo-independent — it only
   needs `resolution` and the active `time_signature_map` entry, not `bpm`.
 
-### 4. Notation engine (`src/notation.rs`, shared with Part D)
+### 4. Notation engine (`src/notation.rs`, shared with Part D) (completed)
 
 - Extend the existing notation engine, independent of the editor and gameplay UI, so
   both can reuse it:
