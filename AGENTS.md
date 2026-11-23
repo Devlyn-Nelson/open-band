@@ -17,6 +17,7 @@
 - `src/screens/home.rs`: Home screen systems and components.
 - `src/screens/live/mod.rs`: live-session rendering, event consumption, diagnostics, note motion, and scoring.
 - `src/screens/editor/mod.rs`: in-app chart editor (chart browse/create/load, track list add/remove/rename/reorder, tuning/kit cycling, save).
+- `src/screens/editor/sheet.rs`: graphical sheet staff, notation controls, and pointer-to-score interaction.
 - `src/notation/mod.rs`: framework-agnostic sheet-music layout (measures, ties, beaming, rest inference, clef selection); consumed by the chart editor's future sheet view and the future live gameplay notation overlay.
 - `charts/`: built-in chart data loaded at compile time.
 - `tunings/`: named string tunings loaded at runtime for Input Setup and the chart editor (embedded fallback if missing).

@@ -3,6 +3,9 @@ use bevy::input::keyboard::KeyboardInput;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+mod sheet;
+pub(crate) use sheet::sheet_view_system;
+
 #[derive(Component)]
 pub(crate) struct EditorCamera;
 
@@ -46,6 +49,8 @@ pub(crate) struct EditorDocument {
     pub(crate) track_focus: usize,
     pub(crate) current_tick: u32,
     pub(crate) view_mode: EditorViewMode,
+    pub(crate) event_focus: usize,
+    pub(crate) event_text_cursor: Option<usize>,
     pub(crate) text_entry: Option<EditorTextEntry>,
     pub(crate) metadata_mode: bool,
     pub(crate) metadata_focus: usize,
@@ -64,6 +69,40 @@ pub(crate) enum EditorViewMode {
     Tab,
 }
 
+/// Active sheet notation tools for the current editor session.
+///
+/// AI_CODE
+#[derive(Resource)]
+pub(crate) struct SheetTools {
+    pub(crate) duration: NoteValue,
+    pub(crate) dots: u8,
+    pub(crate) tuplet: Option<Tuplet>,
+    pub(crate) rest: bool,
+    pub(crate) tied: bool,
+    pub(crate) remove: bool,
+    pub(crate) voice: u8,
+    pub(crate) dynamic: Option<DynamicLevel>,
+    pub(crate) articulation: Option<Articulation>,
+    pub(crate) piece_index: usize,
+}
+
+impl Default for SheetTools {
+    fn default() -> Self {
+        Self {
+            duration: NoteValue::Quarter,
+            dots: 0,
+            tuplet: None,
+            rest: false,
+            tied: false,
+            remove: false,
+            voice: 1,
+            dynamic: None,
+            articulation: None,
+            piece_index: 0,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 /// Field being edited in the editor's text-entry mode.
 ///
@@ -75,12 +114,440 @@ pub(crate) enum EditorTextTarget {
     RehearsalLabel,
     VocalRangeLow,
     VocalRangeHigh,
+    ScoreEvent(EventSource),
+    NewScoreEvent,
 }
 
 /// AI_CODE
 pub(crate) struct EditorTextEntry {
     pub(crate) target: EditorTextTarget,
     pub(crate) buffer: String,
+}
+
+/// Find the authored event corresponding to a notation symbol.
+///
+/// AI_CODE
+fn editor_source_event_mut(track: &mut ChartTrack, source: EventSource) -> Option<&mut ChartEvent> {
+    match source {
+        EventSource::Track(index) => track.notes.get_mut(index),
+        EventSource::Phrase { phrase, index } => {
+            track.phrases.get_mut(phrase)?.notes.get_mut(index)
+        }
+        EventSource::Verse {
+            verse,
+            phrase,
+            index,
+        } => track
+            .lyric_verses
+            .get_mut(verse)?
+            .phrases
+            .get_mut(phrase)?
+            .notes
+            .get_mut(index),
+    }
+}
+
+/// Find the authored event for a selected notation symbol.
+///
+/// AI_CODE
+fn editor_source_event(track: &ChartTrack, source: EventSource) -> Option<&ChartEvent> {
+    match source {
+        EventSource::Track(index) => track.notes.get(index),
+        EventSource::Phrase { phrase, index } => track.phrases.get(phrase)?.notes.get(index),
+        EventSource::Verse {
+            verse,
+            phrase,
+            index,
+        } => track
+            .lyric_verses
+            .get(verse)?
+            .phrases
+            .get(phrase)?
+            .notes
+            .get(index),
+    }
+}
+
+/// Select an event at the shared tick, including stacked notes.
+///
+/// AI_CODE
+fn focused_event_source(document: &EditorDocument) -> Option<EventSource> {
+    let track = document.chart.tracks.get(document.track_focus)?;
+    let layout = layout_track(&document.chart, track);
+    let events = layout
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.start == document.current_tick)
+        .collect::<Vec<_>>();
+    events
+        .get(document.event_focus % events.len().max(1))
+        .map(|symbol| symbol.source)
+}
+
+/// Remove a selected event and any relationships that refer to its ID.
+///
+/// AI_CODE
+fn remove_editor_event(document: &mut EditorDocument, source: EventSource) -> bool {
+    let Some(track) = document.chart.tracks.get_mut(document.track_focus) else {
+        return false;
+    };
+    let events = match source {
+        EventSource::Track(_) => Some(&mut track.notes),
+        EventSource::Phrase { phrase, .. } => track
+            .phrases
+            .get_mut(phrase)
+            .map(|phrase| &mut phrase.notes),
+        EventSource::Verse { verse, phrase, .. } => track
+            .lyric_verses
+            .get_mut(verse)
+            .and_then(|verse| verse.phrases.get_mut(phrase))
+            .map(|phrase| &mut phrase.notes),
+    };
+    let index = match source {
+        EventSource::Track(index)
+        | EventSource::Phrase { index, .. }
+        | EventSource::Verse { index, .. } => index,
+    };
+    let Some(events) = events else {
+        return false;
+    };
+    if index >= events.len() {
+        return false;
+    }
+    let event = events.remove(index);
+    if let Some(id) = event.id {
+        track
+            .ties
+            .retain(|relation| relation.from != id && relation.to != id);
+        track
+            .slurs
+            .retain(|relation| relation.from != id && relation.to != id);
+    }
+    document.event_focus = 0;
+    document.dirty = true;
+    true
+}
+
+/// Replace an authored event only after the supplied score JSON parses successfully.
+///
+/// AI_CODE
+fn replace_editor_event(
+    document: &mut EditorDocument,
+    source: EventSource,
+    value: &str,
+) -> Result<(), String> {
+    let mut event: ChartEvent = serde_json::from_str(value).map_err(|error| error.to_string())?;
+    let track = document
+        .chart
+        .tracks
+        .get_mut(document.track_focus)
+        .ok_or("No focused track")?;
+    let target = editor_source_event_mut(track, source).ok_or("Event no longer exists")?;
+    event.id = target.id.clone();
+    *target = event;
+    document.dirty = true;
+    Ok(())
+}
+
+/// Place or remove a pitched score event at the snapped editor position.
+///
+/// AI_CODE
+fn sheet_edit_pitch(
+    document: &mut EditorDocument,
+    tick: u32,
+    pitch: u8,
+    tools: &SheetTools,
+) -> bool {
+    sheet_edit_spelled_pitch(document, tick, pitch, None, tools)
+}
+
+/// Edit a pitch while retaining its written accidental and staff position.
+///
+/// AI_CODE
+fn sheet_edit_spelled_pitch(
+    document: &mut EditorDocument,
+    tick: u32,
+    pitch: u8,
+    spelling: Option<PitchSpelling>,
+    tools: &SheetTools,
+) -> bool {
+    let tick = snap_editor_tick(document, tick);
+    let Some(track) = document.chart.tracks.get(document.track_focus) else {
+        return false;
+    };
+    if track.kind == InstrumentKind::Percussion && !tools.rest {
+        return false;
+    }
+    let source = layout_track(&document.chart, track).symbols.iter().find(|symbol| {
+        symbol.start == tick && symbol.voice == tools.voice && if tools.rest { matches!(symbol.kind, NotationSymbolKind::Rest) } else { matches!(&symbol.kind, NotationSymbolKind::Pitched { pitch: existing, spelling: existing_spelling } if *existing == pitch && (spelling.is_none() || sheet::pitch_step(*existing, existing_spelling.as_ref()) == sheet::pitch_step(pitch, spelling.as_ref()))) }
+    }).map(|symbol| symbol.source);
+    if tools.remove {
+        return source.is_some_and(|source| remove_editor_event(document, source));
+    }
+    if source.is_some() {
+        return false;
+    }
+    let event = ChartEvent {
+        id: None,
+        start: tick,
+        length: tools.duration,
+        voice: tools.voice,
+        staff: 1,
+        dots: tools.dots,
+        tied: tools.tied && !tools.rest,
+        tuplet: tools.tuplet,
+        chord: None,
+        dynamic: tools.dynamic,
+        articulations: tools.articulation.into_iter().collect(),
+        stem: None,
+        grace: None,
+        performance: None,
+        content: if tools.rest {
+            NoteContent::Rest
+        } else {
+            NoteContent::Pitched {
+                note: pitch,
+                spelling,
+            }
+        },
+    };
+    document.chart.tracks[document.track_focus]
+        .notes
+        .push(event);
+    ensure_stable_event_ids(&mut document.chart);
+    let track = &mut document.chart.tracks[document.track_focus];
+    let index = track.notes.len() - 1;
+    if !tools.rest {
+        let compatible = (0..index).find(|existing| {
+            let note = &track.notes[*existing];
+            note.start == tick
+                && note.voice == tools.voice
+                && note.staff == 1
+                && note.length == tools.duration
+                && note.dots == tools.dots
+                && note.tuplet == tools.tuplet
+                && matches!(note.content, NoteContent::Pitched { .. })
+        });
+        if let Some(existing) = compatible {
+            let chord = track.notes[existing].chord.clone().unwrap_or_else(|| {
+                format!(
+                    "chord-{}",
+                    track.notes[existing].id.as_deref().unwrap_or("note")
+                )
+            });
+            track.notes[existing].chord = Some(chord.clone());
+            track.notes[index].chord = Some(chord);
+        }
+    }
+    document.dirty = true;
+    true
+}
+
+/// Place or remove the selected percussion piece on its configured lane.
+///
+/// AI_CODE
+fn sheet_edit_percussion(
+    document: &mut EditorDocument,
+    tick: u32,
+    lane: usize,
+    tools: &SheetTools,
+) -> bool {
+    let tick = snap_editor_tick(document, tick);
+    let Some(track) = document.chart.tracks.get(document.track_focus) else {
+        return false;
+    };
+    let Some(kit) = track.kit.as_ref() else {
+        return false;
+    };
+    let Some(piece) = kit.pieces.get(tools.piece_index % kit.pieces.len().max(1)) else {
+        return false;
+    };
+    if piece.lane != Some(lane) && piece.lane_span.is_none() {
+        return false;
+    }
+    let piece_name = piece.name.clone();
+    let source = layout_track(&document.chart, track).symbols.iter().find(|symbol| symbol.start == tick && symbol.voice == tools.voice && matches!(&symbol.kind, NotationSymbolKind::Percussion { piece, .. } if piece == &piece_name)).map(|symbol| symbol.source);
+    if tools.remove {
+        return source.is_some_and(|source| remove_editor_event(document, source));
+    }
+    if source.is_some() {
+        return false;
+    }
+    let event = ChartEvent {
+        id: None,
+        start: tick,
+        length: tools.duration,
+        voice: tools.voice,
+        staff: 1,
+        dots: tools.dots,
+        tied: tools.tied,
+        tuplet: tools.tuplet,
+        chord: None,
+        dynamic: tools.dynamic,
+        articulations: tools.articulation.into_iter().collect(),
+        stem: None,
+        grace: None,
+        performance: None,
+        content: NoteContent::Percussive { piece: piece_name },
+    };
+    document.chart.tracks[document.track_focus]
+        .notes
+        .push(event);
+    ensure_stable_event_ids(&mut document.chart);
+    document.dirty = true;
+    true
+}
+
+#[test]
+/// A percussion click targets only the selected kit piece on its configured lane.
+///
+/// AI_CODE
+fn sheet_percussion_targets_selected_kit_piece() {
+    let mut document = new_chart_document();
+    document
+        .chart
+        .tracks
+        .push(new_track(InstrumentKind::Percussion));
+    let piece = document.chart.tracks[0]
+        .kit
+        .as_ref()
+        .unwrap()
+        .pieces
+        .iter()
+        .position(|piece| piece.lane.is_some())
+        .unwrap();
+    let lane = document.chart.tracks[0].kit.as_ref().unwrap().pieces[piece]
+        .lane
+        .unwrap();
+    let mut tools = SheetTools::default();
+    tools.piece_index = piece;
+    assert!(!sheet_edit_percussion(&mut document, 0, lane + 1, &tools));
+    assert!(sheet_edit_percussion(&mut document, 0, lane, &tools));
+    tools.remove = true;
+    assert!(sheet_edit_percussion(&mut document, 0, lane, &tools));
+    assert!(document.chart.tracks[0].notes.is_empty());
+    let span = document.chart.tracks[0]
+        .kit
+        .as_ref()
+        .unwrap()
+        .pieces
+        .iter()
+        .position(|piece| piece.lane_span.is_some())
+        .unwrap();
+    tools.piece_index = span;
+    tools.remove = false;
+    assert!(sheet_edit_percussion(&mut document, 0, lane, &tools));
+    tools.remove = true;
+    assert!(sheet_edit_percussion(&mut document, 0, lane, &tools));
+}
+
+#[test]
+/// Sheet placement stacks pitches without replacing notes and removes one pitch only.
+///
+/// AI_CODE
+fn sheet_pitch_placement_stacks_and_removes_one_note() {
+    let mut document = new_chart_document();
+    document.chart.tracks.push(new_track(InstrumentKind::Voice));
+    let mut tools = SheetTools::default();
+    assert!(sheet_edit_pitch(&mut document, 1000, 60, &tools));
+    assert!(sheet_edit_pitch(&mut document, 1000, 64, &tools));
+    assert!(!sheet_edit_pitch(&mut document, 1000, 60, &tools));
+    assert_eq!(document.chart.tracks[0].notes.len(), 2);
+    assert!(document.chart.tracks[0].notes[0].chord.is_some());
+    assert_eq!(
+        document.chart.tracks[0].notes[0].chord,
+        document.chart.tracks[0].notes[1].chord
+    );
+    assert!(
+        document.chart.tracks[0]
+            .notes
+            .iter()
+            .all(|note| note.start == 960 && note.id.is_some())
+    );
+    tools.remove = true;
+    assert!(sheet_edit_pitch(&mut document, 1000, 60, &tools));
+    assert_eq!(document.chart.tracks[0].notes.len(), 1);
+    assert!(matches!(
+        document.chart.tracks[0].notes[0].content,
+        NoteContent::Pitched { note: 64, .. }
+    ));
+}
+
+#[test]
+/// Sheet placement preserves notation settings and records rests on percussion tracks.
+///
+/// AI_CODE
+fn sheet_placement_preserves_tool_settings() {
+    let mut document = new_chart_document();
+    document.chart.tracks.push(new_track(InstrumentKind::Voice));
+    let mut tools = SheetTools::default();
+    tools.duration = NoteValue::Eighth;
+    tools.dots = 1;
+    tools.tuplet = Some(Tuplet {
+        actual: 3,
+        normal: 2,
+    });
+    tools.voice = 2;
+    tools.dynamic = Some(DynamicLevel::Mf);
+    tools.articulation = Some(Articulation::Accent);
+    assert!(sheet_edit_pitch(&mut document, 1000, 60, &tools));
+    let event = &document.chart.tracks[0].notes[0];
+    assert_eq!(event.start, 960);
+    assert_eq!(event.length, NoteValue::Eighth);
+    assert_eq!(event.dots, 1);
+    assert_eq!(event.tuplet, tools.tuplet);
+    assert_eq!(event.voice, 2);
+    assert_eq!(event.dynamic, Some(DynamicLevel::Mf));
+    assert_eq!(event.articulations, vec![Articulation::Accent]);
+    document
+        .chart
+        .tracks
+        .push(new_track(InstrumentKind::Percussion));
+    document.track_focus = 1;
+    tools.rest = true;
+    tools.tied = true;
+    assert!(sheet_edit_pitch(&mut document, 0, 0, &tools));
+    assert!(matches!(
+        document.chart.tracks[1].notes[0].content,
+        NoteContent::Rest
+    ));
+    assert!(!document.chart.tracks[1].notes[0].tied);
+}
+
+#[test]
+/// Editing a focused event preserves other tracks and document navigation.
+///
+/// AI_CODE
+fn editor_replaces_only_the_focused_source_event() {
+    let mut document = new_chart_document();
+    document.chart.tracks = vec![
+        new_track(InstrumentKind::Strings),
+        new_track(InstrumentKind::Voice),
+    ];
+    document.chart.tracks[0].notes =
+        serde_json::from_str(r#"[{"start":0,"length":4,"note":"E2"}]"#).unwrap();
+    document.chart.tracks[1].phrases = serde_json::from_str(r#"[{"start":0,"duration_ticks":960,"text":"la","notes":[{"id":"v1","start":0,"length":4,"note":"C4"}]}]"#).unwrap();
+    document.track_focus = 1;
+    document.current_tick = 480;
+    document.view_mode = EditorViewMode::Tab;
+    document.dirty = false;
+    let source = EventSource::Phrase {
+        phrase: 0,
+        index: 0,
+    };
+    assert!(replace_editor_event(&mut document, source, "invalid").is_err());
+    assert!(!document.dirty);
+    replace_editor_event(
+        &mut document,
+        source,
+        r#"{"id":"v1","start":960,"length":8,"note":"D4"}"#,
+    )
+    .unwrap();
+    assert_eq!(document.chart.tracks[1].phrases[0].notes[0].start, 960);
+    assert_eq!(document.chart.tracks[0].notes[0].start, 0);
+    assert_eq!(document.current_tick, 480);
+    assert_eq!(document.view_mode, EditorViewMode::Tab);
+    assert!(document.dirty);
 }
 
 /// AI_CODE
@@ -135,6 +602,8 @@ fn new_chart_document() -> EditorDocument {
         track_focus: 0,
         current_tick: 0,
         view_mode: EditorViewMode::Sheet,
+        event_focus: 0,
+        event_text_cursor: None,
         text_entry: None,
         metadata_mode: false,
         metadata_focus: 0,
@@ -220,6 +689,8 @@ fn load_chart_document(path: &Path) -> Result<EditorDocument, String> {
         track_focus: 0,
         current_tick: 0,
         view_mode: EditorViewMode::Sheet,
+        event_focus: 0,
+        event_text_cursor: None,
         text_entry: None,
         metadata_mode: false,
         metadata_focus: 0,
@@ -289,6 +760,7 @@ fn commit_text_entry(document: &mut EditorDocument, target: EditorTextTarget, va
                 }
             }
         }
+        EditorTextTarget::ScoreEvent(_) | EditorTextTarget::NewScoreEvent => return,
     }
     document.dirty = true;
 }
@@ -560,6 +1032,7 @@ fn cycle_editor_track(document: &mut EditorDocument, delta: i32) {
     if count > 0 {
         document.track_focus =
             (document.track_focus as i64 + i64::from(delta)).rem_euclid(count as i64) as usize;
+        document.event_focus = 0;
     }
 }
 
@@ -668,6 +1141,7 @@ fn slugify_produces_filesystem_safe_names() {
 
 /// AI_CODE
 pub(crate) fn setup_editor(mut commands: Commands) {
+    commands.insert_resource(SheetTools::default());
     commands.insert_resource(EditorBrowser {
         entries: list_editable_charts(),
         selected: 0,
@@ -687,6 +1161,7 @@ pub(crate) fn setup_editor(mut commands: Commands) {
             position_type: PositionType::Absolute,
             top: Val::Px(40.0),
             left: Val::Px(70.0),
+            right: Val::Px(40.0),
             ..default()
         },
         EditorText,
@@ -701,6 +1176,7 @@ pub(crate) fn cleanup_editor(mut commands: Commands, entities: Query<Entity, Wit
     commands.remove_resource::<EditorDocument>();
     commands.remove_resource::<EditorBrowser>();
     commands.remove_resource::<EditorLibraries>();
+    commands.remove_resource::<SheetTools>();
 }
 
 /// AI_CODE
@@ -943,6 +1419,162 @@ fn editor_navigation_keys_update_shared_state() {
 }
 
 #[test]
+/// Event controls reach off-grid chords and retain invalid edits for correction.
+///
+/// AI_CODE
+fn editor_event_controls_preserve_focus_and_relations() {
+    let mut document = new_chart_document();
+    document.chart.tracks = vec![
+        new_track(InstrumentKind::Strings),
+        new_track(InstrumentKind::Voice),
+    ];
+    document.chart.tracks[0].notes = serde_json::from_str(
+        r#"[
+        {"id":"a","start":120,"length":4,"note":"E2"},
+        {"id":"b","start":120,"length":4,"note":"G2"},
+        {"id":"c","start":1080,"length":4,"note":"E2"}
+    ]"#,
+    )
+    .unwrap();
+    document.chart.tracks[0].slurs.push(EventRelation {
+        from: "a".into(),
+        to: "c".into(),
+    });
+    document.chart.tracks[0].ties.push(EventRelation {
+        from: "b".into(),
+        to: "c".into(),
+    });
+    document.view_mode = EditorViewMode::Tab;
+    document.dirty = false;
+    let mut app = App::new();
+    app.add_message::<KeyboardInput>()
+        .insert_resource(ButtonInput::<KeyCode>::default())
+        .insert_resource(document)
+        .insert_resource(EditorLibraries {
+            tunings: Vec::new(),
+            kits: Vec::new(),
+        })
+        .add_systems(Update, editor_tracks_input);
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyO);
+    app.update();
+    assert_eq!(app.world().resource::<EditorDocument>().current_tick, 120);
+    {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.clear();
+        keys.press(KeyCode::KeyJ);
+        keys.press(KeyCode::KeyE);
+    }
+    app.update();
+    {
+        let mut document = app.world_mut().resource_mut::<EditorDocument>();
+        assert!(matches!(
+            document.text_entry.as_ref().unwrap().target,
+            EditorTextTarget::ScoreEvent(EventSource::Track(1))
+        ));
+        document.text_entry.as_mut().unwrap().buffer = "invalid".into();
+        document.event_text_cursor = Some(7);
+    }
+    {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.clear();
+        keys.press(KeyCode::Enter);
+    }
+    app.update();
+    assert!(
+        app.world()
+            .resource::<EditorDocument>()
+            .text_entry
+            .is_some()
+    );
+    assert!(!app.world().resource::<EditorDocument>().dirty);
+    {
+        let mut document = app.world_mut().resource_mut::<EditorDocument>();
+        let buffer = r#"{"id":"changed","start":120,"length":8,"note":"A2"}"#.to_string();
+        document.event_text_cursor = Some(buffer.len());
+        document.text_entry.as_mut().unwrap().buffer = buffer;
+    }
+    {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(KeyCode::Enter);
+        keys.clear();
+        keys.press(KeyCode::Enter);
+    }
+    app.update();
+    {
+        let document = app.world().resource::<EditorDocument>();
+        assert!(document.text_entry.is_none());
+        assert_eq!(document.chart.tracks[0].notes[1].id.as_deref(), Some("b"));
+        assert_eq!(document.chart.tracks[0].notes[1].length, NoteValue::Eighth);
+        assert_eq!(document.current_tick, 120);
+        assert_eq!(document.view_mode, EditorViewMode::Tab);
+    }
+    {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.clear();
+        keys.press(KeyCode::Delete);
+    }
+    app.update();
+    let document = app.world().resource::<EditorDocument>();
+    assert_eq!(document.chart.tracks[0].notes.len(), 2);
+    assert_eq!(document.chart.tracks[0].notes[0].id.as_deref(), Some("a"));
+    assert!(document.chart.tracks[0].ties.is_empty());
+    assert_eq!(document.chart.tracks[0].slurs.len(), 1);
+    assert_eq!(document.current_tick, 120);
+    assert_eq!(document.view_mode, EditorViewMode::Tab);
+}
+
+#[test]
+/// Inserted events receive stable IDs and survive chart serialization.
+///
+/// AI_CODE
+fn editor_inserts_event_and_round_trips_chart() {
+    let mut document = new_chart_document();
+    document.chart.tracks.push(new_track(InstrumentKind::Voice));
+    document.current_tick = 480;
+    let mut app = App::new();
+    app.add_message::<KeyboardInput>()
+        .insert_resource(ButtonInput::<KeyCode>::default())
+        .insert_resource(document)
+        .insert_resource(EditorLibraries {
+            tunings: Vec::new(),
+            kits: Vec::new(),
+        })
+        .add_systems(Update, editor_tracks_input);
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyI);
+    app.update();
+    assert!(matches!(
+        app.world()
+            .resource::<EditorDocument>()
+            .text_entry
+            .as_ref()
+            .unwrap()
+            .target,
+        EditorTextTarget::NewScoreEvent
+    ));
+    {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.clear();
+        keys.press(KeyCode::Enter);
+    }
+    app.update();
+    let document = app.world().resource::<EditorDocument>();
+    assert_eq!(document.chart.tracks[0].notes.len(), 1);
+    assert!(document.chart.tracks[0].notes[0].id.is_some());
+    assert_eq!(document.chart.tracks[0].notes[0].start, 480);
+    let json = serde_json::to_string(&document.chart).unwrap();
+    let chart: Chart = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        chart.tracks[0].notes[0].id,
+        document.chart.tracks[0].notes[0].id
+    );
+    assert_eq!(chart.tracks[0].notes[0].start, 480);
+}
+
+#[test]
 /// Metadata edits cover document, track, tempo, signature, marker, and expression data.
 /// AI_CODE
 fn score_metadata_edits_preserve_score_and_performance_fields() {
@@ -1120,31 +1752,109 @@ pub(crate) fn editor_tracks_input(
     libraries: Res<EditorLibraries>,
     mut commands: Commands,
 ) {
-    if let Some(entry) = document.text_entry.as_mut() {
+    if document.text_entry.is_some() {
+        let mut cursor = document.event_text_cursor;
+        let entry = document.text_entry.as_mut().unwrap();
+        let control =
+            keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
         for event in keyboard_events.read() {
             if event.state != bevy::input::ButtonState::Pressed {
                 continue;
             }
-            if let Some(text) = &event.text {
-                entry
-                    .buffer
-                    .extend(text.chars().filter(|character| !character.is_control()));
+            if !control && let Some(text) = &event.text {
+                let text = text
+                    .chars()
+                    .filter(|character| !character.is_control())
+                    .collect::<String>();
+                if let Some(position) = cursor.as_mut() {
+                    entry.buffer.insert_str(*position, &text);
+                    *position += text.len();
+                } else {
+                    entry.buffer.push_str(&text);
+                }
             }
         }
-        if keyboard.just_pressed(KeyCode::Backspace) {
-            if let Some(entry) = document.text_entry.as_mut() {
-                entry.buffer.pop();
+        if keyboard.just_pressed(KeyCode::KeyA) && control {
+            entry.buffer.clear();
+            if cursor.is_some() {
+                cursor = Some(0);
             }
+        } else if let Some(position) = cursor.as_mut() {
+            if keyboard.just_pressed(KeyCode::ArrowLeft) {
+                *position = entry.buffer[..*position]
+                    .char_indices()
+                    .last()
+                    .map_or(0, |(index, _)| index);
+            }
+            if keyboard.just_pressed(KeyCode::ArrowRight) && *position < entry.buffer.len() {
+                *position += entry.buffer[*position..].chars().next().unwrap().len_utf8();
+            }
+            if keyboard.just_pressed(KeyCode::Home) {
+                *position = 0;
+            }
+            if keyboard.just_pressed(KeyCode::End) {
+                *position = entry.buffer.len();
+            }
+            if keyboard.just_pressed(KeyCode::Backspace) && *position > 0 {
+                let previous = entry.buffer[..*position]
+                    .char_indices()
+                    .last()
+                    .map_or(0, |(index, _)| index);
+                entry.buffer.drain(previous..*position);
+                *position = previous;
+            }
+            if keyboard.just_pressed(KeyCode::Delete) && *position < entry.buffer.len() {
+                let next = *position + entry.buffer[*position..].chars().next().unwrap().len_utf8();
+                entry.buffer.drain(*position..next);
+            }
+        } else if keyboard.just_pressed(KeyCode::Backspace) {
+            entry.buffer.pop();
         }
+        document.event_text_cursor = cursor;
         if keyboard.just_pressed(KeyCode::Enter) {
             if let Some(entry) = document.text_entry.take() {
-                commit_text_entry(&mut document, entry.target, entry.buffer);
+                let result = match entry.target {
+                    EditorTextTarget::ScoreEvent(source) => {
+                        Some(replace_editor_event(&mut document, source, &entry.buffer))
+                    }
+                    EditorTextTarget::NewScoreEvent => Some(
+                        serde_json::from_str::<ChartEvent>(&entry.buffer)
+                            .map_err(|error| error.to_string())
+                            .and_then(|mut event| {
+                                event.id = None;
+                                let focus = document.track_focus;
+                                let track = document
+                                    .chart
+                                    .tracks
+                                    .get_mut(focus)
+                                    .ok_or("No focused track")?;
+                                track.notes.push(event);
+                                ensure_stable_event_ids(&mut document.chart);
+                                document.dirty = true;
+                                Ok(())
+                            }),
+                    ),
+                    _ => None,
+                };
+                match result {
+                    Some(Err(error)) => {
+                        document.status = format!("Event edit failed: {error}");
+                        document.text_entry = Some(entry);
+                    }
+                    Some(Ok(())) => {
+                        document.status = "Event updated".into();
+                        document.event_text_cursor = None;
+                    }
+                    None => commit_text_entry(&mut document, entry.target, entry.buffer),
+                }
             }
         } else if keyboard.just_pressed(KeyCode::Escape) {
             document.text_entry = None;
+            document.event_text_cursor = None;
         }
         return;
     }
+    keyboard_events.clear();
     if keyboard.just_pressed(KeyCode::Escape) {
         if document.metadata_mode {
             document.metadata_mode = false;
@@ -1311,10 +2021,74 @@ pub(crate) fn editor_tracks_input(
     if keyboard.just_pressed(KeyCode::ArrowLeft) {
         document.current_tick =
             snap_editor_tick(&document, document.current_tick.saturating_sub(step));
+        document.event_focus = 0;
     }
     if keyboard.just_pressed(KeyCode::ArrowRight) {
         document.current_tick =
             snap_editor_tick(&document, document.current_tick.saturating_add(step));
+        document.event_focus = 0;
+    }
+    if let Some(track) = document.chart.tracks.get(document.track_focus) {
+        let target = if keyboard.just_pressed(KeyCode::KeyU) {
+            all_track_events(track)
+                .filter(|event| event.start < document.current_tick)
+                .map(|event| event.start)
+                .max()
+        } else if keyboard.just_pressed(KeyCode::KeyO) {
+            all_track_events(track)
+                .filter(|event| event.start > document.current_tick)
+                .map(|event| event.start)
+                .min()
+        } else {
+            None
+        };
+        if let Some(tick) = target {
+            document.current_tick = tick;
+            document.event_focus = 0;
+        }
+    }
+    if keyboard.just_pressed(KeyCode::KeyJ) {
+        document.event_focus = document.event_focus.saturating_add(1);
+    }
+    if keyboard.just_pressed(KeyCode::KeyE)
+        && let Some(source) = focused_event_source(&document)
+        && let Some(track) = document.chart.tracks.get(document.track_focus)
+        && let Some(event) = editor_source_event(track, source)
+        && let Ok(buffer) = serde_json::to_string(event)
+    {
+        document.event_text_cursor = Some(buffer.len());
+        document.text_entry = Some(EditorTextEntry {
+            target: EditorTextTarget::ScoreEvent(source),
+            buffer,
+        });
+    }
+    if keyboard.just_pressed(KeyCode::KeyI)
+        && let Some(track) = document.chart.tracks.get(document.track_focus)
+    {
+        let content = match track.kind {
+            InstrumentKind::Strings => {
+                serde_json::json!({"note": track.tuning.as_ref().and_then(|tuning| tuning.strings.first()).map_or("C4", String::as_str)})
+            }
+            InstrumentKind::Voice => serde_json::json!({"note": "C4"}),
+            InstrumentKind::Percussion => {
+                serde_json::json!({"piece": track.kit.as_ref().and_then(|kit| kit.pieces.first()).map_or("kick", |piece| piece.name.as_str())})
+            }
+        };
+        let mut event = content;
+        event["start"] = serde_json::json!(document.current_tick);
+        event["length"] = serde_json::json!(4);
+        let buffer = event.to_string();
+        document.event_text_cursor = Some(buffer.len());
+        document.text_entry = Some(EditorTextEntry {
+            target: EditorTextTarget::NewScoreEvent,
+            buffer,
+        });
+    }
+    if keyboard.just_pressed(KeyCode::Delete)
+        && let Some(source) = focused_event_source(&document)
+        && remove_editor_event(&mut document, source)
+    {
+        document.status = "Event removed".into();
     }
     if keyboard.just_pressed(KeyCode::KeyN) {
         document
@@ -1322,6 +2096,7 @@ pub(crate) fn editor_tracks_input(
             .tracks
             .push(new_track(InstrumentKind::Strings));
         document.track_focus = document.chart.tracks.len() - 1;
+        document.event_focus = 0;
         document.dirty = true;
     }
     if keyboard.just_pressed(KeyCode::KeyX) && track_count > 0 {
@@ -1330,6 +2105,7 @@ pub(crate) fn editor_tracks_input(
         document.track_focus = document
             .track_focus
             .min(document.chart.tracks.len().saturating_sub(1));
+        document.event_focus = 0;
         document.dirty = true;
     }
     if keyboard.just_pressed(KeyCode::KeyK) {
@@ -1343,6 +2119,7 @@ pub(crate) fn editor_tracks_input(
             let name = track.name.clone();
             *track = new_track(next_kind);
             track.name = name;
+            document.event_focus = 0;
             document.dirty = true;
         }
     }
@@ -1386,7 +2163,7 @@ pub(crate) fn editor_tracks_input(
     }
 }
 
-/// Summarize events near the shared position for the focused track only.
+/// Display notation events for the focused track and shared position.
 ///
 /// AI_CODE
 fn focused_track_preview(document: &EditorDocument) -> String {
@@ -1407,39 +2184,84 @@ fn focused_track_preview(document: &EditorDocument) -> String {
     let end = document
         .current_tick
         .saturating_add(document.chart.resolution.saturating_mul(4));
-    let mut events = all_track_events(track)
+    let layout = layout_track(&document.chart, track);
+    let events = layout
+        .symbols
+        .iter()
         .filter(|event| event.start >= document.current_tick && event.start < end)
         .collect::<Vec<_>>();
-    events.sort_by_key(|event| event.start);
     let count = events.len();
+    let selected = focused_event_source(document);
+    let first = selected
+        .and_then(|source| events.iter().position(|event| event.source == source))
+        .unwrap_or(0)
+        .saturating_sub(7);
     let mut lines = events
         .into_iter()
-        .take(6)
+        .skip(first)
+        .take(8)
         .map(|event| {
-            let content = match &event.content {
-                NoteContent::Pitched { note, .. } => midi_note_name(*note),
-                NoteContent::Percussive { piece } => piece.clone(),
-                NoteContent::Rest => "rest".into(),
+            let content = match &event.kind {
+                NotationSymbolKind::Pitched { pitch, .. } => midi_note_name(*pitch),
+                NotationSymbolKind::Percussion { piece, .. } => piece.clone(),
+                NotationSymbolKind::Rest => "rest".into(),
             };
             let hint = if document.view_mode == EditorViewMode::Tab {
-                event
-                    .performance
-                    .as_ref()
-                    .and_then(|performance| performance.preferred_string)
-                    .map_or_else(String::new, |string| format!("  string {}", string + 1))
+                match &event.kind {
+                    NotationSymbolKind::Pitched { pitch, .. }
+                        if track.kind == InstrumentKind::Strings =>
+                    {
+                        let string = editor_source_event(track, event.source)
+                            .and_then(|event| event.performance.as_ref())
+                            .and_then(|performance| performance.preferred_string);
+                        match string {
+                            Some(string) => {
+                                let open = track
+                                    .tuning
+                                    .as_ref()
+                                    .and_then(|tuning| tuning.open_midi().ok())
+                                    .and_then(|tuning| tuning.get(string).copied())
+                                    .and_then(|open| open.checked_add(track.capo.unwrap_or(0)));
+                                match open.and_then(|open| pitch.checked_sub(open)) {
+                                    Some(fret) => format!("  string {} fret {fret}", string + 1),
+                                    None => format!("  string {} (unplayable)", string + 1),
+                                }
+                            }
+                            None => "  string unassigned".into(),
+                        }
+                    }
+                    NotationSymbolKind::Percussion {
+                        lane, lane_span, ..
+                    } => match lane {
+                        Some(lane) => format!("  lane {}", lane + 1),
+                        None if lane_span.is_some() => "  all lanes".into(),
+                        None => "  lane unassigned".into(),
+                    },
+                    _ => String::new(),
+                }
             } else {
                 String::new()
             };
-            format!("  {}: {content}  {:?}{hint}", event.start, event.length)
+            let marker = if Some(event.source) == selected {
+                ">"
+            } else {
+                " "
+            };
+            format!(
+                "{marker} {}: {content}  {:?}  voice {} staff {}{hint}",
+                event.start, event.value, event.voice, event.staff
+            )
         })
         .collect::<Vec<_>>();
     if lines.is_empty() {
         lines.push("  (no events in this window)".into());
-    } else if count > lines.len() {
-        lines.push(format!("  ... {} more", count - lines.len()));
+    } else if count > first + lines.len() {
+        lines.push(format!("  ... {} more", count - first - lines.len()));
     }
     format!(
-        "FOCUS: {}  |  {:?}  |  {detail}\n{:?} preview  |  tick {}\n{}",
+        "FOCUS {}/{}: {}  |  {:?}  |  {detail}\n{:?} preview  |  tick {}\n{}",
+        document.track_focus + 1,
+        document.chart.tracks.len(),
         track.name,
         track.kind,
         document.view_mode,
@@ -1451,8 +2273,12 @@ fn focused_track_preview(document: &EditorDocument) -> String {
 /// AI_CODE
 pub(crate) fn editor_tracks_display(
     document: Res<EditorDocument>,
+    tools: Res<SheetTools>,
     mut text: Query<&mut Text, With<EditorText>>,
 ) {
+    if !document.is_changed() && !tools.is_changed() {
+        return;
+    }
     let Ok(mut text) = text.single_mut() else {
         return;
     };
@@ -1460,49 +2286,60 @@ pub(crate) fn editor_tracks_display(
         *text = score_metadata_display(&document);
         return;
     }
+    if document.view_mode == EditorViewMode::Sheet && document.text_entry.is_none() {
+        let track = document.chart.tracks.get(document.track_focus);
+        let name = track.map_or("No track", |track| track.name.as_str());
+        let detail = track.map_or_else(String::new, |track| match track.kind {
+            InstrumentKind::Strings => track
+                .tuning
+                .as_ref()
+                .map_or_else(|| "no tuning".into(), |tuning| tuning.strings.join(" ")),
+            InstrumentKind::Percussion => track
+                .kit
+                .as_ref()
+                .and_then(|kit| kit.pieces.get(tools.piece_index % kit.pieces.len().max(1)))
+                .map_or_else(
+                    || "no piece".into(),
+                    |piece| format!("piece: {}", piece.name),
+                ),
+            InstrumentKind::Voice => "voice".into(),
+        });
+        *text = Text::new(format!(
+            "{}  //  {}  |  {}  |  tick {}\nF1-F5: {:?}   F6 dots: {}   F7 triplet: {}   F8 rest: {}\nF9 tie: {}   F10: {}   F11 voice: {}   F12 dynamic: {:?}   A: {:?}\nP: percussion piece   PgUp/PgDn: track   Left/Right: time   V: view\n{}",
+            document.chart.title,
+            name,
+            detail,
+            document.current_tick,
+            tools.duration,
+            tools.dots,
+            tools.tuplet.is_some(),
+            tools.rest,
+            tools.tied,
+            if tools.remove { "REMOVE" } else { "PLACE" },
+            tools.voice,
+            tools.dynamic,
+            tools.articulation,
+            document.status,
+        ));
+        return;
+    }
     let dirty = if document.dirty { "*" } else { "" };
-    let track_lines = if document.chart.tracks.is_empty() {
-        "  (no tracks yet; press N to add one)".to_string()
-    } else {
-        document
-            .chart
-            .tracks
-            .iter()
-            .enumerate()
-            .skip(document.track_focus.saturating_sub(2))
-            .take(5)
-            .map(|(index, track)| {
-                let marker = if document.track_focus == index {
-                    ">"
-                } else {
-                    " "
-                };
-                let detail = match track.kind {
-                    InstrumentKind::Strings => track
-                        .tuning
-                        .as_ref()
-                        .map_or("no tuning".into(), |tuning| tuning.strings.join("-")),
-                    InstrumentKind::Percussion => {
-                        track.kit.as_ref().map_or("no kit".into(), |kit| {
-                            format!("{} pieces", kit.pieces.len())
-                        })
-                    }
-                    InstrumentKind::Voice => "voice".into(),
-                };
-                format!("{marker} {} — {:?} ({detail})", track.name, track.kind)
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
     let text_entry_line = document
         .text_entry
         .as_ref()
         .map_or_else(String::new, |entry| {
-            format!("\n\nEDIT: {}_\nEnter: confirm  Esc: cancel", entry.buffer)
+            let mut buffer = entry.buffer.clone();
+            buffer.insert(document.event_text_cursor.unwrap_or(buffer.len()), '|');
+            format!(
+                "\n\nEDIT: {buffer}\nEnter: confirm  Esc: cancel  Ctrl+A: clear\n{}",
+                document.status
+            )
         });
     *text = Text::new(format!(
-        "OPEN BAND  //  CHART EDITOR  //  {}{dirty}\n\n{}\n\n{track_lines}{text_entry_line}\n\n\
+        "OPEN BAND  //  CHART EDITOR  //  {}{dirty}\n\n{}{text_entry_line}\n\n\
         PgUp/PgDn or Up/Down: focus     Left/Right: position     V: sheet/tab\n\
+        U/O: previous/next event     J: select stacked event\n\
+        E: edit event     I: insert event     Delete: remove event\n\
         N: add     X: remove     K: cycle kind\n\
         [ / ]: cycle tuning/kit     , / .: reorder     R: rename     M: score metadata\n\
         Tab: snap grid {}     S: save     Esc: back to chart list\n\n{}\n{}",

@@ -47,8 +47,10 @@ The sheet view and gameplay overlay still need to consume and render this layout
 
 Navigation state and controls are implemented: PageUp/PageDown cycles the focused track,
 the tick position and sheet/tab mode are shared across tracks, and the current text editor
-shows a focused-track event preview. Full-size, editable sheet/tab views remain dependent
-on parts 6 and 7; the preview is not a substitute for those views.
+shows a focused-track event preview. Events can be inserted, edited, and removed in a
+JSON-based text editor, including existing vocal phrase notes. Full-size graphical sheet
+and tab views remain dependent on parts 6 and 7; the text editor is not a substitute
+for those views, so this part is still open.
 
 - A chart can have any number of tracks, but sheet/tab view can only show one track's full
   detail readably at a time. First implementation (**Option A**): the view always shows
@@ -69,6 +71,11 @@ on parts 6 and 7; the preview is not a substitute for those views.
   longer-term stretch goal, not currently planned.
 
 ### 6. Sheet view (editor)
+
+In progress: a graphical four-quarter-note staff, keyboard-operated notation palette,
+snapped pitched/rest placement, and selected-piece percussion lane placement are present.
+Still needed: a clickable toolbar, complete relationship authoring, and visual/manual QA.
+Full score engraving remains in 6.1.
 
 - Toolbar: note-duration palette (whole/half/quarter/eighth/sixteenth, tuplets, dot/rest/
   tie controls, dynamics, articulations, and a Place/Remove tool selector).
