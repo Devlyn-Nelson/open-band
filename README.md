@@ -150,7 +150,9 @@ Once a chart is open, its track list is shown:
 
 | Key | Action |
 | --- | --- |
-| `Up` / `Down` | Focus a track |
+| `Page Up` / `Page Down` or `Up` / `Down` | Cycle the focused track (Page keys also work in score metadata) |
+| `Left` / `Right` | Move the shared position by the active snap interval |
+| `V` | Toggle the document-wide sheet/tab preview mode |
 | `N` | Add a new track (defaults to `Strings`) |
 | `X` | Remove the focused track |
 | `K` | Cycle the focused track's kind (`Strings` -> `Percussion` -> `Voice`) |
@@ -172,6 +174,8 @@ when a chart is saved; existing IDs, explicit rests, voice/staff assignments, re
 and performance hints are preserved. Performance hints remain separate from notation fields.
 The snap interval is shared by the document and its tick positions are calculated from
 resolution and the active time signature; tempo changes do not move the grid.
+The focused-track preview shows events near the shared position; switching tracks or
+preview modes preserves that position. The preview is not yet a full sheet or tab editor.
 
 Saving runs validation (unplayable notes, missing tuning/kit, unknown percussion pieces) and reports any warnings in the status line without blocking the save. Note placement (sheet/tab views) is not yet implemented.
 
@@ -259,7 +263,9 @@ sixteenth) and may use `dots`. `tuplet` supports irregular subdivisions such as 
 continues the duration into the next event of the same pitch or piece; validation checks
 that the next event starts at the expected end and keeps the same pitch or piece. Written
 silence can be represented explicitly with `rest: true`; gaps without authored rests are
-also inferred by the notation engine.
+also inferred by the notation engine independently for each voice and staff. Its layout
+preserves exact gap durations, authored dotted and tuplet rests, and whole-measure rests;
+the editor's full notation rendering is still planned.
 
 ```json
 { "start": 960, "length": 4, "voice": 1, "staff": 1, "rest": true }

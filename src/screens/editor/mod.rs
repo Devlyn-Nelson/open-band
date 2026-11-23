@@ -44,6 +44,8 @@ pub(crate) struct EditorDocument {
     pub(crate) path: Option<PathBuf>,
     pub(crate) dirty: bool,
     pub(crate) track_focus: usize,
+    pub(crate) current_tick: u32,
+    pub(crate) view_mode: EditorViewMode,
     pub(crate) text_entry: Option<EditorTextEntry>,
     pub(crate) metadata_mode: bool,
     pub(crate) metadata_focus: usize,
@@ -51,6 +53,15 @@ pub(crate) struct EditorDocument {
     pub(crate) expression_kind: usize,
     pub(crate) snap_interval: SnapInterval,
     pub(crate) status: String,
+}
+
+/// The focused track's document-wide representation.
+///
+/// AI_CODE
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EditorViewMode {
+    Sheet,
+    Tab,
 }
 
 #[derive(Clone, Copy)]
@@ -122,6 +133,8 @@ fn new_chart_document() -> EditorDocument {
         path: None,
         dirty: true,
         track_focus: 0,
+        current_tick: 0,
+        view_mode: EditorViewMode::Sheet,
         text_entry: None,
         metadata_mode: false,
         metadata_focus: 0,
@@ -205,6 +218,8 @@ fn load_chart_document(path: &Path) -> Result<EditorDocument, String> {
         path: Some(path.to_path_buf()),
         dirty: assigned_ids,
         track_focus: 0,
+        current_tick: 0,
+        view_mode: EditorViewMode::Sheet,
         text_entry: None,
         metadata_mode: false,
         metadata_focus: 0,
@@ -537,6 +552,17 @@ pub(crate) fn snap_editor_tick(document: &EditorDocument, tick: u32) -> u32 {
     snap_tick_in_chart(tick, document.snap_interval, &document.chart)
 }
 
+/// Cycle the focused track without changing the document position or view.
+///
+/// AI_CODE
+fn cycle_editor_track(document: &mut EditorDocument, delta: i32) {
+    let count = document.chart.tracks.len();
+    if count > 0 {
+        document.track_focus =
+            (document.track_focus as i64 + i64::from(delta)).rem_euclid(count as i64) as usize;
+    }
+}
+
 /// Cycle through the common notation snap intervals.
 ///
 /// AI_CODE
@@ -831,6 +857,92 @@ fn editor_snap_interval_cycles_and_snaps_ticks() {
 }
 
 #[test]
+/// Track focus wraps across instrument kinds without changing document navigation.
+///
+/// AI_CODE
+fn editor_track_focus_preserves_shared_position_and_view() {
+    let mut document = new_chart_document();
+    document.chart.tracks = vec![
+        new_track(InstrumentKind::Strings),
+        new_track(InstrumentKind::Percussion),
+        new_track(InstrumentKind::Voice),
+    ];
+    document.current_tick = 4320;
+    document.view_mode = EditorViewMode::Tab;
+    document.dirty = false;
+    cycle_editor_track(&mut document, -1);
+    assert_eq!(document.track_focus, 2);
+    cycle_editor_track(&mut document, 1);
+    assert_eq!(document.track_focus, 0);
+    cycle_editor_track(&mut document, 1);
+    assert_eq!(document.track_focus, 1);
+    assert_eq!(document.current_tick, 4320);
+    assert_eq!(document.view_mode, EditorViewMode::Tab);
+    assert!(!document.dirty);
+    document.chart.tracks.clear();
+    document.track_focus = 0;
+    cycle_editor_track(&mut document, -1);
+    assert_eq!(document.track_focus, 0);
+}
+
+#[test]
+/// Navigation keys update shared state through the Bevy editor system.
+///
+/// AI_CODE
+fn editor_navigation_keys_update_shared_state() {
+    let mut document = new_chart_document();
+    document.chart.tracks = vec![
+        new_track(InstrumentKind::Strings),
+        new_track(InstrumentKind::Percussion),
+        new_track(InstrumentKind::Voice),
+    ];
+    document.chart.tracks[0].name = "Guitar".into();
+    document.chart.tracks[1].name = "Drums".into();
+    document.dirty = false;
+    let mut app = App::new();
+    app.add_message::<KeyboardInput>()
+        .insert_resource(ButtonInput::<KeyCode>::default())
+        .insert_resource(document)
+        .insert_resource(EditorLibraries {
+            tunings: Vec::new(),
+            kits: Vec::new(),
+        })
+        .add_systems(Update, editor_tracks_input);
+    {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.press(KeyCode::PageDown);
+        keys.press(KeyCode::ArrowRight);
+        keys.press(KeyCode::KeyV);
+    }
+    app.update();
+    {
+        let document = app.world().resource::<EditorDocument>();
+        assert_eq!(document.track_focus, 1);
+        assert_eq!(document.current_tick, 960);
+        assert_eq!(document.view_mode, EditorViewMode::Tab);
+        assert!(!document.dirty);
+        let preview = focused_track_preview(document);
+        assert!(preview.contains("Drums"));
+        assert!(!preview.contains("Guitar"));
+        assert!(preview.contains("Tab preview  |  tick 960"));
+    }
+    {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.clear();
+        keys.release(KeyCode::PageDown);
+        keys.press(KeyCode::PageUp);
+    }
+    app.world_mut()
+        .resource_mut::<EditorDocument>()
+        .metadata_mode = true;
+    app.update();
+    let document = app.world().resource::<EditorDocument>();
+    assert_eq!(document.track_focus, 0);
+    assert_eq!(document.current_tick, 960);
+    assert_eq!(document.view_mode, EditorViewMode::Tab);
+}
+
+#[test]
 /// Metadata edits cover document, track, tempo, signature, marker, and expression data.
 /// AI_CODE
 fn score_metadata_edits_preserve_score_and_performance_fields() {
@@ -1042,6 +1154,19 @@ pub(crate) fn editor_tracks_input(
         return;
     }
 
+    if keyboard.just_pressed(KeyCode::PageUp) {
+        cycle_editor_track(&mut document, -1);
+    }
+    if keyboard.just_pressed(KeyCode::PageDown) {
+        cycle_editor_track(&mut document, 1);
+    }
+    if keyboard.just_pressed(KeyCode::KeyV) {
+        document.view_mode = match document.view_mode {
+            EditorViewMode::Sheet => EditorViewMode::Tab,
+            EditorViewMode::Tab => EditorViewMode::Sheet,
+        };
+    }
+
     if document.metadata_mode {
         if keyboard.just_pressed(KeyCode::KeyM) {
             document.metadata_mode = false;
@@ -1173,16 +1298,23 @@ pub(crate) fn editor_tracks_input(
     }
 
     let track_count = document.chart.tracks.len();
-    if track_count > 0 {
-        if keyboard.just_pressed(KeyCode::ArrowUp) {
-            document.track_focus = document
-                .track_focus
-                .checked_sub(1)
-                .unwrap_or(track_count - 1);
-        }
-        if keyboard.just_pressed(KeyCode::ArrowDown) {
-            document.track_focus = (document.track_focus + 1) % track_count;
-        }
+    if keyboard.just_pressed(KeyCode::ArrowUp) {
+        cycle_editor_track(&mut document, -1);
+    }
+    if keyboard.just_pressed(KeyCode::ArrowDown) {
+        cycle_editor_track(&mut document, 1);
+    }
+    let step = document
+        .snap_interval
+        .ticks(document.chart.resolution)
+        .max(1);
+    if keyboard.just_pressed(KeyCode::ArrowLeft) {
+        document.current_tick =
+            snap_editor_tick(&document, document.current_tick.saturating_sub(step));
+    }
+    if keyboard.just_pressed(KeyCode::ArrowRight) {
+        document.current_tick =
+            snap_editor_tick(&document, document.current_tick.saturating_add(step));
     }
     if keyboard.just_pressed(KeyCode::KeyN) {
         document
@@ -1254,6 +1386,68 @@ pub(crate) fn editor_tracks_input(
     }
 }
 
+/// Summarize events near the shared position for the focused track only.
+///
+/// AI_CODE
+fn focused_track_preview(document: &EditorDocument) -> String {
+    let Some(track) = document.chart.tracks.get(document.track_focus) else {
+        return "No focused track".into();
+    };
+    let detail = match track.kind {
+        InstrumentKind::Strings => track
+            .tuning
+            .as_ref()
+            .map_or_else(|| "no tuning".into(), |tuning| tuning.strings.join("-")),
+        InstrumentKind::Percussion => track.kit.as_ref().map_or_else(
+            || "no kit".into(),
+            |kit| format!("{} pieces", kit.pieces.len()),
+        ),
+        InstrumentKind::Voice => "voice".into(),
+    };
+    let end = document
+        .current_tick
+        .saturating_add(document.chart.resolution.saturating_mul(4));
+    let mut events = all_track_events(track)
+        .filter(|event| event.start >= document.current_tick && event.start < end)
+        .collect::<Vec<_>>();
+    events.sort_by_key(|event| event.start);
+    let count = events.len();
+    let mut lines = events
+        .into_iter()
+        .take(6)
+        .map(|event| {
+            let content = match &event.content {
+                NoteContent::Pitched { note, .. } => midi_note_name(*note),
+                NoteContent::Percussive { piece } => piece.clone(),
+                NoteContent::Rest => "rest".into(),
+            };
+            let hint = if document.view_mode == EditorViewMode::Tab {
+                event
+                    .performance
+                    .as_ref()
+                    .and_then(|performance| performance.preferred_string)
+                    .map_or_else(String::new, |string| format!("  string {}", string + 1))
+            } else {
+                String::new()
+            };
+            format!("  {}: {content}  {:?}{hint}", event.start, event.length)
+        })
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        lines.push("  (no events in this window)".into());
+    } else if count > lines.len() {
+        lines.push(format!("  ... {} more", count - lines.len()));
+    }
+    format!(
+        "FOCUS: {}  |  {:?}  |  {detail}\n{:?} preview  |  tick {}\n{}",
+        track.name,
+        track.kind,
+        document.view_mode,
+        document.current_tick,
+        lines.join("\n")
+    )
+}
+
 /// AI_CODE
 pub(crate) fn editor_tracks_display(
     document: Res<EditorDocument>,
@@ -1275,6 +1469,8 @@ pub(crate) fn editor_tracks_display(
             .tracks
             .iter()
             .enumerate()
+            .skip(document.track_focus.saturating_sub(2))
+            .take(5)
             .map(|(index, track)| {
                 let marker = if document.track_focus == index {
                     ">"
@@ -1305,11 +1501,13 @@ pub(crate) fn editor_tracks_display(
             format!("\n\nEDIT: {}_\nEnter: confirm  Esc: cancel", entry.buffer)
         });
     *text = Text::new(format!(
-        "OPEN BAND  //  CHART EDITOR  //  {}{dirty}\n\n{track_lines}{text_entry_line}\n\n\
-        Up/Down: focus track     N: add     X: remove     K: cycle kind\n\
+        "OPEN BAND  //  CHART EDITOR  //  {}{dirty}\n\n{}\n\n{track_lines}{text_entry_line}\n\n\
+        PgUp/PgDn or Up/Down: focus     Left/Right: position     V: sheet/tab\n\
+        N: add     X: remove     K: cycle kind\n\
         [ / ]: cycle tuning/kit     , / .: reorder     R: rename     M: score metadata\n\
         Tab: snap grid {}     S: save     Esc: back to chart list\n\n{}\n{}",
         document.chart.title,
+        focused_track_preview(&document),
         snap_interval_label(document.snap_interval),
         document.status,
         score_summary(&document.chart),

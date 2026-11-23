@@ -20,15 +20,21 @@ impl Measure {
 }
 
 /// A layout rest distinguishes authored rests from rests inferred into silence.
+/// `duration_override` preserves nonstandard gaps and whole measures exactly; a
+/// consumer must not interpret such a duration as the nominal value alone.
 ///
 /// AI_CODE
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Rest {
     pub(crate) start: u32,
+    pub(crate) voice: u8,
+    pub(crate) staff: u8,
     pub(crate) value: NoteValue,
     pub(crate) dots: u8,
     pub(crate) tuplet: Option<Tuplet>,
     pub(crate) explicit: bool,
+    pub(crate) duration_override: Option<u32>,
+    pub(crate) whole_measure: bool,
 }
 
 impl Rest {
@@ -36,6 +42,9 @@ impl Rest {
     ///
     /// AI_CODE
     pub(crate) fn duration_ticks(&self, resolution: u32) -> u32 {
+        if let Some(duration) = self.duration_override {
+            return duration;
+        }
         let mut total = self.value.ticks(resolution);
         let mut addition = total;
         for _ in 0..self.dots {
@@ -59,19 +68,19 @@ const REST_VALUES: [NoteValue; 5] = [
     NoteValue::Sixteenth,
 ];
 
-/// A complete layout for one track: measures, tie chains, beam groups, and inferred
-/// rests. Produced independently of any rendering framework — the editor's sheet view
-/// and the gameplay overlay (Part C) both render from this same description.
+/// Layout for one track, spanning the score and independent of a rendering framework.
+/// Every relationship and lyric note index refers to `symbols`; each symbol's source
+/// identifies the original event, even when input is not in chronological order.
 ///
 /// AI_CODE
 pub(crate) struct NotationLayout {
     pub(crate) clef: Option<Clef>,
     pub(crate) key_signature: Option<KeySignature>,
     pub(crate) measures: Vec<Measure>,
-    /// Each inner `Vec` is a chain of `track.notes` indices tied together in sequence.
+    /// Each inner `Vec` contains indices into `symbols` in tie order.
     pub(crate) ties: Vec<Vec<usize>>,
     pub(crate) slurs: Vec<NotationRelation>,
-    /// Each inner `Vec` is a run of `track.notes` indices (eighth/sixteenth) beamed
+    /// Each inner `Vec` is a run of `symbols` indices (eighth/sixteenth) beamed
     /// together within one beat.
     pub(crate) beams: Vec<Vec<usize>>,
     /// Runs of notes sharing the same tuplet ratio.
@@ -80,6 +89,7 @@ pub(crate) struct NotationLayout {
     pub(crate) symbols: Vec<NotationSymbol>,
     pub(crate) rests: Vec<Rest>,
     pub(crate) lyrics: Vec<LyricLayout>,
+    pub(crate) phrase_spans: Vec<Phrase>,
     pub(crate) expressions: Vec<ScoreExpression>,
     pub(crate) markers: Vec<ScoreMarker>,
     pub(crate) tempo_text: Vec<TempoText>,
@@ -116,28 +126,48 @@ pub(crate) fn default_clef(track: &ChartTrack) -> Option<Clef> {
 }
 
 /// AI_CODE
-fn tuplet_groups(notes: &[ChartEvent]) -> Vec<Vec<usize>> {
+fn tuplet_groups(notes: &[ChartEvent], resolution: u32) -> Vec<Vec<usize>> {
     let mut groups = Vec::new();
-    let mut current = Vec::new();
-    let mut ratio: Option<Tuplet> = None;
-    for (index, note) in notes.iter().enumerate() {
-        if note.tuplet.is_some() && note.tuplet == ratio {
-            current.push(index);
-            continue;
+    let mut lanes = notes
+        .iter()
+        .map(|note| (note.staff, note.voice))
+        .collect::<Vec<_>>();
+    lanes.sort_unstable();
+    lanes.dedup();
+    for (staff, voice) in lanes {
+        let mut current = Vec::new();
+        let mut ratio: Option<Tuplet> = None;
+        let mut previous_end = None;
+        let mut previous_start = None;
+        for (index, note) in notes
+            .iter()
+            .enumerate()
+            .filter(|(_, note)| note.staff == staff && note.voice == voice)
+        {
+            if note.tuplet.is_some()
+                && note.tuplet == ratio
+                && (previous_end == Some(note.start) || previous_start == Some(note.start))
+            {
+                current.push(index);
+            } else {
+                if current.len() > 1 {
+                    groups.push(std::mem::take(&mut current));
+                } else {
+                    current.clear();
+                }
+                ratio = note.tuplet;
+                if ratio.is_some() {
+                    current.push(index);
+                }
+            }
+            previous_start = Some(note.start);
+            previous_end = Some(note.start.saturating_add(note.duration_ticks(resolution)));
         }
         if current.len() > 1 {
-            groups.push(std::mem::take(&mut current));
-        } else {
-            current.clear();
-        }
-        ratio = note.tuplet;
-        if ratio.is_some() {
-            current.push(index);
+            groups.push(current);
         }
     }
-    if current.len() > 1 {
-        groups.push(current);
-    }
+    groups.sort_by_key(|group| group[0]);
     groups
 }
 
@@ -189,28 +219,6 @@ pub(crate) fn measures(chart: &Chart, end_tick: u32) -> Vec<Measure> {
 /// Groups consecutive `tied` events into chains, in `track.notes` order.
 ///
 /// AI_CODE
-fn tie_chains(notes: &[ChartEvent]) -> Vec<Vec<usize>> {
-    let mut chains = Vec::new();
-    let mut current = Vec::new();
-    for (index, note) in notes.iter().enumerate() {
-        if matches!(note.content, NoteContent::Rest) {
-            if !current.is_empty() {
-                chains.push(std::mem::take(&mut current));
-            }
-            continue;
-        }
-        current.push(index);
-        if !note.tied {
-            chains.push(std::mem::take(&mut current));
-        }
-    }
-    if !current.is_empty() {
-        chains.push(current);
-    }
-    chains
-}
-
-/// AI_CODE
 fn measure_containing(measures: &[Measure], tick: u32) -> Option<&Measure> {
     measures
         .iter()
@@ -223,37 +231,58 @@ fn measure_containing(measures: &[Measure], tick: u32) -> Option<&Measure> {
 /// AI_CODE
 fn beam_groups(notes: &[ChartEvent], resolution: u32, measures: &[Measure]) -> Vec<Vec<usize>> {
     let mut groups = Vec::new();
-    let mut current = Vec::new();
-    let mut current_beat: Option<(usize, u32)> = None;
+    let mut lanes = notes
+        .iter()
+        .map(|note| (note.staff, note.voice))
+        .collect::<Vec<_>>();
+    lanes.sort_unstable();
+    lanes.dedup();
+    for (staff, voice) in lanes {
+        let mut current = Vec::new();
+        let mut current_beat: Option<(usize, u32)> = None;
+        let mut previous_end = None;
+        let mut previous_start = None;
 
-    for (index, note) in notes.iter().enumerate() {
-        let beamable = matches!(note.length, NoteValue::Eighth | NoteValue::Sixteenth);
-        let beat = measure_containing(measures, note.start).map(|measure| {
-            (
-                measure.index,
-                (note.start - measure.start_tick) / measure.beat_ticks(resolution),
-            )
-        });
-        let continues = beamable && beat.is_some() && beat == current_beat;
-        if continues {
-            current.push(index);
-        } else {
-            if current.len() > 1 {
-                groups.push(std::mem::take(&mut current));
-            } else {
-                current.clear();
-            }
-            if beamable {
+        for (index, note) in notes
+            .iter()
+            .enumerate()
+            .filter(|(_, note)| note.staff == staff && note.voice == voice)
+        {
+            let beamable = !matches!(note.content, NoteContent::Rest)
+                && matches!(note.length, NoteValue::Eighth | NoteValue::Sixteenth);
+            let beat = measure_containing(measures, note.start).map(|measure| {
+                (
+                    measure.index,
+                    (note.start - measure.start_tick) / measure.beat_ticks(resolution),
+                )
+            });
+            let continues = beamable
+                && beat.is_some()
+                && beat == current_beat
+                && (previous_end == Some(note.start) || previous_start == Some(note.start));
+            if continues {
                 current.push(index);
-                current_beat = beat;
             } else {
-                current_beat = None;
+                if current.len() > 1 {
+                    groups.push(std::mem::take(&mut current));
+                } else {
+                    current.clear();
+                }
+                if beamable {
+                    current.push(index);
+                    current_beat = beat;
+                } else {
+                    current_beat = None;
+                }
             }
+            previous_start = Some(note.start);
+            previous_end = Some(note.start.saturating_add(note.duration_ticks(resolution)));
+        }
+        if current.len() > 1 {
+            groups.push(current);
         }
     }
-    if current.len() > 1 {
-        groups.push(current);
-    }
+    groups.sort_by_key(|group| group[0]);
     groups
 }
 
@@ -261,7 +290,15 @@ fn beam_groups(notes: &[ChartEvent], resolution: u32, measures: &[Measure]) -> V
 /// measure boundary the gap crosses so no rest spans a barline.
 ///
 /// AI_CODE
-fn infer_rests(gap_start: u32, gap_end: u32, resolution: u32, measures: &[Measure]) -> Vec<Rest> {
+fn infer_rests(
+    gap_start: u32,
+    gap_end: u32,
+    resolution: u32,
+    measures: &[Measure],
+    voice: u8,
+    staff: u8,
+    tuplets: &[Tuplet],
+) -> Vec<Rest> {
     if gap_end <= gap_start {
         return Vec::new();
     }
@@ -279,18 +316,62 @@ fn infer_rests(gap_start: u32, gap_end: u32, resolution: u32, measures: &[Measur
         let mut tick = segment_start;
         while tick < cut {
             let remaining = cut - tick;
-            let value = REST_VALUES
-                .into_iter()
-                .find(|value| value.ticks(resolution) <= remaining)
-                .unwrap_or(NoteValue::Sixteenth);
-            rests.push(Rest {
-                start: tick,
-                value,
-                dots: 0,
-                tuplet: None,
-                explicit: false,
+            let whole_measure = measures
+                .iter()
+                .any(|measure| measure.start_tick == tick && measure.end_tick == cut);
+            let mut candidates = Vec::new();
+            for value in REST_VALUES {
+                for dots in 0..=2 {
+                    for tuplet in std::iter::once(None).chain(tuplets.iter().copied().map(Some)) {
+                        let candidate = Rest {
+                            start: tick,
+                            voice,
+                            staff,
+                            value,
+                            dots,
+                            tuplet,
+                            explicit: false,
+                            duration_override: None,
+                            whole_measure: false,
+                        };
+                        let duration = candidate.duration_ticks(resolution);
+                        if duration > 0 && duration <= remaining {
+                            candidates.push((duration, candidate));
+                        }
+                    }
+                }
+            }
+            candidates.sort_by_key(|(duration, rest)| {
+                (
+                    *duration,
+                    rest.tuplet.is_none(),
+                    std::cmp::Reverse(rest.dots),
+                )
             });
-            tick += value.ticks(resolution).max(1);
+            let (duration, mut rest) = candidates.pop().unwrap_or((
+                remaining,
+                Rest {
+                    start: tick,
+                    voice,
+                    staff,
+                    value: NoteValue::Sixteenth,
+                    dots: 0,
+                    tuplet: None,
+                    explicit: false,
+                    duration_override: Some(remaining),
+                    whole_measure: false,
+                },
+            ));
+            if whole_measure {
+                rest.value = NoteValue::Whole;
+                rest.dots = 0;
+                rest.tuplet = None;
+                rest.duration_override = Some(remaining);
+                rest.whole_measure = true;
+            }
+            let duration = if whole_measure { remaining } else { duration };
+            rests.push(rest);
+            tick += duration;
         }
         segment_start = cut;
     }
@@ -303,67 +384,176 @@ fn infer_rests(gap_start: u32, gap_end: u32, resolution: u32, measures: &[Measur
 ///
 /// AI_CODE
 pub(crate) fn layout_track(chart: &Chart, track: &ChartTrack) -> NotationLayout {
-    let mut notes = track.notes.clone();
-    notes.sort_by_key(|note| note.start);
-
-    let track_end = notes
+    let mut events = track
+        .notes
         .iter()
         .enumerate()
-        .map(|(index, note)| note.start + resolved_duration_ticks(&notes, index, chart.resolution))
+        .map(|(index, note)| (EventSource::Track(index), note.clone()))
+        .collect::<Vec<_>>();
+    for (phrase_index, phrase) in track.phrases.iter().enumerate() {
+        events.extend(phrase.notes.iter().enumerate().map(|(index, note)| {
+            (
+                EventSource::Phrase {
+                    phrase: phrase_index,
+                    index,
+                },
+                note.clone(),
+            )
+        }));
+    }
+    for (verse_index, verse) in track.lyric_verses.iter().enumerate() {
+        for (phrase_index, phrase) in verse.phrases.iter().enumerate() {
+            events.extend(phrase.notes.iter().enumerate().map(|(index, note)| {
+                (
+                    EventSource::Verse {
+                        verse: verse_index,
+                        phrase: phrase_index,
+                        index,
+                    },
+                    note.clone(),
+                )
+            }));
+        }
+    }
+    events.sort_by_key(|(_, note)| note.start);
+    let notes = events
+        .iter()
+        .map(|(_, note)| note.clone())
+        .collect::<Vec<_>>();
+
+    let track_end = chart
+        .tracks
+        .iter()
+        .flat_map(|track| {
+            track
+                .notes
+                .iter()
+                .chain(track.phrases.iter().flat_map(|phrase| phrase.notes.iter()))
+                .chain(
+                    track
+                        .lyric_verses
+                        .iter()
+                        .flat_map(|verse| verse.phrases.iter())
+                        .flat_map(|phrase| phrase.notes.iter()),
+                )
+        })
+        .chain(notes.iter())
+        .map(|note| {
+            note.start
+                .saturating_add(note.duration_ticks(chart.resolution))
+        })
+        .chain(
+            chart
+                .tracks
+                .iter()
+                .flat_map(|track| {
+                    track.phrases.iter().chain(
+                        track
+                            .lyric_verses
+                            .iter()
+                            .flat_map(|verse| verse.phrases.iter()),
+                    )
+                })
+                .map(|phrase| phrase.start.saturating_add(phrase.duration_ticks)),
+        )
+        .chain(
+            chart
+                .tracks
+                .iter()
+                .flat_map(|track| track.star_power_phrases.iter())
+                .map(|phrase| phrase.start.saturating_add(phrase.duration_ticks)),
+        )
         .max()
         .unwrap_or(0);
     let measures = measures(chart, track_end);
 
-    let ties = relation_ties(&notes, &track.ties);
+    let ties = relation_ties(&notes, &track.ties, chart.resolution);
     let slurs = slur_relations(&notes, &track.slurs);
     let beams = beam_groups(&notes, chart.resolution, &measures);
-    let tuplets = tuplet_groups(&notes);
+    let tuplets = tuplet_groups(&notes, chart.resolution);
     let chord_groups = chord_groups(&notes);
-    let symbols = notation_symbols(&notes, track, chart.resolution);
-    let lyrics = lyric_layout(track);
+    let symbols = notation_symbols(&events, track, chart.resolution);
+    let lyrics = lyric_layout(track, &events);
 
-    // Sounding tie chains and authored rests occupy ranges; infer silence only between them.
-    let mut occupied = Vec::new();
-    for chain in &ties {
-        let Some(&first) = chain.first() else {
-            continue;
-        };
-        let end = notes[first].start + resolved_duration_ticks(&notes, first, chart.resolution);
-        occupied.push((notes[first].start, end, None));
+    let mut lanes = notes
+        .iter()
+        .map(|note| (note.staff, note.voice))
+        .collect::<Vec<_>>();
+    lanes.sort_unstable();
+    lanes.dedup();
+    if lanes.is_empty() {
+        lanes.push((1, 1));
     }
-    for note in &notes {
-        if matches!(note.content, NoteContent::Rest) {
-            occupied.push((
-                note.start,
-                note.start + note.duration_ticks(chart.resolution),
-                Some(Rest {
-                    start: note.start,
-                    value: note.length,
-                    dots: note.dots,
-                    tuplet: note.tuplet,
-                    explicit: true,
-                }),
+    let mut rests = Vec::new();
+    for (staff, voice) in lanes {
+        let mut occupied = Vec::new();
+        let lane_notes = notes
+            .iter()
+            .filter(|note| note.staff == staff && note.voice == voice)
+            .collect::<Vec<_>>();
+        let mut tuplets = Vec::new();
+        for tuplet in lane_notes.iter().filter_map(|note| note.tuplet) {
+            if tuplet.valid() && !tuplets.contains(&tuplet) {
+                tuplets.push(tuplet);
+            }
+        }
+        for note in lane_notes {
+            if matches!(note.content, NoteContent::Rest) {
+                occupied.push((
+                    note.start,
+                    note.start
+                        .saturating_add(note.duration_ticks(chart.resolution)),
+                    Some(Rest {
+                        start: note.start,
+                        voice,
+                        staff,
+                        value: note.length,
+                        dots: note.dots,
+                        tuplet: note.tuplet,
+                        explicit: true,
+                        duration_override: None,
+                        whole_measure: false,
+                    }),
+                ));
+            } else {
+                occupied.push((
+                    note.start,
+                    note.start
+                        .saturating_add(note.duration_ticks(chart.resolution)),
+                    None,
+                ));
+            }
+        }
+        occupied.sort_by_key(|(start, _, _)| *start);
+        let mut cursor = measures.first().map_or(0, |measure| measure.start_tick);
+        for (start, end, explicit_rest) in occupied {
+            rests.extend(infer_rests(
+                cursor,
+                start,
+                chart.resolution,
+                &measures,
+                voice,
+                staff,
+                &tuplets,
+            ));
+            if let Some(rest) = explicit_rest {
+                rests.push(rest);
+            }
+            cursor = cursor.max(end);
+        }
+        if let Some(last_measure) = measures.last() {
+            rests.extend(infer_rests(
+                cursor,
+                last_measure.end_tick,
+                chart.resolution,
+                &measures,
+                voice,
+                staff,
+                &tuplets,
             ));
         }
     }
-    occupied.sort_by_key(|(start, _, _)| *start);
-    let mut rests = Vec::new();
-    let mut cursor = measures.first().map_or(0, |measure| measure.start_tick);
-    for (start, end, explicit_rest) in occupied {
-        rests.extend(infer_rests(cursor, start, chart.resolution, &measures));
-        if let Some(rest) = explicit_rest {
-            rests.push(rest);
-        }
-        cursor = cursor.max(end);
-    }
-    if let Some(last_measure) = measures.last() {
-        rests.extend(infer_rests(
-            cursor,
-            last_measure.end_tick,
-            chart.resolution,
-            &measures,
-        ));
-    }
+    rests.sort_by_key(|rest| (rest.start, rest.staff, rest.voice));
 
     NotationLayout {
         clef: default_clef(track),
@@ -377,6 +567,7 @@ pub(crate) fn layout_track(chart: &Chart, track: &ChartTrack) -> NotationLayout 
         symbols,
         rests,
         lyrics,
+        phrase_spans: track.star_power_phrases.clone(),
         expressions: chart.expressions.clone(),
         markers: chart.structure.clone(),
         tempo_text: chart.tempo_text.clone(),
@@ -386,14 +577,17 @@ pub(crate) fn layout_track(chart: &Chart, track: &ChartTrack) -> NotationLayout 
 /// Builds tie chains from stable event IDs, with authored `tied` flags as a fallback.
 ///
 /// AI_CODE
-fn relation_ties(notes: &[ChartEvent], track_relations: &[EventRelation]) -> Vec<Vec<usize>> {
+fn relation_ties(
+    notes: &[ChartEvent],
+    track_relations: &[EventRelation],
+    resolution: u32,
+) -> Vec<Vec<usize>> {
     let ids = notes
         .iter()
         .enumerate()
         .filter_map(|(index, note)| note.id.as_ref().map(|id| (id.as_str(), index)))
         .collect::<std::collections::HashMap<_, _>>();
-    let mut chains = Vec::new();
-    let mut used = std::collections::HashSet::new();
+    let mut edges = std::collections::BTreeMap::new();
     for relation in track_relations {
         let (Some(&from), Some(&to)) = (
             ids.get(relation.from.as_str()),
@@ -401,24 +595,52 @@ fn relation_ties(notes: &[ChartEvent], track_relations: &[EventRelation]) -> Vec
         ) else {
             continue;
         };
-        if used.insert(from) && used.insert(to) {
-            chains.push(vec![from, to]);
-        } else if let Some(chain) = chains
-            .iter_mut()
-            .find(|chain: &&mut Vec<usize>| chain.contains(&from) || chain.contains(&to))
-        {
-            if !chain.contains(&from) {
-                chain.push(from);
-            }
-            if !chain.contains(&to) {
-                chain.push(to);
-            }
-            chain.sort_by_key(|index| notes[*index].start);
+        if from != to {
+            edges.insert(from, to);
         }
     }
-    let fallback = tie_chains(notes);
-    for chain in fallback {
-        if chain.len() > 1 && !chains.iter().any(|existing| existing == &chain) {
+    for (index, note) in notes.iter().enumerate() {
+        if !note.tied || edges.contains_key(&index) || matches!(note.content, NoteContent::Rest) {
+            continue;
+        }
+        let end = note.start.saturating_add(note.duration_ticks(resolution));
+        if let Some((next, _)) = notes.iter().enumerate().find(|(_, candidate)| {
+            candidate.start == end
+                && candidate.staff == note.staff
+                && candidate.voice == note.voice
+                && match (&note.content, &candidate.content) {
+                    (
+                        NoteContent::Pitched { note: left, .. },
+                        NoteContent::Pitched { note: right, .. },
+                    ) => left == right,
+                    (
+                        NoteContent::Percussive { piece: left },
+                        NoteContent::Percussive { piece: right },
+                    ) => left == right,
+                    _ => false,
+                }
+        }) {
+            edges.insert(index, next);
+        }
+    }
+    let targets = edges
+        .values()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    let mut chains = Vec::new();
+    for start in edges
+        .keys()
+        .copied()
+        .filter(|index| !targets.contains(index))
+    {
+        let mut chain = vec![start];
+        while let Some(&next) = edges.get(chain.last().unwrap()) {
+            if chain.contains(&next) {
+                break;
+            }
+            chain.push(next);
+        }
+        if chain.len() > 1 {
             chains.push(chain);
         }
     }
@@ -471,13 +693,19 @@ fn chord_groups(notes: &[ChartEvent]) -> Vec<ChordGroup> {
 /// Converts authored lyrics into a rendering-independent lyric layout.
 ///
 /// AI_CODE
-fn lyric_layout(track: &ChartTrack) -> Vec<LyricLayout> {
-    track
-        .lyric_verses
-        .iter()
-        .flat_map(|verse| verse.phrases.iter())
-        .chain(track.phrases.iter())
-        .map(|phrase| LyricLayout {
+fn lyric_layout(track: &ChartTrack, events: &[(EventSource, ChartEvent)]) -> Vec<LyricLayout> {
+    let mut phrases = Vec::new();
+    for (index, phrase) in track.phrases.iter().enumerate() {
+        phrases.push((None, index, phrase));
+    }
+    for (verse, data) in track.lyric_verses.iter().enumerate() {
+        for (index, phrase) in data.phrases.iter().enumerate() {
+            phrases.push((Some((verse, data.number)), index, phrase));
+        }
+    }
+    phrases
+        .into_iter()
+        .map(|(verse, index, phrase)| LyricLayout {
             start: phrase.start,
             duration_ticks: phrase.duration_ticks,
             text: phrase.text.clone(),
@@ -485,8 +713,42 @@ fn lyric_layout(track: &ChartTrack) -> Vec<LyricLayout> {
             melisma: phrase.melisma,
             hyphen_after: phrase.hyphen_after,
             breath_after: phrase.breath_after,
+            verse: verse.map(|(_, number)| number),
+            notes: events
+                .iter()
+                .enumerate()
+                .filter_map(|(symbol, (source, _))| match (*source, verse) {
+                    (EventSource::Phrase { phrase, .. }, None) if phrase == index => Some(symbol),
+                    (
+                        EventSource::Verse {
+                            verse: source_verse,
+                            phrase,
+                            ..
+                        },
+                        Some((verse_index, _)),
+                    ) if source_verse == verse_index && phrase == index => Some(symbol),
+                    _ => None,
+                })
+                .collect(),
         })
         .collect()
+}
+
+/// Identifies the authored event behind a sorted layout symbol.
+///
+/// AI_CODE
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EventSource {
+    Track(usize),
+    Phrase {
+        phrase: usize,
+        index: usize,
+    },
+    Verse {
+        verse: usize,
+        phrase: usize,
+        index: usize,
+    },
 }
 
 /// A rendering-independent pitched or percussion symbol at a tick position.
@@ -513,8 +775,10 @@ pub(crate) enum NotationSymbolKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NotationSymbol {
     pub(crate) event_index: Option<usize>,
+    pub(crate) source: EventSource,
     pub(crate) start: u32,
     pub(crate) duration: u32,
+    pub(crate) value: NoteValue,
     pub(crate) voice: u8,
     pub(crate) staff: u8,
     pub(crate) dots: u8,
@@ -527,7 +791,7 @@ pub(crate) struct NotationSymbol {
     pub(crate) kind: NotationSymbolKind,
 }
 
-/// Stable score relationship, expressed as track-note indices.
+/// Stable score relationship, expressed as indices into the layout's symbols.
 ///
 /// AI_CODE
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -536,7 +800,7 @@ pub(crate) struct NotationRelation {
     pub(crate) to: usize,
 }
 
-/// A chord group containing all track-note indices sharing a chord ID.
+/// A chord group containing symbol indices sharing a chord ID.
 ///
 /// AI_CODE
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -557,20 +821,22 @@ pub(crate) struct LyricLayout {
     pub(crate) melisma: bool,
     pub(crate) hyphen_after: bool,
     pub(crate) breath_after: bool,
+    pub(crate) verse: Option<u16>,
+    pub(crate) notes: Vec<usize>,
 }
 
 /// Builds a framework-independent symbol for every authored event.
 ///
 /// AI_CODE
 fn notation_symbols(
-    notes: &[ChartEvent],
+    notes: &[(EventSource, ChartEvent)],
     track: &ChartTrack,
     resolution: u32,
 ) -> Vec<NotationSymbol> {
     notes
         .iter()
         .enumerate()
-        .map(|(event_index, note)| {
+        .map(|(event_index, (source, note))| {
             let kind = match &note.content {
                 NoteContent::Pitched {
                     note: pitch,
@@ -594,8 +860,10 @@ fn notation_symbols(
             };
             NotationSymbol {
                 event_index: Some(event_index),
+                source: *source,
                 start: note.start,
-                duration: resolved_duration_ticks(notes, event_index, resolution),
+                duration: note.duration_ticks(resolution),
+                value: note.length,
                 voice: note.voice,
                 staff: note.staff,
                 dots: note.dots,

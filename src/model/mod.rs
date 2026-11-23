@@ -2580,3 +2580,290 @@ fn layout_track_beams_eighth_notes_within_a_beat() {
     let layout = layout_track(&chart, &chart.tracks[0]);
     assert_eq!(layout.beams, vec![vec![0, 1], vec![2, 3]]);
 }
+
+#[test]
+/// Untied notes occupy time and authored rests break beams.
+///
+/// AI_CODE
+fn layout_track_untied_notes_and_rests_do_not_overlap_or_beam() {
+    let mut chart = simple_chart(960);
+    chart.tracks = vec![new_track(InstrumentKind::Strings)];
+    chart.tracks[0].notes = serde_json::from_str(
+        r#"[
+            { "start": 0, "length": 16, "note": "E1" },
+            { "start": 240, "length": 16, "rest": true },
+            { "start": 480, "length": 16, "note": "E1" },
+            { "start": 720, "length": 16, "note": "E1" }
+        ]"#,
+    )
+    .expect("notation events should parse");
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert_eq!(layout.beams, vec![vec![2, 3]]);
+    assert!(
+        layout
+            .rests
+            .iter()
+            .all(|rest| rest.explicit || rest.start >= 960)
+    );
+    assert!(
+        layout
+            .rests
+            .iter()
+            .any(|rest| rest.explicit && rest.start == 240)
+    );
+}
+
+#[test]
+/// Inferred rests never extend beyond an irregular gap.
+///
+/// AI_CODE
+fn layout_track_inferred_rest_preserves_irregular_gap() {
+    let mut chart = simple_chart(960);
+    chart.tracks = vec![new_track(InstrumentKind::Strings)];
+    chart.tracks[0].notes =
+        serde_json::from_str(r#"[{ "start": 100, "length": 4, "note": "E1" }]"#)
+            .expect("notation event should parse");
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    let rest = layout.rests.iter().find(|rest| rest.start == 0).unwrap();
+    assert_eq!(rest.duration_ticks(chart.resolution), 100);
+    assert!(!rest.explicit);
+}
+
+#[test]
+/// Independent voices retain rests and whole-measure silence through the score.
+///
+/// AI_CODE
+fn layout_track_infers_rests_per_voice_and_measure() {
+    let mut chart = simple_chart(960);
+    chart.time_signature_map[0].numerator = 3;
+    chart.tracks = vec![
+        new_track(InstrumentKind::Strings),
+        new_track(InstrumentKind::Voice),
+    ];
+    chart.tracks[0].notes = serde_json::from_str(
+        r#"[
+        {"start":0,"length":4,"voice":1,"note":"E2"},
+        {"start":960,"length":4,"voice":2,"rest":true,"dots":1},
+        {"start":1920,"length":4,"voice":2,"note":"G2"}
+    ]"#,
+    )
+    .unwrap();
+    chart.tracks[1].notes =
+        serde_json::from_str(r#"[{"start":7680,"length":4,"note":"C4"}]"#).unwrap();
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert!(layout.rests.iter().any(|rest| rest.voice == 2
+        && rest.start == 0
+        && !rest.explicit
+        && rest.duration_ticks(960) == 960));
+    assert!(
+        layout
+            .rests
+            .iter()
+            .any(|rest| rest.voice == 2 && rest.start == 960 && rest.explicit && rest.dots == 1)
+    );
+    for voice in [1, 2] {
+        assert!(layout.rests.iter().any(|rest| rest.voice == voice
+            && rest.start == 2880
+            && rest.whole_measure
+            && rest.duration_ticks(960) == 2880));
+        assert!(
+            layout
+                .rests
+                .iter()
+                .any(|rest| rest.voice == voice && rest.start == 5760 && rest.whole_measure)
+        );
+    }
+}
+
+#[test]
+/// Vocal notes retain their source and lyrics link to their sorted symbols.
+///
+/// AI_CODE
+fn layout_track_includes_vocal_phrase_notes_and_verse_links() {
+    use crate::notation::EventSource;
+    let mut chart = simple_chart(960);
+    chart.tracks = vec![new_track(InstrumentKind::Voice)];
+    let phrase: VocalPhrase = serde_json::from_str(r#"{"start":0,"duration_ticks":1920,"text":"Hello","melisma":true,"notes":[{"id":"later","start":960,"length":4,"note":"D4"},{"id":"first","start":0,"length":4,"note":"C4"}]}"#).unwrap();
+    chart.tracks[0].lyric_verses.push(LyricVerse {
+        number: 2,
+        label: None,
+        phrases: vec![phrase],
+    });
+    chart.tracks[0].slurs.push(EventRelation {
+        from: "first".into(),
+        to: "later".into(),
+    });
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert_eq!(layout.symbols.len(), 2);
+    assert_eq!(
+        layout.symbols[0].source,
+        EventSource::Verse {
+            verse: 0,
+            phrase: 0,
+            index: 1
+        }
+    );
+    assert_eq!(
+        layout.symbols[1].source,
+        EventSource::Verse {
+            verse: 0,
+            phrase: 0,
+            index: 0
+        }
+    );
+    assert_eq!(layout.lyrics[0].notes, vec![0, 1]);
+    assert_eq!(layout.lyrics[0].verse, Some(2));
+    assert_eq!(layout.slurs, vec![NotationRelation { from: 0, to: 1 }]);
+    assert_eq!(layout.symbols[0].duration, 960);
+}
+
+#[test]
+/// Tie chains are stable under reordered relationships and do not cross voices.
+///
+/// AI_CODE
+fn layout_track_ties_and_beams_respect_voice_and_time() {
+    let mut chart = simple_chart(960);
+    chart.tracks = vec![new_track(InstrumentKind::Strings)];
+    chart.tracks[0].notes = serde_json::from_str(
+        r#"[
+        {"id":"end","start":3840,"length":8,"note":"E2"},
+        {"id":"other","start":3360,"length":8,"voice":2,"note":"G2"},
+        {"id":"start","start":2880,"length":8,"note":"E2"},
+        {"id":"middle","start":3360,"length":8,"note":"E2"},
+        {"id":"gap","start":0,"length":16,"note":"E2"},
+        {"id":"gap2","start":480,"length":16,"note":"E2"}
+    ]"#,
+    )
+    .unwrap();
+    chart.tracks[0].ties = vec![
+        EventRelation {
+            from: "middle".into(),
+            to: "end".into(),
+        },
+        EventRelation {
+            from: "start".into(),
+            to: "middle".into(),
+        },
+    ];
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert_eq!(layout.ties, vec![vec![2, 4, 5]]);
+    assert!(
+        layout
+            .beams
+            .iter()
+            .all(|beam| !beam.contains(&0) || !beam.contains(&1))
+    );
+    assert!(layout.beams.iter().all(|beam| {
+        beam.iter()
+            .all(|index| layout.symbols[*index].voice == layout.symbols[beam[0]].voice)
+    }));
+}
+
+#[test]
+/// Authored tuplets and dotted rests are preserved, and inferred gaps stay exact.
+///
+/// AI_CODE
+fn layout_track_tuplets_and_dotted_rests() {
+    let mut chart = simple_chart(960);
+    chart.tracks = vec![new_track(InstrumentKind::Strings)];
+    chart.tracks[0].notes = serde_json::from_str(
+        r#"[
+        {"start":0,"length":8,"note":"E2","tuplet":{"actual":3,"normal":2}},
+        {"start":320,"length":8,"rest":true,"tuplet":{"actual":3,"normal":2}},
+        {"start":640,"length":8,"note":"E2","tuplet":{"actual":3,"normal":2}},
+        {"start":1440,"length":4,"rest":true,"dots":1}
+    ]"#,
+    )
+    .unwrap();
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert_eq!(layout.tuplets, vec![vec![0, 1, 2]]);
+    let authored = layout
+        .rests
+        .iter()
+        .find(|rest| rest.start == 320 && rest.explicit)
+        .unwrap();
+    assert_eq!(authored.duration_ticks(960), 320);
+    assert_eq!(
+        authored.tuplet,
+        Some(Tuplet {
+            actual: 3,
+            normal: 2
+        })
+    );
+    assert!(layout.rests.iter().any(|rest| rest.start == 1440
+        && rest.explicit
+        && rest.dots == 1
+        && rest.duration_ticks(960) == 1440));
+    let gap = layout
+        .rests
+        .iter()
+        .filter(|rest| !rest.explicit && rest.start >= 960 && rest.start < 1440)
+        .map(|rest| rest.duration_ticks(960))
+        .sum::<u32>();
+    assert_eq!(gap, 480);
+}
+
+#[test]
+/// A gap matching a triplet is represented by an exact inferred tuplet rest.
+///
+/// AI_CODE
+fn layout_track_infers_tuplet_rest_without_overlapping_notes() {
+    let mut chart = simple_chart(960);
+    chart.tracks = vec![new_track(InstrumentKind::Strings)];
+    chart.tracks[0].notes = serde_json::from_str(
+        r#"[
+        {"start":0,"length":8,"note":"E2","tuplet":{"actual":3,"normal":2}},
+        {"start":640,"length":8,"note":"E2","tuplet":{"actual":3,"normal":2}}
+    ]"#,
+    )
+    .unwrap();
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    let rest = layout.rests.iter().find(|rest| rest.start == 320).unwrap();
+    assert!(!rest.explicit);
+    assert_eq!(rest.duration_ticks(960), 320);
+    assert_eq!(
+        rest.tuplet,
+        Some(Tuplet {
+            actual: 3,
+            normal: 2
+        })
+    );
+    assert_eq!(rest.duration_override, None);
+    assert!(layout.tuplets.is_empty());
+}
+
+#[test]
+/// Clef overrides, phrase spans, and measure boundaries survive tempo changes.
+///
+/// AI_CODE
+fn layout_track_clef_meter_and_phrase_spans() {
+    let mut chart = simple_chart(960);
+    chart.time_signature_map.push(TimeSignatureChange {
+        start: 3840,
+        numerator: 3,
+        denominator: 4,
+    });
+    chart.tempo_map.push(TempoChange {
+        start: 1920,
+        bpm: 75.0,
+    });
+    chart.tracks = vec![new_track(InstrumentKind::Strings)];
+    chart.tracks[0].clef = Some(Clef::Bass);
+    chart.tracks[0].star_power_phrases.push(Phrase {
+        start: 3840,
+        duration_ticks: 2880,
+    });
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert_eq!(layout.clef, Some(Clef::Bass));
+    assert_eq!(
+        layout
+            .measures
+            .iter()
+            .map(|measure| (measure.start_tick, measure.end_tick))
+            .collect::<Vec<_>>(),
+        vec![(0, 3840), (3840, 6720)]
+    );
+    assert_eq!(layout.phrase_spans.len(), 1);
+    assert_eq!(layout.phrase_spans[0].start, 3840);
+    assert!(layout.rests.iter().all(|rest| rest.whole_measure));
+}

@@ -18,7 +18,12 @@ Depends on Part A2 engraving semantics being complete and merged.
   view, rather than two separate implementations. Snapping is tempo-independent — it only
   needs `resolution` and the active `time_signature_map` entry, not `bpm`.
 
-### 4. Notation engine (`src/notation.rs`, shared with Part D) (completed)
+### 4. Notation engine (`src/notation/mod.rs`, shared with Part D) (completed)
+
+Layout is independent of rendering. Relationship indices address the sorted symbol list,
+and symbols retain their authored source. Inferred rests are scoped to voice and staff;
+nonstandard gaps retain their exact duration even when no standard glyph matches them.
+The sheet view and gameplay overlay still need to consume and render this layout.
 
 - Extend the existing notation engine, independent of the editor and gameplay UI, so
   both can reuse it:
@@ -39,6 +44,11 @@ Depends on Part A2 engraving semantics being complete and merged.
     gameplay overlay (Part D) render.
 
 ### 5. Multi-track editor view: track focus and sheet/tab toggle
+
+Navigation state and controls are implemented: PageUp/PageDown cycles the focused track,
+the tick position and sheet/tab mode are shared across tracks, and the current text editor
+shows a focused-track event preview. Full-size, editable sheet/tab views remain dependent
+on parts 6 and 7; the preview is not a substitute for those views.
 
 - A chart can have any number of tracks, but sheet/tab view can only show one track's full
   detail readably at a time. First implementation (**Option A**): the view always shows
