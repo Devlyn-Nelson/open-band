@@ -1,11 +1,11 @@
 {
   "version": 1,
   "title": "New Chart",
-  "resolution": 3840,
+  "resolution": 960,
   "tempo_map": [
     {
       "start": 0,
-      "bpm": 120.0
+      "bpm": 90.0
     }
   ],
   "time_signature_map": [
@@ -20,7 +20,32 @@
   "structure": [],
   "tracks": [
     {
-      "name": "New Track",
+      "name": "lead guitar",
+      "kind": "strings",
+      "tuning": {
+        "strings": [
+          "E2",
+          "A2",
+          "D3",
+          "G3",
+          "B3",
+          "E4"
+        ]
+      },
+      "kit": null,
+      "vocal_range": null,
+      "clef": null,
+      "key_signature": null,
+      "capo": null,
+      "notes": [],
+      "ties": [],
+      "slurs": [],
+      "phrases": [],
+      "star_power_phrases": [],
+      "lyric_verses": []
+    },
+    {
+      "name": "bass",
       "kind": "strings",
       "tuning": {
         "strings": [
@@ -35,7 +60,173 @@
       "clef": null,
       "key_signature": null,
       "capo": null,
-      "notes": [],
+      "notes": [
+        {
+          "id": "event-000001",
+          "start": 0,
+          "length": 2,
+          "note": 57,
+          "spelling": {
+            "step": "A",
+            "alter": 0,
+            "octave": 3
+          }
+        },
+        {
+          "id": "event-000002",
+          "start": 3840,
+          "length": 2,
+          "note": 57,
+          "spelling": {
+            "step": "A",
+            "alter": 0,
+            "octave": 3
+          }
+        },
+        {
+          "id": "event-000003",
+          "start": 7680,
+          "length": 2,
+          "note": 57,
+          "spelling": {
+            "step": "A",
+            "alter": 0,
+            "octave": 3
+          }
+        },
+        {
+          "id": "event-000004",
+          "start": 11520,
+          "length": 2,
+          "note": 57,
+          "spelling": {
+            "step": "A",
+            "alter": 0,
+            "octave": 3
+          }
+        },
+        {
+          "id": "event-000005",
+          "start": 1440,
+          "length": 8,
+          "note": 53,
+          "spelling": {
+            "step": "F",
+            "alter": 0,
+            "octave": 3
+          }
+        },
+        {
+          "id": "event-000006",
+          "start": 1920,
+          "length": 8,
+          "note": 52,
+          "spelling": {
+            "step": "E",
+            "alter": 0,
+            "octave": 3
+          }
+        },
+        {
+          "id": "event-000007",
+          "start": 5280,
+          "length": 8,
+          "note": 50,
+          "spelling": {
+            "step": "D",
+            "alter": 0,
+            "octave": 3
+          }
+        },
+        {
+          "id": "event-000008",
+          "start": 5760,
+          "length": 8,
+          "note": 52,
+          "spelling": {
+            "step": "E",
+            "alter": 0,
+            "octave": 3
+          }
+        },
+        {
+          "id": "event-000009",
+          "start": 6240,
+          "length": 8,
+          "note": 55,
+          "spelling": {
+            "step": "G",
+            "alter": 0,
+            "octave": 3
+          }
+        },
+        {
+          "id": "event-000010",
+          "start": 9120,
+          "length": 8,
+          "note": 53,
+          "spelling": {
+            "step": "F",
+            "alter": 0,
+            "octave": 3
+          }
+        },
+        {
+          "id": "event-000011",
+          "start": 9600,
+          "length": 8,
+          "note": 52,
+          "spelling": {
+            "step": "E",
+            "alter": 0,
+            "octave": 3
+          }
+        },
+        {
+          "id": "event-000012",
+          "start": 10080,
+          "length": 4,
+          "note": 55,
+          "spelling": {
+            "step": "G",
+            "alter": 0,
+            "octave": 3
+          }
+        },
+        {
+          "id": "event-000013",
+          "start": 12960,
+          "length": 2,
+          "note": 52,
+          "spelling": {
+            "step": "E",
+            "alter": 0,
+            "octave": 3
+          }
+        },
+        {
+          "id": "event-000014",
+          "start": 14400,
+          "length": 8,
+          "note": 53,
+          "spelling": {
+            "step": "F",
+            "alter": 0,
+            "octave": 3
+          }
+        },
+        {
+          "id": "event-000015",
+          "start": 14880,
+          "length": 8,
+          "note": 55,
+          "spelling": {
+            "step": "G",
+            "alter": 0,
+            "octave": 3
+          }
+        }
+      ],
       "ties": [],
       "slurs": [],
       "phrases": [],

@@ -1412,9 +1412,9 @@ pub(crate) fn setup_editor(mut commands: Commands) {
         TextColor(Color::srgb(0.9, 0.95, 1.0)),
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(122.0),
-            left: Val::Px(70.0),
-            right: Val::Px(40.0),
+            top: Val::Px(82.0),
+            left: Val::Px(32.0),
+            right: Val::Px(32.0),
             ..default()
         },
         EditorText,
@@ -1445,15 +1445,15 @@ pub(crate) fn setup_editor(mut commands: Commands) {
         ("DIV +", SheetToolAction::SheetDivisionUp),
     ];
     for (index, (label, action)) in toolbar.into_iter().enumerate() {
-        let column = index % 7;
-        let row = index / 7;
+        let column = index % 11;
+        let row = index / 11;
         commands.spawn((
             Button::default(),
             Node {
                 position_type: PositionType::Absolute,
-                top: Val::Px(12.0 + row as f32 * 34.0),
-                left: Val::Px(12.0 + column as f32 * 88.0),
-                width: Val::Px(82.0),
+                top: Val::Px(8.0 + row as f32 * 34.0),
+                left: Val::Percent(column as f32 * (100.0 / 11.0) + 0.25),
+                width: Val::Percent(100.0 / 11.0 - 0.5),
                 height: Val::Px(28.0),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
@@ -1463,7 +1463,7 @@ pub(crate) fn setup_editor(mut commands: Commands) {
             BorderColor::all(Color::srgb(0.36, 0.48, 0.46)),
             Text::new(label),
             TextFont {
-                font_size: FontSize::Px(12.0),
+                font_size: FontSize::Px(11.0),
                 ..default()
             },
             TextColor(Color::srgb(0.9, 0.95, 0.9)),
