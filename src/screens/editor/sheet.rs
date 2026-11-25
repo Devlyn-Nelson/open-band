@@ -74,6 +74,54 @@ fn sheet_span(width: f32, resolution: u32, pixels_per_beat: u16) -> u32 {
         .clamp(f64::from(resolution.saturating_mul(4)), f64::from(u32::MAX))) as u32
 }
 
+/// Snap a sheet tick to the nearest subdivision in the active meter beat.
+///
+/// AI_CODE
+fn snap_sheet_tick(chart: &Chart, tick: u32, divisions: u8) -> u32 {
+    let resolution = chart.resolution.max(1);
+    let layouts = measures(chart, tick.saturating_add(1));
+    let Some(measure) = layouts
+        .iter()
+        .find(|measure| tick >= measure.start_tick && tick < measure.end_tick)
+    else {
+        return tick;
+    };
+    let beat_ticks = (u64::from(resolution) * 4 / u64::from(measure.denominator.max(1))).max(1);
+    let division_count = u64::from(divisions.clamp(1, SHEET_BEAT_DIVISIONS_MAX));
+    let relative = u64::from(tick - measure.start_tick);
+    let beat_offset = relative / beat_ticks * beat_ticks;
+    let beat_start = u64::from(measure.start_tick) + beat_offset;
+    (0..=division_count)
+        .map(|index| beat_start + beat_ticks * index / division_count)
+        .min_by_key(|position| position.abs_diff(u64::from(tick)))
+        .unwrap_or(beat_start)
+        .min(u64::from(measure.end_tick)) as u32
+}
+
+/// Return a greyscale subdivision guide color, darkest at the finest division.
+///
+/// AI_CODE
+fn subdivision_guide_color(index: u8, divisions: u8) -> Color {
+    let progress =
+        f32::from(index.saturating_sub(1)) / f32::from(divisions.saturating_sub(2).max(1));
+    let brightness = 0.34 - progress.clamp(0.0, 1.0) * 0.14;
+    Color::srgb(brightness, brightness, brightness)
+}
+
+/// Return guide ticks strictly inside one beat for the configured division count.
+///
+/// AI_CODE
+fn beat_subdivision_ticks(beat_start: u32, beat_ticks: u32, divisions: u8) -> Vec<u32> {
+    let divisions = divisions.clamp(1, SHEET_BEAT_DIVISIONS_MAX);
+    (1..divisions)
+        .map(|index| {
+            (u64::from(beat_start)
+                + u64::from(beat_ticks) * u64::from(index) / u64::from(divisions))
+                as u32
+        })
+        .collect()
+}
+
 /// A persistent text annotation positioned in sheet-view coordinates.
 ///
 /// AI_CODE
@@ -735,7 +783,11 @@ pub(crate) fn sheet_view_system(
         return;
     };
     let percussion = track.kind == InstrumentKind::Percussion;
-    let layout = layout_track(&document.chart, track);
+    let mut layout = layout_track(&document.chart, track);
+    layout.measures = measures(
+        &document.chart,
+        viewport.start.saturating_add(viewport.span),
+    );
     let labels_data = engraving_labels(track, &layout, viewport, percussion);
     reconcile_engraving_labels(&mut commands, &mut labels, &labels_data);
     let clef = layout.clef.unwrap_or(Clef::Treble);
@@ -841,16 +893,58 @@ pub(crate) fn sheet_view_system(
             }
         }
     }
+    let guide_top = STAFF_Y + STAFF_SPACING * 2.0 + 24.0;
+    let guide_bottom = if percussion {
+        STAFF_Y - STAFF_SPACING * 2.0
+    } else {
+        staff_base_y(staff_count) - 105.0
+    };
+    let beat_divisions = settings
+        .sheet_beat_divisions
+        .clamp(SHEET_BEAT_DIVISIONS_MIN, SHEET_BEAT_DIVISIONS_MAX);
+    let beat_color = Color::srgb(0.38, 0.38, 0.38);
+    let bar_color = Color::srgb(0.78, 0.78, 0.78);
     for measure in &layout.measures {
+        let beat_ticks = (u64::from(document.chart.resolution.max(1)) * 4
+            / u64::from(measure.denominator.max(1)))
+        .max(1);
+        for beat_index in 0..measure.numerator.max(1) {
+            let beat_tick = (u64::from(measure.start_tick) + u64::from(beat_index) * beat_ticks)
+                .min(u64::from(measure.end_tick)) as u32;
+            if beat_index > 0
+                && let Some(x) = viewport.x_at(beat_tick)
+            {
+                gizmos.line_2d(
+                    Vec2::new(x, guide_bottom),
+                    Vec2::new(x, guide_top),
+                    beat_color,
+                );
+            }
+            for (index, tick) in beat_subdivision_ticks(
+                beat_tick,
+                beat_ticks.min(u64::from(u32::MAX)) as u32,
+                beat_divisions,
+            )
+            .into_iter()
+            .enumerate()
+            {
+                let subdivision = index as u8 + 1;
+                if let Some(x) = viewport.x_at(tick) {
+                    gizmos.line_2d(
+                        Vec2::new(x, guide_bottom),
+                        Vec2::new(x, guide_top),
+                        subdivision_guide_color(subdivision, beat_divisions),
+                    );
+                }
+            }
+        }
         for tick in [measure.start_tick, measure.end_tick] {
             if let Some(x) = viewport.x_at(tick) {
-                let top = STAFF_Y + STAFF_SPACING * 2.0 + 24.0;
-                let bottom = if percussion {
-                    STAFF_Y - STAFF_SPACING * 2.0
-                } else {
-                    staff_base_y(staff_count) - 105.0
-                };
-                gizmos.line_2d(Vec2::new(x, bottom), Vec2::new(x, top), staff_color);
+                gizmos.line_2d(
+                    Vec2::new(x, guide_bottom),
+                    Vec2::new(x, guide_top),
+                    bar_color,
+                );
             }
         }
     }
@@ -1309,7 +1403,7 @@ pub(crate) fn sheet_view_system(
     if let Some(cursor) = window.cursor_position() {
         let position = Vec2::new(cursor.x - width / 2.0, window.height() / 2.0 - cursor.y);
         if let Some(tick) = viewport.tick_at(position.x) {
-            let snapped = snap_editor_tick(&document, tick);
+            let snapped = snap_sheet_tick(&document.chart, tick, settings.sheet_beat_divisions);
             if let Some(x) = viewport.x_at(snapped) {
                 if percussion && lane_count > 0 {
                     let lane = ((lane_count.saturating_sub(1) as f32 / 2.0)
@@ -1322,9 +1416,15 @@ pub(crate) fn sheet_view_system(
                         gizmos.circle_2d(Vec2::new(x, line_y(lane as usize)), 8.0, cursor_color);
                         if mouse.just_pressed(MouseButton::Left) {
                             if tools.rest {
-                                sheet_edit_pitch(&mut document, snapped, 0, &tools);
+                                sheet_edit_spelled_pitch_at_tick(
+                                    &mut document,
+                                    snapped,
+                                    0,
+                                    None,
+                                    &tools,
+                                );
                             } else {
-                                sheet_edit_percussion(
+                                sheet_edit_percussion_at_tick(
                                     &mut document,
                                     snapped,
                                     lane as usize,
@@ -1353,7 +1453,7 @@ pub(crate) fn sheet_view_system(
                         if tools.slur {
                             super::sheet_edit_slur(&mut document, snapped, pitch, &mut tools);
                         } else {
-                            sheet_edit_spelled_pitch(
+                            sheet_edit_spelled_pitch_at_tick(
                                 &mut document,
                                 snapped,
                                 pitch,
@@ -1546,5 +1646,41 @@ mod tests {
             sheet_span(width, 960, 500),
             sheet_span(width, 960, SHEET_PIXELS_PER_BEAT_MAX)
         );
+    }
+
+    /// Beat subdivisions drive sheet snapping for even and triplet note positions.
+    ///
+    /// AI_CODE
+    #[test]
+    fn sheet_snapping_supports_configured_beat_subdivisions() {
+        let document = super::super::new_chart_document();
+        assert_eq!(snap_sheet_tick(&document.chart, 100, 4), 0);
+        assert_eq!(snap_sheet_tick(&document.chart, 130, 4), 240);
+        assert_eq!(snap_sheet_tick(&document.chart, 400, 3), 320);
+        assert_eq!(snap_sheet_tick(&document.chart, 800, 1), 960);
+
+        let mut compound = document.chart.clone();
+        compound.time_signature_map[0].numerator = 6;
+        compound.time_signature_map[0].denominator = 8;
+        assert_eq!(snap_sheet_tick(&compound, 300, 2), 240);
+    }
+
+    /// One division adds no sub-beat guides; finer subdivisions use neutral progressively darker greys.
+    ///
+    /// AI_CODE
+    #[test]
+    fn subdivision_guides_are_optional_and_descend_in_brightness() {
+        assert!(beat_subdivision_ticks(0, 960, 1).is_empty());
+        assert_eq!(beat_subdivision_ticks(0, 960, 4), vec![240, 480, 720]);
+        let colors = (1..4)
+            .map(|index| subdivision_guide_color(index, 4).to_srgba())
+            .collect::<Vec<_>>();
+        assert!(
+            colors
+                .iter()
+                .all(|color| color.red == color.green && color.green == color.blue)
+        );
+        assert!(colors[0].red > colors[1].red && colors[1].red > colors[2].red);
+        assert!(colors[2].red > 0.0);
     }
 }

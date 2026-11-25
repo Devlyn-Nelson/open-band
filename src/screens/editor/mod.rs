@@ -127,6 +127,8 @@ pub(crate) enum SheetToolAction {
     ZoomOut,
     SheetDenser,
     SheetSpacer,
+    SheetDivisionDown,
+    SheetDivisionUp,
 }
 
 /// A fret button in the tab editor's note-choice dialog.
@@ -335,6 +337,19 @@ fn sheet_edit_spelled_pitch(
     tools: &SheetTools,
 ) -> bool {
     let tick = snap_editor_tick(document, tick);
+    sheet_edit_spelled_pitch_at_tick(document, tick, pitch, spelling, tools)
+}
+
+/// Edit a pitch at an already-snapped sheet tick without applying the tab snap grid again.
+///
+/// AI_CODE
+pub(super) fn sheet_edit_spelled_pitch_at_tick(
+    document: &mut EditorDocument,
+    tick: u32,
+    pitch: u8,
+    spelling: Option<PitchSpelling>,
+    tools: &SheetTools,
+) -> bool {
     let Some(track) = document.chart.tracks.get(document.track_focus) else {
         return false;
     };
@@ -416,6 +431,18 @@ fn sheet_edit_percussion(
     tools: &SheetTools,
 ) -> bool {
     let tick = snap_editor_tick(document, tick);
+    sheet_edit_percussion_at_tick(document, tick, lane, tools)
+}
+
+/// Edit percussion at an already-snapped sheet tick without applying the tab snap grid again.
+///
+/// AI_CODE
+pub(super) fn sheet_edit_percussion_at_tick(
+    document: &mut EditorDocument,
+    tick: u32,
+    lane: usize,
+    tools: &SheetTools,
+) -> bool {
     let Some(track) = document.chart.tracks.get(document.track_focus) else {
         return false;
     };
@@ -1414,6 +1441,8 @@ pub(crate) fn setup_editor(mut commands: Commands) {
         ("ZOOM -", SheetToolAction::ZoomOut),
         ("+ BARS", SheetToolAction::SheetDenser),
         ("- BARS", SheetToolAction::SheetSpacer),
+        ("DIV -", SheetToolAction::SheetDivisionDown),
+        ("DIV +", SheetToolAction::SheetDivisionUp),
     ];
     for (index, (label, action)) in toolbar.into_iter().enumerate() {
         let column = index % 7;
@@ -1599,8 +1628,25 @@ pub(crate) fn sheet_toolbar_input(
                 .min(SHEET_PIXELS_PER_BEAT_MAX);
             save_settings(&settings);
         }
+        SheetToolAction::SheetDivisionDown if document.view_mode == EditorViewMode::Sheet => {
+            settings.sheet_beat_divisions = settings
+                .sheet_beat_divisions
+                .saturating_sub(1)
+                .max(SHEET_BEAT_DIVISIONS_MIN);
+            save_settings(&settings);
+        }
+        SheetToolAction::SheetDivisionUp if document.view_mode == EditorViewMode::Sheet => {
+            settings.sheet_beat_divisions = settings
+                .sheet_beat_divisions
+                .saturating_add(1)
+                .min(SHEET_BEAT_DIVISIONS_MAX);
+            save_settings(&settings);
+        }
         SheetToolAction::TabSnap | SheetToolAction::ZoomIn | SheetToolAction::ZoomOut => {}
-        SheetToolAction::SheetDenser | SheetToolAction::SheetSpacer => {}
+        SheetToolAction::SheetDenser
+        | SheetToolAction::SheetSpacer
+        | SheetToolAction::SheetDivisionDown
+        | SheetToolAction::SheetDivisionUp => {}
     }
 }
 
@@ -1624,9 +1670,10 @@ pub(crate) fn sheet_toolbar_display(
             SheetToolAction::TabSnap | SheetToolAction::ZoomIn | SheetToolAction::ZoomOut => {
                 document.view_mode == EditorViewMode::Tab
             }
-            SheetToolAction::SheetDenser | SheetToolAction::SheetSpacer => {
-                document.view_mode == EditorViewMode::Sheet
-            }
+            SheetToolAction::SheetDenser
+            | SheetToolAction::SheetSpacer
+            | SheetToolAction::SheetDivisionDown
+            | SheetToolAction::SheetDivisionUp => document.view_mode == EditorViewMode::Sheet,
             SheetToolAction::Piece => {
                 document.view_mode == EditorViewMode::Sheet
                     || document.view_mode == EditorViewMode::Tab
@@ -1658,6 +1705,7 @@ pub(crate) fn sheet_toolbar_display(
             SheetToolAction::TabSnap => false,
             SheetToolAction::ZoomIn | SheetToolAction::ZoomOut => false,
             SheetToolAction::SheetDenser | SheetToolAction::SheetSpacer => false,
+            SheetToolAction::SheetDivisionDown | SheetToolAction::SheetDivisionUp => false,
         };
         match action {
             SheetToolAction::TabSnap => {
@@ -1674,6 +1722,12 @@ pub(crate) fn sheet_toolbar_display(
             }
             SheetToolAction::SheetSpacer => {
                 *text = Text::new(format!("- BARS {}px", settings.sheet_pixels_per_beat));
+            }
+            SheetToolAction::SheetDivisionDown => {
+                *text = Text::new(format!("DIV -  {}", settings.sheet_beat_divisions));
+            }
+            SheetToolAction::SheetDivisionUp => {
+                *text = Text::new(format!("DIV +  {}", settings.sheet_beat_divisions));
             }
             SheetToolAction::Piece if document.view_mode == EditorViewMode::Tab => {
                 let name = document

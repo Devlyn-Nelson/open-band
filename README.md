@@ -180,7 +180,7 @@ The snap interval is shared by the document and its tick positions are calculate
 resolution and the active time signature; tempo changes do not move the grid.
 Sheet mode shows a staff starting at the shared position, with visible measures expanding
 to fill the available window width while keeping beat spacing readable. Click a line or space
-to place a note using the active snap interval; hold `Shift` for a sharp or
+to place a note on the configured beat-division grid; hold `Shift` for a sharp or
 `Alt` for a flat. In percussion tracks, `P` cycles kit pieces and clicks target the
 selected piece's lane. The clickable on-screen palette selects duration, dots, triplets,
 rests, ties, place/remove, voice, dynamics, articulations, percussion pieces, and the slur
@@ -193,7 +193,12 @@ articulations, score markers, and aligned tablature from written pitches. Percus
 follow kit metadata, while vocal lyrics retain syllable and melisma markings. Removal has no
 undo; manual visual QA across representative multi-track charts remains recommended.
 Use the `+ BARS` and `- BARS` sheet toolbar buttons to adjust note spacing (10-240 pixels per
-quarter note). The selected density is saved in user settings and does not modify chart data.
+quarter note). Use `DIV -` and `DIV +` to choose 1-16 placement divisions per meter beat
+(default 4); the current division count is shown on the buttons. `1` keeps only beat guides,
+while finer divisions add progressively darker grey guides and
+allow syncopated note placement. Bar lines are brightest, beat lines darker, and subdivisions
+fade darker without going black. Density and beat divisions are saved in user settings and
+do not modify chart data.
 Tab mode renders the focused track vertically with time flowing downward. Scroll the mouse
 wheel to traverse time; use `+` / `-` or the `ZOOM` toolbar buttons to change beats per
 screen without changing the snap grid. The `SNAP` toolbar button cycles the shared snap
@@ -211,8 +216,8 @@ Saving runs validation (unplayable notes, missing tuning/kit, unknown percussion
 ## Saved Settings
 
 When Input Setup is accepted, Open Band saves the full list of configured instrument
-slots (kind, device, tuning, detector profile). Sheet density (pixels per beat) is also
-saved here as a user preference, independently of chart files. Audio settings use CPAL device IDs
+slots (kind, device, tuning, detector profile). Sheet density (pixels per beat) and sheet beat
+divisions are also saved here as user preferences, independently of chart files. Audio settings use CPAL device IDs
 such as `alsa:...`; MIDI settings use a deterministic `midi:<index>` port key. The setup
 screen shows both the friendly device name and concrete identifier. The settings file is
 created in the working directory at `open-band-settings/settings.json` and is loaded on

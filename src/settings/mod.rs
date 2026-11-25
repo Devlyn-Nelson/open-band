@@ -5,6 +5,8 @@ pub(crate) const SETTINGS_DIRECTORY: &str = "open-band-settings";
 pub(crate) const SETTINGS_FILE: &str = "open-band-settings/settings.json";
 pub(crate) const SHEET_PIXELS_PER_BEAT_MIN: u16 = 10;
 pub(crate) const SHEET_PIXELS_PER_BEAT_MAX: u16 = 240;
+pub(crate) const SHEET_BEAT_DIVISIONS_MIN: u8 = 1;
+pub(crate) const SHEET_BEAT_DIVISIONS_MAX: u8 = 16;
 
 /// Which detector algorithm a `Strings` slot uses; irrelevant for other kinds.
 ///
@@ -250,6 +252,9 @@ pub(crate) fn load_settings() -> PersistentSettings {
     settings.sheet_pixels_per_beat = settings
         .sheet_pixels_per_beat
         .clamp(SHEET_PIXELS_PER_BEAT_MIN, SHEET_PIXELS_PER_BEAT_MAX);
+    settings.sheet_beat_divisions = settings
+        .sheet_beat_divisions
+        .clamp(SHEET_BEAT_DIVISIONS_MIN, SHEET_BEAT_DIVISIONS_MAX);
     settings
 }
 

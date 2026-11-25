@@ -88,6 +88,8 @@ pub(crate) struct PersistentSettings {
     pub(crate) latency_ms: Option<f32>,
     #[serde(default = "default_sheet_pixels_per_beat")]
     pub(crate) sheet_pixels_per_beat: u16,
+    #[serde(default = "default_sheet_beat_divisions")]
+    pub(crate) sheet_beat_divisions: u8,
 }
 
 impl Default for PersistentSettings {
@@ -96,6 +98,7 @@ impl Default for PersistentSettings {
             slots: Vec::new(),
             latency_ms: None,
             sheet_pixels_per_beat: default_sheet_pixels_per_beat(),
+            sheet_beat_divisions: default_sheet_beat_divisions(),
         }
     }
 }
@@ -107,6 +110,13 @@ fn default_sheet_pixels_per_beat() -> u16 {
     90
 }
 
+/// Default sheet placement grid: four positions per meter beat.
+///
+/// AI_CODE
+fn default_sheet_beat_divisions() -> u8 {
+    4
+}
+
 #[test]
 /// Sheet density is user-level persisted data and older settings files receive its default.
 ///
@@ -114,14 +124,17 @@ fn default_sheet_pixels_per_beat() -> u16 {
 fn sheet_density_setting_defaults_and_round_trips() {
     let legacy: PersistentSettings = serde_json::from_str(r#"{"slots":[]}"#).unwrap();
     assert_eq!(legacy.sheet_pixels_per_beat, 90);
+    assert_eq!(legacy.sheet_beat_divisions, 4);
 
     let settings = PersistentSettings {
         sheet_pixels_per_beat: 150,
+        sheet_beat_divisions: 3,
         ..PersistentSettings::default()
     };
     let encoded = serde_json::to_string(&settings).unwrap();
     let decoded: PersistentSettings = serde_json::from_str(&encoded).unwrap();
     assert_eq!(decoded.sheet_pixels_per_beat, 150);
+    assert_eq!(decoded.sheet_beat_divisions, 3);
 }
 
 #[derive(Component)]
