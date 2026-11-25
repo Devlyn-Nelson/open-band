@@ -78,7 +78,7 @@ fn device_selection_prefers_stable_id_over_duplicate_name() {
     );
 }
 
-#[derive(Resource, Serialize, Deserialize, Default, Debug)]
+#[derive(Resource, Serialize, Deserialize, Debug)]
 /// Settings persisted between launches in `open-band-settings/settings.json`.
 ///
 /// AI_CODE
@@ -86,6 +86,42 @@ pub(crate) struct PersistentSettings {
     #[serde(default)]
     pub(crate) slots: Vec<InstrumentSlot>,
     pub(crate) latency_ms: Option<f32>,
+    #[serde(default = "default_sheet_pixels_per_beat")]
+    pub(crate) sheet_pixels_per_beat: u16,
+}
+
+impl Default for PersistentSettings {
+    fn default() -> Self {
+        Self {
+            slots: Vec::new(),
+            latency_ms: None,
+            sheet_pixels_per_beat: default_sheet_pixels_per_beat(),
+        }
+    }
+}
+
+/// Default notation density, chosen to show more than one 4/4 bar on standard displays.
+///
+/// AI_CODE
+fn default_sheet_pixels_per_beat() -> u16 {
+    90
+}
+
+#[test]
+/// Sheet density is user-level persisted data and older settings files receive its default.
+///
+/// AI_CODE
+fn sheet_density_setting_defaults_and_round_trips() {
+    let legacy: PersistentSettings = serde_json::from_str(r#"{"slots":[]}"#).unwrap();
+    assert_eq!(legacy.sheet_pixels_per_beat, 90);
+
+    let settings = PersistentSettings {
+        sheet_pixels_per_beat: 150,
+        ..PersistentSettings::default()
+    };
+    let encoded = serde_json::to_string(&settings).unwrap();
+    let decoded: PersistentSettings = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(decoded.sheet_pixels_per_beat, 150);
 }
 
 #[derive(Component)]

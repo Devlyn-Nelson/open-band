@@ -79,6 +79,8 @@ pub(crate) fn run() {
         // builds it, the Exit -> Transition -> Enter ordering is never configured.
         .add_plugins(NavigationPlugin::default())
         // /\ AI_CODE /\
+        .add_observer(sheet_toolbar_input)
+        .add_observer(tab_fret_choice_input)
         .insert_state(startup_state)
         .add_systems(OnEnter(AppState::Home), setup_home)
         .add_systems(Update, system_home_input.run_if(in_state(AppState::Home)))
@@ -214,7 +216,7 @@ pub(crate) fn run() {
         // \\/ AI_CODE \\
         .add_systems(
             Update,
-            (sheet_toolbar_input, sheet_toolbar_display)
+            sheet_toolbar_display
                 .run_if(in_state(AppState::Editor))
                 .run_if(resource_exists::<EditorDocument>),
         )

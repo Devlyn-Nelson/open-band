@@ -1,10 +1,11 @@
 use super::*;
 use bevy::input::mouse::MouseWheel;
+use bevy::ui_widgets::Activate;
 
 const TAB_TOP: f32 = 250.0;
 const TAB_BOTTOM: f32 = -300.0;
 
-/// A persistent fret/piece label in the vertical tab view.
+/// A persistent non-note label in the vertical tab view.
 ///
 /// AI_CODE
 #[derive(Component)]
@@ -18,6 +19,24 @@ type TabLabelQuery<'world, 'state> = Query<
         &'static TabSymbolLabel,
         &'static mut Text2d,
         &'static mut Transform,
+        &'static mut TextColor,
+    ),
+>;
+
+/// A note badge drawn in UI space so gizmo staff lines cannot cover its text.
+///
+/// AI_CODE
+#[derive(Component)]
+pub(crate) struct TabNoteBadge(usize);
+
+type TabNoteBadgeQuery<'world, 'state> = Query<
+    'world,
+    'state,
+    (
+        Entity,
+        &'static TabNoteBadge,
+        &'static mut Node,
+        &'static mut Text,
     ),
 >;
 
@@ -204,9 +223,8 @@ fn resize_tab_event(
 /// AI_CODE
 pub(crate) fn tab_fret_dialog_system(
     mut document: ResMut<EditorDocument>,
-    tools: Res<SheetTools>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut choices: Query<(&Interaction, &TabFretChoice, &mut Text, &mut Visibility)>,
+    mut choices: Query<(&TabFretChoice, &mut Text, &mut Visibility)>,
 ) {
     if keyboard.just_pressed(KeyCode::Escape) {
         document.tab_fret_string = None;
@@ -218,7 +236,7 @@ pub(crate) fn tab_fret_dialog_system(
         && !document.metadata_mode
         && document.tab_fret_string.is_some();
     let Some(string) = document.tab_fret_string else {
-        for (_, _, _, mut visibility) in &mut choices {
+        for (_, _, mut visibility) in &mut choices {
             *visibility = Visibility::Hidden;
         }
         return;
@@ -240,8 +258,7 @@ pub(crate) fn tab_fret_dialog_system(
         return;
     };
     let capo = track.capo.unwrap_or(0);
-    let mut selected_fret = None;
-    for (interaction, choice, mut text, mut visibility) in &mut choices {
+    for (choice, mut text, mut visibility) in &mut choices {
         let pitch = i16::from(open_pitch) + i16::from(choice.0) + i16::from(capo);
         text.0 = format!("{}  {}", choice.0, note_name(pitch as u8));
         *visibility = if open && pitch <= 127 {
@@ -249,15 +266,30 @@ pub(crate) fn tab_fret_dialog_system(
         } else {
             Visibility::Hidden
         };
-        if *interaction == Interaction::Pressed && open && pitch <= 127 {
-            selected_fret = Some(choice.0);
-        }
     }
-    if let Some(fret) = selected_fret {
-        let tick = document.tab_fret_tick;
-        tab_place_string(&mut document, &tools, tick, string, fret);
-        document.tab_fret_string = None;
+}
+
+/// Place a string note from an activated fret-choice button.
+///
+/// AI_CODE
+pub(crate) fn tab_fret_choice_input(
+    activate: On<Activate>,
+    mut document: ResMut<EditorDocument>,
+    tools: Res<SheetTools>,
+    choices: Query<&TabFretChoice>,
+) {
+    if document.view_mode != EditorViewMode::Tab || document.metadata_mode {
+        return;
     }
+    let Some(string) = document.tab_fret_string else {
+        return;
+    };
+    let Ok(choice) = choices.get(activate.entity) else {
+        return;
+    };
+    let tick = document.tab_fret_tick;
+    tab_place_string(&mut document, &tools, tick, string, choice.0);
+    document.tab_fret_string = None;
 }
 
 /// Format MIDI pitch as a compact note name for the fret-choice dialog.
@@ -283,6 +315,7 @@ pub(crate) fn tab_view_system(
     mut wheel: MessageReader<MouseWheel>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     mut labels: TabLabelQuery,
+    mut note_badges: TabNoteBadgeQuery,
 ) {
     if document.view_mode != EditorViewMode::Tab
         || document.metadata_mode
@@ -290,7 +323,10 @@ pub(crate) fn tab_view_system(
         || document.tab_fret_string.is_some()
     {
         document.tab_resize = None;
-        for (entity, _, _, _) in labels.iter() {
+        for (entity, _, _, _, _) in labels.iter() {
+            commands.entity(entity).despawn();
+        }
+        for (entity, _, _, _) in note_badges.iter() {
             commands.entity(entity).despawn();
         }
         return;
@@ -336,7 +372,8 @@ pub(crate) fn tab_view_system(
             left + (right - left) * lane as f32 / (lanes - 1) as f32
         }
     };
-    let mut next_labels = Vec::<(String, f32, f32)>::new();
+    let mut next_labels = Vec::<(String, f32, f32, Color)>::new();
+    let mut next_badges = Vec::<(String, f32, f32)>::new();
     for lane in 0..lanes {
         let x = x_for_lane(lane);
         gizmos.line_2d(
@@ -357,7 +394,7 @@ pub(crate) fn tab_view_system(
                     |midi| note_name(midi).to_owned(),
                 )
         };
-        next_labels.push((name, x, TAB_TOP + 20.0));
+        next_labels.push((name, x, TAB_TOP + 20.0, Color::srgb(0.92, 0.94, 0.88)));
     }
     if percussion {
         let span_x = left - 48.0;
@@ -366,7 +403,12 @@ pub(crate) fn tab_view_system(
             Vec2::new(span_x, TAB_BOTTOM),
             Color::srgb(0.79, 0.63, 0.31),
         );
-        next_labels.push(("SPAN".into(), span_x, TAB_TOP + 20.0));
+        next_labels.push((
+            "SPAN".into(),
+            span_x,
+            TAB_TOP + 20.0,
+            Color::srgb(0.92, 0.94, 0.88),
+        ));
     }
     let beat = document.snap_interval.ticks(resolution).max(1);
     let mut tick = document.current_tick;
@@ -377,7 +419,12 @@ pub(crate) fn tab_view_system(
                 Vec2::new(right + 30.0, y),
                 Color::srgb(0.28, 0.34, 0.36),
             );
-            next_labels.push((tick.to_string(), left - 68.0, y));
+            next_labels.push((
+                tick.to_string(),
+                left - 68.0,
+                y,
+                Color::srgb(0.92, 0.94, 0.88),
+            ));
         }
         tick = tick.saturating_add(beat);
         if tick == u32::MAX {
@@ -404,7 +451,6 @@ pub(crate) fn tab_view_system(
             };
             x_for_lane(lane)
         };
-        gizmos.circle_2d(Vec2::new(x, y), 9.0, Color::srgb(0.16, 0.54, 0.44));
         let text = match &symbol.kind {
             NotationSymbolKind::Pitched { pitch, .. } => {
                 let Some(lane) = lane else { continue };
@@ -437,7 +483,7 @@ pub(crate) fn tab_view_system(
             }
             NotationSymbolKind::Rest => continue,
         };
-        next_labels.push((text, x, y));
+        next_badges.push((text, x, y));
         let end = symbol.start.saturating_add(symbol.duration);
         if let Some(end_y) = tab_y(end, document.current_tick, span) {
             gizmos.line_2d(
@@ -449,29 +495,76 @@ pub(crate) fn tab_view_system(
     }
     let existing = labels
         .iter_mut()
-        .map(|(entity, marker, _, _)| (marker.0, entity))
+        .map(|(entity, marker, _, _, _)| (marker.0, entity))
         .collect::<std::collections::HashMap<_, _>>();
-    for (index, (text_value, x, y)) in next_labels.iter().enumerate() {
+    for (index, (text_value, x, y, color)) in next_labels.iter().enumerate() {
         if let Some(entity) = existing.get(&index)
-            && let Ok((_, _, mut text, mut transform)) = labels.get_mut(*entity)
+            && let Ok((_, _, mut text, mut transform, mut text_color)) = labels.get_mut(*entity)
         {
             text.0.clone_from(text_value);
             transform.translation = Vec3::new(*x, *y, 10.0);
+            text_color.0 = *color;
         } else {
             commands.spawn((
                 Text2d::new(text_value.clone()),
                 TextFont {
-                    font_size: FontSize::Px(14.0),
+                    font_size: FontSize::Px(20.0),
                     ..default()
                 },
-                TextColor(Color::srgb(0.92, 0.94, 0.88)),
+                TextColor(*color),
                 Transform::from_xyz(*x, *y, 10.0),
                 TabSymbolLabel(index),
             ));
         }
     }
-    for (entity, marker, _, _) in labels.iter() {
+    for (entity, marker, _, _, _) in labels.iter() {
         if marker.0 >= next_labels.len() {
+            commands.entity(entity).despawn();
+        }
+    }
+    let existing_badges = note_badges
+        .iter_mut()
+        .map(|(entity, marker, _, _)| (marker.0, entity))
+        .collect::<std::collections::HashMap<_, _>>();
+    for (index, (badge_text, x, y)) in next_badges.iter().enumerate() {
+        let badge_width = (badge_text.chars().count() as f32 * 11.0 + 16.0).max(36.0);
+        let badge_height = 36.0;
+        let left_px = window.width() / 2.0 + *x - badge_width / 2.0;
+        let top_px = window.height() / 2.0 - *y - badge_height / 2.0;
+        if let Some(entity) = existing_badges.get(&index)
+            && let Ok((_, _, mut node, mut text)) = note_badges.get_mut(*entity)
+        {
+            node.left = Val::Px(left_px);
+            node.top = Val::Px(top_px);
+            node.width = Val::Px(badge_width);
+            node.height = Val::Px(badge_height);
+            text.0.clone_from(badge_text);
+        } else {
+            commands.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(left_px),
+                    top: Val::Px(top_px),
+                    width: Val::Px(badge_width),
+                    height: Val::Px(badge_height),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border_radius: BorderRadius::MAX,
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.16, 0.54, 0.44)),
+                Text::new(badge_text.clone()),
+                TextFont {
+                    font_size: FontSize::Px(20.0),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                TabNoteBadge(index),
+            ));
+        }
+    }
+    for (entity, marker, _, _) in note_badges.iter() {
+        if marker.0 >= next_badges.len() {
             commands.entity(entity).despawn();
         }
     }

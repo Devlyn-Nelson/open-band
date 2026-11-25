@@ -1,13 +1,13 @@
 use crate::*;
 use bevy::input::keyboard::KeyboardInput;
-use bevy::ui_widgets::Button;
+use bevy::ui_widgets::{Activate, Button};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 mod sheet;
 pub(crate) use sheet::sheet_view_system;
 mod tab;
-pub(crate) use tab::{tab_fret_dialog_system, tab_view_system};
+pub(crate) use tab::{tab_fret_choice_input, tab_fret_dialog_system, tab_view_system};
 
 #[derive(Component)]
 pub(crate) struct EditorCamera;
@@ -125,6 +125,8 @@ pub(crate) enum SheetToolAction {
     TabSnap,
     ZoomIn,
     ZoomOut,
+    SheetDenser,
+    SheetSpacer,
 }
 
 /// A fret button in the tab editor's note-choice dialog.
@@ -1410,6 +1412,8 @@ pub(crate) fn setup_editor(mut commands: Commands) {
         ("SNAP", SheetToolAction::TabSnap),
         ("ZOOM +", SheetToolAction::ZoomIn),
         ("ZOOM -", SheetToolAction::ZoomOut),
+        ("+ BARS", SheetToolAction::SheetDenser),
+        ("- BARS", SheetToolAction::SheetSpacer),
     ];
     for (index, (label, action)) in toolbar.into_iter().enumerate() {
         let column = index % 7;
@@ -1477,6 +1481,7 @@ pub(crate) fn cleanup_editor(
     labels: Query<Entity, With<sheet::SheetEngravingLabel>>,
     fret_choices: Query<Entity, With<TabFretChoiceButton>>,
     tab_labels: Query<Entity, With<tab::TabSymbolLabel>>,
+    tab_note_badges: Query<Entity, With<tab::TabNoteBadge>>,
 ) {
     for entity in &entities {
         commands.entity(entity).despawn();
@@ -1494,6 +1499,9 @@ pub(crate) fn cleanup_editor(
     for entity in &tab_labels {
         commands.entity(entity).despawn();
     }
+    for entity in &tab_note_badges {
+        commands.entity(entity).despawn();
+    }
     // /\\ AI_CODE /\\
     commands.remove_resource::<EditorDocument>();
     commands.remove_resource::<EditorBrowser>();
@@ -1505,81 +1513,94 @@ pub(crate) fn cleanup_editor(
 ///
 /// AI_CODE
 pub(crate) fn sheet_toolbar_input(
+    activate: On<Activate>,
     mut document: ResMut<EditorDocument>,
     mut tools: ResMut<SheetTools>,
-    buttons: Query<(&Interaction, &SheetToolAction), Changed<Interaction>>,
+    mut settings: ResMut<PersistentSettings>,
+    actions: Query<&SheetToolAction>,
 ) {
     if document.metadata_mode || document.text_entry.is_some() {
         return;
     }
-    for (interaction, action) in &buttons {
-        if *interaction != Interaction::Pressed {
-            continue;
+    let Ok(action) = actions.get(activate.entity) else {
+        return;
+    };
+    match action {
+        SheetToolAction::Duration(value) => tools.duration = *value,
+        SheetToolAction::Dots => tools.dots = (tools.dots + 1) % 4,
+        SheetToolAction::Tuplet => {
+            tools.tuplet = if tools.tuplet.is_some() {
+                None
+            } else {
+                Some(Tuplet {
+                    actual: 3,
+                    normal: 2,
+                })
+            };
         }
-        match action {
-            SheetToolAction::Duration(value) => tools.duration = *value,
-            SheetToolAction::Dots => tools.dots = (tools.dots + 1) % 4,
-            SheetToolAction::Tuplet => {
-                tools.tuplet = if tools.tuplet.is_some() {
-                    None
-                } else {
-                    Some(Tuplet {
-                        actual: 3,
-                        normal: 2,
-                    })
-                };
-            }
-            SheetToolAction::Rest => tools.rest = !tools.rest,
-            SheetToolAction::Tie => tools.tied = !tools.tied,
-            SheetToolAction::Remove => tools.remove = !tools.remove,
-            SheetToolAction::Voice => tools.voice = tools.voice % 4 + 1,
-            SheetToolAction::Dynamic => {
-                tools.dynamic = match tools.dynamic {
-                    None => Some(DynamicLevel::Ppp),
-                    Some(DynamicLevel::Ppp) => Some(DynamicLevel::Pp),
-                    Some(DynamicLevel::Pp) => Some(DynamicLevel::Mp),
-                    Some(DynamicLevel::Mp) => Some(DynamicLevel::Mf),
-                    Some(DynamicLevel::Mf) => Some(DynamicLevel::F),
-                    Some(DynamicLevel::F) => Some(DynamicLevel::Ff),
-                    Some(DynamicLevel::Ff) => Some(DynamicLevel::Fff),
-                    Some(DynamicLevel::Fff) => None,
-                };
-            }
-            SheetToolAction::Articulation => {
-                tools.articulation = match tools.articulation {
-                    None => Some(Articulation::Staccato),
-                    Some(Articulation::Staccato) => Some(Articulation::Tenuto),
-                    Some(Articulation::Tenuto) => Some(Articulation::Marcato),
-                    Some(Articulation::Marcato) => Some(Articulation::Accent),
-                    Some(Articulation::Accent) => Some(Articulation::Fermata),
-                    _ => None,
-                };
-            }
-            SheetToolAction::Piece => {
-                if let Some(track) = document.chart.tracks.get(document.track_focus)
-                    && let Some(kit) = track.kit.as_ref()
-                    && !kit.pieces.is_empty()
-                {
-                    tools.piece_index = (tools.piece_index + 1) % kit.pieces.len();
-                }
-            }
-            SheetToolAction::Slur => {
-                tools.slur = !tools.slur;
-                tools.slur_anchor = None;
-            }
-            SheetToolAction::TabSnap if document.view_mode == EditorViewMode::Tab => {
-                document.snap_interval = cycle_snap_interval(document.snap_interval, 1);
-            }
-            SheetToolAction::ZoomIn if document.view_mode == EditorViewMode::Tab => {
-                document.tab_beats_per_screen =
-                    document.tab_beats_per_screen.saturating_sub(1).max(2);
-            }
-            SheetToolAction::ZoomOut if document.view_mode == EditorViewMode::Tab => {
-                document.tab_beats_per_screen =
-                    document.tab_beats_per_screen.saturating_add(1).min(32);
-            }
-            SheetToolAction::TabSnap | SheetToolAction::ZoomIn | SheetToolAction::ZoomOut => {}
+        SheetToolAction::Rest => tools.rest = !tools.rest,
+        SheetToolAction::Tie => tools.tied = !tools.tied,
+        SheetToolAction::Remove => tools.remove = !tools.remove,
+        SheetToolAction::Voice => tools.voice = tools.voice % 4 + 1,
+        SheetToolAction::Dynamic => {
+            tools.dynamic = match tools.dynamic {
+                None => Some(DynamicLevel::Ppp),
+                Some(DynamicLevel::Ppp) => Some(DynamicLevel::Pp),
+                Some(DynamicLevel::Pp) => Some(DynamicLevel::Mp),
+                Some(DynamicLevel::Mp) => Some(DynamicLevel::Mf),
+                Some(DynamicLevel::Mf) => Some(DynamicLevel::F),
+                Some(DynamicLevel::F) => Some(DynamicLevel::Ff),
+                Some(DynamicLevel::Ff) => Some(DynamicLevel::Fff),
+                Some(DynamicLevel::Fff) => None,
+            };
         }
+        SheetToolAction::Articulation => {
+            tools.articulation = match tools.articulation {
+                None => Some(Articulation::Staccato),
+                Some(Articulation::Staccato) => Some(Articulation::Tenuto),
+                Some(Articulation::Tenuto) => Some(Articulation::Marcato),
+                Some(Articulation::Marcato) => Some(Articulation::Accent),
+                Some(Articulation::Accent) => Some(Articulation::Fermata),
+                _ => None,
+            };
+        }
+        SheetToolAction::Piece => {
+            if let Some(track) = document.chart.tracks.get(document.track_focus)
+                && let Some(kit) = track.kit.as_ref()
+                && !kit.pieces.is_empty()
+            {
+                tools.piece_index = (tools.piece_index + 1) % kit.pieces.len();
+            }
+        }
+        SheetToolAction::Slur => {
+            tools.slur = !tools.slur;
+            tools.slur_anchor = None;
+        }
+        SheetToolAction::TabSnap if document.view_mode == EditorViewMode::Tab => {
+            document.snap_interval = cycle_snap_interval(document.snap_interval, 1);
+        }
+        SheetToolAction::ZoomIn if document.view_mode == EditorViewMode::Tab => {
+            document.tab_beats_per_screen = document.tab_beats_per_screen.saturating_sub(1).max(2);
+        }
+        SheetToolAction::ZoomOut if document.view_mode == EditorViewMode::Tab => {
+            document.tab_beats_per_screen = document.tab_beats_per_screen.saturating_add(1).min(32);
+        }
+        SheetToolAction::SheetDenser if document.view_mode == EditorViewMode::Sheet => {
+            settings.sheet_pixels_per_beat = settings
+                .sheet_pixels_per_beat
+                .saturating_sub(15)
+                .max(SHEET_PIXELS_PER_BEAT_MIN);
+            save_settings(&settings);
+        }
+        SheetToolAction::SheetSpacer if document.view_mode == EditorViewMode::Sheet => {
+            settings.sheet_pixels_per_beat = settings
+                .sheet_pixels_per_beat
+                .saturating_add(15)
+                .min(SHEET_PIXELS_PER_BEAT_MAX);
+            save_settings(&settings);
+        }
+        SheetToolAction::TabSnap | SheetToolAction::ZoomIn | SheetToolAction::ZoomOut => {}
+        SheetToolAction::SheetDenser | SheetToolAction::SheetSpacer => {}
     }
 }
 
@@ -1589,6 +1610,7 @@ pub(crate) fn sheet_toolbar_input(
 pub(crate) fn sheet_toolbar_display(
     document: Res<EditorDocument>,
     tools: Res<SheetTools>,
+    settings: Res<PersistentSettings>,
     mut buttons: Query<(
         &SheetToolAction,
         &mut BackgroundColor,
@@ -1601,6 +1623,9 @@ pub(crate) fn sheet_toolbar_display(
         let action_visible = match action {
             SheetToolAction::TabSnap | SheetToolAction::ZoomIn | SheetToolAction::ZoomOut => {
                 document.view_mode == EditorViewMode::Tab
+            }
+            SheetToolAction::SheetDenser | SheetToolAction::SheetSpacer => {
+                document.view_mode == EditorViewMode::Sheet
             }
             SheetToolAction::Piece => {
                 document.view_mode == EditorViewMode::Sheet
@@ -1632,6 +1657,7 @@ pub(crate) fn sheet_toolbar_display(
             SheetToolAction::Slur => tools.slur,
             SheetToolAction::TabSnap => false,
             SheetToolAction::ZoomIn | SheetToolAction::ZoomOut => false,
+            SheetToolAction::SheetDenser | SheetToolAction::SheetSpacer => false,
         };
         match action {
             SheetToolAction::TabSnap => {
@@ -1642,6 +1668,12 @@ pub(crate) fn sheet_toolbar_display(
             }
             SheetToolAction::ZoomOut => {
                 *text = Text::new(format!("ZOOM -  {}b", document.tab_beats_per_screen));
+            }
+            SheetToolAction::SheetDenser => {
+                *text = Text::new(format!("+ BARS {}px", settings.sheet_pixels_per_beat));
+            }
+            SheetToolAction::SheetSpacer => {
+                *text = Text::new(format!("- BARS {}px", settings.sheet_pixels_per_beat));
             }
             SheetToolAction::Piece if document.view_mode == EditorViewMode::Tab => {
                 let name = document

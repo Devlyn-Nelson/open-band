@@ -60,6 +60,20 @@ struct SheetViewport {
     span: u32,
 }
 
+/// Choose the visible tick span from the available width while preserving readable beat spacing.
+///
+/// AI_CODE
+fn sheet_span(width: f32, resolution: u32, pixels_per_beat: u16) -> u32 {
+    let resolution = resolution.max(1);
+    let usable_width = (width - STAFF_MARGIN * 2.0).max(0.0);
+    let pixels_per_beat =
+        f32::from(pixels_per_beat.clamp(SHEET_PIXELS_PER_BEAT_MIN, SHEET_PIXELS_PER_BEAT_MAX));
+    let visible_beats = (usable_width / pixels_per_beat).max(4.0);
+    ((f64::from(resolution) * f64::from(visible_beats))
+        .round()
+        .clamp(f64::from(resolution.saturating_mul(4)), f64::from(u32::MAX))) as u32
+}
+
 /// A persistent text annotation positioned in sheet-view coordinates.
 ///
 /// AI_CODE
@@ -671,7 +685,7 @@ fn draw_curve(gizmos: &mut Gizmos, start: Vec2, end: Vec2, height: f32, color: C
     }
 }
 
-/// Render and edit the focused track in a centered, four-beat sheet viewport.
+/// Render and edit the focused track in a width-responsive sheet viewport.
 ///
 /// AI_CODE
 pub(crate) fn sheet_view_system(
@@ -679,6 +693,7 @@ pub(crate) fn sheet_view_system(
     mut gizmos: Gizmos,
     mut document: ResMut<EditorDocument>,
     mut tools: ResMut<SheetTools>,
+    settings: Res<PersistentSettings>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
@@ -700,7 +715,11 @@ pub(crate) fn sheet_view_system(
         clear_engraving_labels(&mut commands, &mut labels);
         return;
     }
-    let span = document.chart.resolution.saturating_mul(4);
+    let span = sheet_span(
+        width,
+        document.chart.resolution,
+        settings.sheet_pixels_per_beat,
+    );
     if span == 0 {
         clear_engraving_labels(&mut commands, &mut labels);
         return;
@@ -1494,5 +1513,38 @@ mod tests {
         assert_eq!(viewport.tick_at(-101.0), None);
         assert_eq!(viewport.x_at(2400), None);
         assert_eq!(viewport.x_at(479), None);
+    }
+
+    /// Sheet width controls visible measures while keeping the beat scale readable.
+    ///
+    /// AI_CODE
+    #[test]
+    fn sheet_span_expands_with_display_width() {
+        let standard = sheet_span(1440.0, 960, 120);
+        let ultrawide = sheet_span(3440.0, 960, 120);
+        assert!(standard >= 960 * 4);
+        assert!(ultrawide > standard);
+        assert!(ultrawide >= standard * 2);
+    }
+
+    /// Persistent density changes the visible score span independently of chart resolution.
+    ///
+    /// AI_CODE
+    #[test]
+    fn sheet_density_setting_controls_visible_bars() {
+        let width = 2560.0;
+        let denser = sheet_span(width, 960, 75);
+        let default = sheet_span(width, 960, 120);
+        let spacer = sheet_span(width, 960, 210);
+        assert!(denser > default);
+        assert!(default > spacer);
+        assert_eq!(
+            sheet_span(width, 960, 10),
+            sheet_span(width, 960, SHEET_PIXELS_PER_BEAT_MIN)
+        );
+        assert_eq!(
+            sheet_span(width, 960, 500),
+            sheet_span(width, 960, SHEET_PIXELS_PER_BEAT_MAX)
+        );
     }
 }

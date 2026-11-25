@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) const SETTINGS_DIRECTORY: &str = "open-band-settings";
 pub(crate) const SETTINGS_FILE: &str = "open-band-settings/settings.json";
+pub(crate) const SHEET_PIXELS_PER_BEAT_MIN: u16 = 10;
+pub(crate) const SHEET_PIXELS_PER_BEAT_MAX: u16 = 240;
 
 /// Which detector algorithm a `Strings` slot uses; irrelevant for other kinds.
 ///
@@ -241,10 +243,14 @@ pub(crate) fn scan_devices(settings: &PersistentSettings) -> DeviceSelection {
 
 /// AI_CODE
 pub(crate) fn load_settings() -> PersistentSettings {
-    std::fs::read_to_string(SETTINGS_FILE)
+    let mut settings: PersistentSettings = std::fs::read_to_string(SETTINGS_FILE)
         .ok()
         .and_then(|contents| serde_json::from_str(&contents).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    settings.sheet_pixels_per_beat = settings
+        .sheet_pixels_per_beat
+        .clamp(SHEET_PIXELS_PER_BEAT_MIN, SHEET_PIXELS_PER_BEAT_MAX);
+    settings
 }
 
 /// AI_CODE
