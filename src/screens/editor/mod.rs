@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 mod sheet;
 pub(crate) use sheet::sheet_view_system;
+mod tab;
+pub(crate) use tab::{tab_fret_dialog_system, tab_view_system};
 
 #[derive(Component)]
 pub(crate) struct EditorCamera;
@@ -58,7 +60,22 @@ pub(crate) struct EditorDocument {
     pub(crate) structure_kind: usize,
     pub(crate) expression_kind: usize,
     pub(crate) snap_interval: SnapInterval,
+    pub(crate) tab_beats_per_screen: u8,
+    pub(crate) tab_fret_string: Option<usize>,
+    pub(crate) tab_fret_tick: u32,
+    pub(crate) tab_percussion_lane: Option<usize>,
+    pub(crate) tab_resize: Option<TabDurationResize>,
     pub(crate) status: String,
+}
+
+/// In-progress tab note-duration drag, retained across pointer frames.
+///
+/// AI_CODE
+#[derive(Clone, Copy)]
+pub(crate) struct TabDurationResize {
+    pub(crate) source: EventSource,
+    pub(crate) start_tick: u32,
+    pub(crate) lane: usize,
 }
 
 /// The focused track's document-wide representation.
@@ -105,7 +122,22 @@ pub(crate) enum SheetToolAction {
     Articulation,
     Piece,
     Slur,
+    TabSnap,
+    ZoomIn,
+    ZoomOut,
 }
+
+/// A fret button in the tab editor's note-choice dialog.
+///
+/// AI_CODE
+#[derive(Component)]
+pub(crate) struct TabFretChoice(pub(crate) u8);
+
+/// Marks fret-choice dialog buttons for editor cleanup.
+///
+/// AI_CODE
+#[derive(Component)]
+pub(crate) struct TabFretChoiceButton;
 
 /// Marks toolbar buttons so editor cleanup removes only its own UI.
 ///
@@ -733,8 +765,45 @@ fn new_chart_document() -> EditorDocument {
         structure_kind: 0,
         expression_kind: 0,
         snap_interval: NoteValue::Quarter,
+        tab_beats_per_screen: 8,
+        tab_fret_string: None,
+        tab_fret_tick: 0,
+        tab_percussion_lane: None,
+        tab_resize: None,
         status: "New chart".into(),
     }
+}
+
+/// Ensure the graphical editor always has a focused track to render and edit.
+///
+/// AI_CODE
+fn ensure_editor_has_track(document: &mut EditorDocument) -> bool {
+    if !document.chart.tracks.is_empty() {
+        return false;
+    }
+    document
+        .chart
+        .tracks
+        .push(new_track(InstrumentKind::Strings));
+    document.track_focus = 0;
+    document.dirty = true;
+    true
+}
+
+/// Remove the focused track only when another editable track will remain.
+///
+/// AI_CODE
+fn remove_focused_track(document: &mut EditorDocument) -> bool {
+    if document.chart.tracks.len() <= 1 || document.track_focus >= document.chart.tracks.len() {
+        return false;
+    }
+    document.chart.tracks.remove(document.track_focus);
+    document.track_focus = document
+        .track_focus
+        .min(document.chart.tracks.len().saturating_sub(1));
+    document.event_focus = 0;
+    document.dirty = true;
+    true
 }
 
 /// Add deterministic IDs only where the score has none, preserving every authored ID.
@@ -805,10 +874,16 @@ fn load_chart_document(path: &Path) -> Result<EditorDocument, String> {
     let contents = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     let mut chart = serde_json::from_str::<Chart>(&contents).map_err(|error| error.to_string())?;
     let assigned_ids = ensure_stable_event_ids(&mut chart);
+    let added_track = if chart.tracks.is_empty() {
+        chart.tracks.push(new_track(InstrumentKind::Strings));
+        true
+    } else {
+        false
+    };
     Ok(EditorDocument {
         chart,
         path: Some(path.to_path_buf()),
-        dirty: assigned_ids,
+        dirty: assigned_ids || added_track,
         track_focus: 0,
         current_tick: 0,
         view_mode: EditorViewMode::Sheet,
@@ -820,6 +895,11 @@ fn load_chart_document(path: &Path) -> Result<EditorDocument, String> {
         structure_kind: 0,
         expression_kind: 0,
         snap_interval: NoteValue::Quarter,
+        tab_beats_per_screen: 8,
+        tab_fret_string: None,
+        tab_fret_tick: 0,
+        tab_percussion_lane: None,
+        tab_resize: None,
         status: "Loaded".into(),
     })
 }
@@ -1227,6 +1307,27 @@ fn new_track_has_expected_defaults_per_kind() {
     assert!(voice.kit.is_none());
 }
 
+#[test]
+/// New or trackless charts acquire one renderable Strings track and cannot delete the last track.
+///
+/// AI_CODE
+fn empty_editor_chart_gets_a_focused_track_and_keeps_one() {
+    let mut document = new_chart_document();
+    assert!(document.chart.tracks.is_empty());
+    assert!(ensure_editor_has_track(&mut document));
+    assert_eq!(document.chart.tracks.len(), 1);
+    assert_eq!(document.track_focus, 0);
+    assert_eq!(document.chart.tracks[0].kind, InstrumentKind::Strings);
+    assert!(document.chart.tracks[0].tuning.is_some());
+    assert!(document.dirty);
+    assert!(!ensure_editor_has_track(&mut document));
+    assert!(!remove_focused_track(&mut document));
+
+    document.chart.tracks.push(new_track(InstrumentKind::Voice));
+    assert!(remove_focused_track(&mut document));
+    assert_eq!(document.chart.tracks.len(), 1);
+}
+
 /// A filesystem-safe slug derived from a chart title, used as the save filename.
 ///
 /// AI_CODE
@@ -1306,6 +1407,9 @@ pub(crate) fn setup_editor(mut commands: Commands) {
         ("ARTIC", SheetToolAction::Articulation),
         ("PIECE", SheetToolAction::Piece),
         ("SLUR", SheetToolAction::Slur),
+        ("SNAP", SheetToolAction::TabSnap),
+        ("ZOOM +", SheetToolAction::ZoomIn),
+        ("ZOOM -", SheetToolAction::ZoomOut),
     ];
     for (index, (label, action)) in toolbar.into_iter().enumerate() {
         let column = index % 7;
@@ -1334,6 +1438,34 @@ pub(crate) fn setup_editor(mut commands: Commands) {
             SheetToolbarButton,
         ));
     }
+    // \\/ AI_CODE \\
+    for fret in 0..=24u8 {
+        let column = usize::from(fret % 5);
+        let row = usize::from(fret / 5);
+        commands.spawn((
+            Button::default(),
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(150.0 + row as f32 * 38.0),
+                left: Val::Percent(35.0 + column as f32 * 7.0),
+                width: Val::Px(58.0),
+                height: Val::Px(32.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.13, 0.18, 0.19)),
+            Text::new(fret.to_string()),
+            TextFont {
+                font_size: FontSize::Px(12.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.9, 0.95, 0.9)),
+            Visibility::Hidden,
+            TabFretChoice(fret),
+            TabFretChoiceButton,
+        ));
+    }
     // /\\ AI_CODE /\\
 }
 
@@ -1343,6 +1475,8 @@ pub(crate) fn cleanup_editor(
     entities: Query<Entity, With<EditorText>>,
     toolbar: Query<Entity, With<SheetToolbarButton>>,
     labels: Query<Entity, With<sheet::SheetEngravingLabel>>,
+    fret_choices: Query<Entity, With<TabFretChoiceButton>>,
+    tab_labels: Query<Entity, With<tab::TabSymbolLabel>>,
 ) {
     for entity in &entities {
         commands.entity(entity).despawn();
@@ -1352,6 +1486,12 @@ pub(crate) fn cleanup_editor(
     }
     // \\/ AI_CODE \\
     for entity in &labels {
+        commands.entity(entity).despawn();
+    }
+    for entity in &fret_choices {
+        commands.entity(entity).despawn();
+    }
+    for entity in &tab_labels {
         commands.entity(entity).despawn();
     }
     // /\\ AI_CODE /\\
@@ -1365,11 +1505,11 @@ pub(crate) fn cleanup_editor(
 ///
 /// AI_CODE
 pub(crate) fn sheet_toolbar_input(
-    document: Res<EditorDocument>,
+    mut document: ResMut<EditorDocument>,
     mut tools: ResMut<SheetTools>,
     buttons: Query<(&Interaction, &SheetToolAction), Changed<Interaction>>,
 ) {
-    if document.view_mode != EditorViewMode::Sheet || document.metadata_mode {
+    if document.metadata_mode || document.text_entry.is_some() {
         return;
     }
     for (interaction, action) in &buttons {
@@ -1427,6 +1567,18 @@ pub(crate) fn sheet_toolbar_input(
                 tools.slur = !tools.slur;
                 tools.slur_anchor = None;
             }
+            SheetToolAction::TabSnap if document.view_mode == EditorViewMode::Tab => {
+                document.snap_interval = cycle_snap_interval(document.snap_interval, 1);
+            }
+            SheetToolAction::ZoomIn if document.view_mode == EditorViewMode::Tab => {
+                document.tab_beats_per_screen =
+                    document.tab_beats_per_screen.saturating_sub(1).max(2);
+            }
+            SheetToolAction::ZoomOut if document.view_mode == EditorViewMode::Tab => {
+                document.tab_beats_per_screen =
+                    document.tab_beats_per_screen.saturating_add(1).min(32);
+            }
+            SheetToolAction::TabSnap | SheetToolAction::ZoomIn | SheetToolAction::ZoomOut => {}
         }
     }
 }
@@ -1437,13 +1589,31 @@ pub(crate) fn sheet_toolbar_input(
 pub(crate) fn sheet_toolbar_display(
     document: Res<EditorDocument>,
     tools: Res<SheetTools>,
-    mut buttons: Query<(&SheetToolAction, &mut BackgroundColor, &mut Visibility)>,
+    mut buttons: Query<(
+        &SheetToolAction,
+        &mut BackgroundColor,
+        &mut Visibility,
+        &mut Text,
+    )>,
 ) {
-    let visible = document.view_mode == EditorViewMode::Sheet
-        && !document.metadata_mode
-        && document.text_entry.is_none();
-    for (action, mut background, mut visibility) in &mut buttons {
-        *visibility = if visible {
+    let visible = !document.metadata_mode && document.text_entry.is_none();
+    for (action, mut background, mut visibility, mut text) in &mut buttons {
+        let action_visible = match action {
+            SheetToolAction::TabSnap | SheetToolAction::ZoomIn | SheetToolAction::ZoomOut => {
+                document.view_mode == EditorViewMode::Tab
+            }
+            SheetToolAction::Piece => {
+                document.view_mode == EditorViewMode::Sheet
+                    || document.view_mode == EditorViewMode::Tab
+                        && document
+                            .chart
+                            .tracks
+                            .get(document.track_focus)
+                            .is_some_and(|track| track.kind == InstrumentKind::Percussion)
+            }
+            _ => document.view_mode == EditorViewMode::Sheet,
+        };
+        *visibility = if visible && action_visible {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -1460,7 +1630,31 @@ pub(crate) fn sheet_toolbar_display(
             SheetToolAction::Articulation => tools.articulation.is_some(),
             SheetToolAction::Piece => false,
             SheetToolAction::Slur => tools.slur,
+            SheetToolAction::TabSnap => false,
+            SheetToolAction::ZoomIn | SheetToolAction::ZoomOut => false,
         };
+        match action {
+            SheetToolAction::TabSnap => {
+                *text = Text::new(format!("SNAP {:?}", document.snap_interval));
+            }
+            SheetToolAction::ZoomIn => {
+                *text = Text::new(format!("ZOOM +  {}b", document.tab_beats_per_screen));
+            }
+            SheetToolAction::ZoomOut => {
+                *text = Text::new(format!("ZOOM -  {}b", document.tab_beats_per_screen));
+            }
+            SheetToolAction::Piece if document.view_mode == EditorViewMode::Tab => {
+                let name = document
+                    .chart
+                    .tracks
+                    .get(document.track_focus)
+                    .and_then(|track| track.kit.as_ref())
+                    .and_then(|kit| kit.pieces.get(tools.piece_index % kit.pieces.len().max(1)))
+                    .map_or_else(|| "PIECE".into(), |piece| piece.name.clone());
+                *text = Text::new(name);
+            }
+            _ => {}
+        }
         *background = BackgroundColor(if active {
             Color::srgb(0.12, 0.42, 0.34)
         } else {
@@ -1492,7 +1686,10 @@ pub(crate) fn editor_browse_input(
         }
     }
     if keyboard.just_pressed(KeyCode::KeyN) {
-        commands.insert_resource(new_chart_document());
+        let mut document = new_chart_document();
+        ensure_editor_has_track(&mut document);
+        document.status = "New chart with a Strings track".into();
+        commands.insert_resource(document);
         return;
     }
     if keyboard.just_pressed(KeyCode::Enter)
@@ -2389,14 +2586,8 @@ pub(crate) fn editor_tracks_input(
         document.event_focus = 0;
         document.dirty = true;
     }
-    if keyboard.just_pressed(KeyCode::KeyX) && track_count > 0 {
-        let focus = document.track_focus;
-        document.chart.tracks.remove(focus);
-        document.track_focus = document
-            .track_focus
-            .min(document.chart.tracks.len().saturating_sub(1));
-        document.event_focus = 0;
-        document.dirty = true;
+    if keyboard.just_pressed(KeyCode::KeyX) && track_count > 1 {
+        remove_focused_track(&mut document);
     }
     if keyboard.just_pressed(KeyCode::KeyK) {
         let focus = document.track_focus;
@@ -2574,6 +2765,35 @@ pub(crate) fn editor_tracks_display(
     };
     if document.metadata_mode {
         *text = score_metadata_display(&document);
+        return;
+    }
+    if document.view_mode == EditorViewMode::Tab && document.text_entry.is_none() {
+        let track = document.chart.tracks.get(document.track_focus);
+        let detail = track.map_or_else(String::new, |track| match track.kind {
+            InstrumentKind::Strings => track
+                .tuning
+                .as_ref()
+                .map_or_else(|| "no tuning".into(), |tuning| tuning.strings.join(" ")),
+            InstrumentKind::Percussion => track
+                .kit
+                .as_ref()
+                .and_then(|kit| kit.pieces.get(tools.piece_index % kit.pieces.len().max(1)))
+                .map_or_else(
+                    || "no piece".into(),
+                    |piece| format!("piece: {}", piece.name),
+                ),
+            InstrumentKind::Voice => "voice track".into(),
+        });
+        *text = Text::new(format!(
+            "{}  //  {}  |  {}  |  tick {}\nVERTICAL TAB  |  {} beats/screen  |  snap {:?}\nWheel: time  +/-: zoom  Click string: choose fret  Drag note end: resize\nPIECE: cycle kit piece  PgUp/PgDn: track  Left/Right: time  V: sheet\n{}",
+            document.chart.title,
+            track.map_or("No track", |track| track.name.as_str()),
+            detail,
+            document.current_tick,
+            document.tab_beats_per_screen,
+            document.snap_interval,
+            document.status,
+        ));
         return;
     }
     if document.view_mode == EditorViewMode::Sheet && document.text_entry.is_none() {

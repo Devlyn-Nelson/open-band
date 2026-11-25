@@ -143,7 +143,7 @@ The Editor opens a chart picker listing every chart in `charts/`.
 | --- | --- |
 | `Up` / `Down` | Select a chart |
 | `Enter` | Open the selected chart for editing |
-| `N` | Create a new, empty chart |
+| `N` | Create a new chart with an empty default Strings track |
 | `Esc` | Back to Home |
 
 Once a chart is open, its track list is shown:
@@ -191,7 +191,13 @@ draws beams, ties, slurs, tuplets, rests, clefs, key signatures, accidentals, dy
 articulations, score markers, and aligned tablature from written pitches. Percussion symbols
 follow kit metadata, while vocal lyrics retain syllable and melisma markings. Removal has no
 undo; manual visual QA across representative multi-track charts remains recommended.
-Tab mode remains a text preview.
+Tab mode renders the focused track vertically with time flowing downward. Scroll the mouse
+wheel to traverse time; use `+` / `-` or the `ZOOM` toolbar buttons to change beats per
+screen without changing the snap grid. The `SNAP` toolbar button cycles the shared snap
+interval. Click a string to choose a fret from the tuning-derived fret/note grid. For shared
+percussion lanes, select the desired kit piece with `PIECE`, then click that lane again;
+lane-spanning pieces use the separate `SPAN` rail. Drag a note's lower endpoint to resize it
+to the snap grid, capped before the next note on that string/lane.
 In the event JSON editor, use `Left` / `Right`, `Home` / `End`, `Backspace`, and `Delete`
 to edit text, `Enter` to commit, or `Esc` to cancel. `Ctrl+A` clears the text. Invalid JSON
 stays open for correction. Editing preserves an event's ID; insertion creates a new one.

@@ -218,6 +218,14 @@ pub(crate) fn run() {
                 .run_if(in_state(AppState::Editor))
                 .run_if(resource_exists::<EditorDocument>),
         )
+        // \\/ AI_CODE \\
+        .add_systems(
+            Update,
+            (tab_fret_dialog_system, tab_view_system)
+                .run_if(in_state(AppState::Editor))
+                .run_if(resource_exists::<EditorDocument>),
+        )
+        // /\\ AI_CODE /\\
         // /\\ AI_CODE /\\
         .add_systems(
             Update,

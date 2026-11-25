@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "title": "Test Chart 1",
+  "resolution": 960,
+  "tempo_map": [
+    {
+      "start": 0,
+      "bpm": 90.0
+    }
+  ],
+  "time_signature_map": [
+    {
+      "start": 0,
+      "numerator": 4,
+      "denominator": 4
+    }
+  ],
+  "tempo_text": [],
+  "expressions": [],
+  "structure": [],
+  "tracks": [
+    {
+      "name": "Test Track 1",
+      "kind": "strings",
+      "tuning": {
+        "strings": [
+          "E2",
+          "A2",
+          "D3",
+          "G3",
+          "B3",
+          "E4"
+        ]
+      },
+      "kit": null,
+      "vocal_range": null,
+      "clef": "bass",
+      "key_signature": {
+        "fifths": 0,
+        "mode": "minor"
+      },
+      "capo": null,
+      "notes": [],
+      "ties": [],
+      "slurs": [],
+      "phrases": [],
+      "star_power_phrases": [],
+      "lyric_verses": []
+    },
+    {
+      "name": "Test Track 2",
+      "kind": "strings",
+      "tuning": {
+        "strings": [
+          "B0",
+          "E1",
+          "A1",
+          "D2",
+          "G2"
+        ]
+      },
+      "kit": null,
+      "vocal_range": null,
+      "clef": null,
+      "key_signature": null,
+      "capo": null,
+      "notes": [],
+      "ties": [],
+      "slurs": [],
+      "phrases": [],
+      "star_power_phrases": [],
+      "lyric_verses": []
+    }
+  ]
+}

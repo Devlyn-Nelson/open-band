@@ -110,26 +110,20 @@ lane-spanning pieces, and label shared pieces. Vocal lyrics show syllable bounda
 melisma spans. Manual visual QA across representative multi-staff, string, percussion, and
 vocal charts remains recommended.
 
-### 7. Tab view
+### 7. Tab view (implemented)
 
-- Vertical, top-to-bottom layout mirroring gameplay rendering, with beat markers, for the
-  focused track (B5).
-- Scroll wheel traverses time; add a separate zoom control (beats-per-screen) so traversal
-  and zoom aren't conflated.
-- Toolbar dropdown selects the active hint/snap interval (reusing `SnapInterval` from B3).
-- Clicking a string/lane:
-  - `Strings` tracks: open a dialog listing fret number + corresponding note name (derived
-    from the track's tuning) for selection.
-  - `Percussion` tracks: if the lane hosts multiple pieces (shared lane), prompt for which
-    piece (e.g. tom vs. cymbal); if unambiguous, place directly. Kick-style `lane_span`
-    pieces are placed via a distinct full-width control, not a per-lane click.
-- Same-beat chord stacking rules match B6.
-- Duration editing: dragging the top edge of a placed note upward extends its duration to
-  the nearest snapped beat marker. Placing a duration that spans past the current
-  `note_value` palette's single-symbol limit sets the `tied` flag automatically
-  (see the completed score schema) rather than exposing tie authoring as a separate manual step. Define collision
-  behavior (extension is capped at the start of the next note on the same
-  string/lane/piece) and a minimum duration.
+The focused track has a vertical, top-to-bottom tab view with beat/snap markers. Mouse-wheel
+scroll traverses time; toolbar zoom buttons and `+`/`-` adjust beats-per-screen separately.
+The tab snap button cycles the shared `SnapInterval` values. String clicks open a 0-24 fret
+choice grid with tuning-derived note names, and placement stores the preferred string as an
+optional performance hint while preserving the written pitch. Percussion shared lanes pause
+for piece selection before placement; lane-spanning kit pieces use a separate full-width
+control rail. Same-tick chord stacking and per-note removal reuse the sheet editor behavior.
+
+Dragging a note's lower endpoint resizes it to the snapped minimum/duration. The end is capped
+at the next event on the same resolved string, lane, or piece; durations beyond the active
+palette's single-symbol limit set `tied` automatically. Manual visual QA across tunings,
+shared percussion lanes, lane-spanning pieces, and overlapping notes remains recommended.
 
 ### 7.1. Score relationships and navigation editing
 
