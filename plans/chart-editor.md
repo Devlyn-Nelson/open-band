@@ -95,22 +95,20 @@ rendered. Manual visual QA remains; complete score engraving remains in 6.1.
   IDs; the shared notation layout supplies beam, tie, slur, and tuplet groups to the sheet
   renderer.
 
-### 6.1. Complete score rendering
+### 6.1. Complete score rendering (implemented)
 
-- Render explicit rests distinctly from inferred rests, including dots, tuplets, voices, and
-  measure boundaries.
-- Render written clefs, key signatures, enharmonic spelling, dynamics, articulations,
-  rehearsal marks, tempo text, expressive ranges, repeats, endings, segno, coda, fine,
-  da capo, and dal segno.
-- Render ties and slurs from stable event-ID relationships rather than inferring them from
-  gameplay techniques.
-- Render chord groups and independent voices without collapsing their rhythmic or staff
-  context.
-- Render strings as aligned notation/tab using score pitches and optional performance hints;
-  performance hints must not replace the written score.
-- Render percussion symbols from kit-piece metadata, including shared lanes and lane-spanning
-  pieces, while keeping this representation separate from the future gameplay highway.
-- Render vocal lyrics with syllable boundaries and melisma markers aligned to phrase notes.
+The sheet view now renders authored and inferred rests with distinct colors, dotted and
+tuplet markings, voice/staff placement, barlines, written clefs and key signatures, and
+key-aware enharmonic accidentals. Dynamics, articulations, rehearsal/tempo text, expressive
+spans, repeats, endings, segno/coda/fine, and da capo/dal segno markers are shown. Tie and
+slur chains use the notation layout's stable-ID relationships; chord groups receive shared
+stems and independent voices/staves retain separate positions.
+
+Strings show aligned notation and pitch-derived tablature, using preferred-string hints only
+to choose a playable tab position. Percussion symbols use kit-piece metadata, distinguish
+lane-spanning pieces, and label shared pieces. Vocal lyrics show syllable boundaries and
+melisma spans. Manual visual QA across representative multi-staff, string, percussion, and
+vocal charts remains recommended.
 
 ### 7. Tab view
 

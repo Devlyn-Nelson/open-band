@@ -1342,6 +1342,7 @@ pub(crate) fn cleanup_editor(
     mut commands: Commands,
     entities: Query<Entity, With<EditorText>>,
     toolbar: Query<Entity, With<SheetToolbarButton>>,
+    labels: Query<Entity, With<sheet::SheetEngravingLabel>>,
 ) {
     for entity in &entities {
         commands.entity(entity).despawn();
@@ -1349,6 +1350,11 @@ pub(crate) fn cleanup_editor(
     for entity in &toolbar {
         commands.entity(entity).despawn();
     }
+    // \\/ AI_CODE \\
+    for entity in &labels {
+        commands.entity(entity).despawn();
+    }
+    // /\\ AI_CODE /\\
     commands.remove_resource::<EditorDocument>();
     commands.remove_resource::<EditorBrowser>();
     commands.remove_resource::<EditorLibraries>();

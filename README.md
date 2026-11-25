@@ -187,8 +187,10 @@ tool. Keyboard shortcuts remain available: `F1`-`F5` for duration, `F6` for dots
 triplets, `F8` for rests, `F9` for the tied flag, `F10` for place/remove, `F11` for voice,
 `F12` for dynamics, `A` for articulations, and `P` for percussion pieces. With the slur tool
 active, click two existing pitched notes in order to link them by stable event IDs. The sheet
-draws beams, ties, slurs, and tuplet brackets from the shared notation layout. Removal has
-no undo; full score engraving and manual visual QA remain in progress.
+draws beams, ties, slurs, tuplets, rests, clefs, key signatures, accidentals, dynamics,
+articulations, score markers, and aligned tablature from written pitches. Percussion symbols
+follow kit metadata, while vocal lyrics retain syllable and melisma markings. Removal has no
+undo; manual visual QA across representative multi-track charts remains recommended.
 Tab mode remains a text preview.
 In the event JSON editor, use `Left` / `Right`, `Home` / `End`, `Backspace`, and `Delete`
 to edit text, `Enter` to commit, or `Esc` to cancel. `Ctrl+A` clears the text. Invalid JSON

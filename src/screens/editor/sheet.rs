@@ -3,6 +3,49 @@ use super::*;
 const STAFF_SPACING: f32 = 18.0;
 const STAFF_Y: f32 = -90.0;
 const STAFF_MARGIN: f32 = 48.0;
+/// AI_CODE
+fn key_signature_steps(clef: Clef, fifths: i8) -> Vec<i32> {
+    let sharp_steps: &[i32] = match clef {
+        Clef::Treble => &[38, 35, 39, 36, 33, 37, 34],
+        Clef::Bass => &[24, 21, 25, 22, 19, 23, 20],
+        Clef::Alto => &[31, 28, 32, 29, 26, 30, 27],
+        Clef::Tenor => &[31, 28, 25, 29, 26, 30, 27],
+    };
+    let flat_steps: &[i32] = match clef {
+        Clef::Treble => &[34, 37, 33, 36, 32, 35, 31],
+        Clef::Bass => &[20, 23, 19, 22, 18, 21, 17],
+        Clef::Alto => &[27, 30, 26, 29, 25, 28, 24],
+        Clef::Tenor => &[27, 30, 26, 29, 25, 28, 24],
+    };
+    let positions = if fifths < 0 { flat_steps } else { sharp_steps };
+    positions
+        .iter()
+        .copied()
+        .take(fifths.unsigned_abs().min(7) as usize)
+        .collect()
+}
+
+/// Return the accidental implied by the key signature for a diatonic step.
+///
+/// AI_CODE
+fn key_accidental(step: i32, key: Option<KeySignature>) -> i32 {
+    let Some(key) = key else { return 0 };
+    let degree = step.rem_euclid(7);
+    let order: &[i32] = if key.fifths < 0 {
+        &[6, 2, 5, 1, 4, 0, 3]
+    } else {
+        &[3, 0, 4, 1, 5, 2, 6]
+    };
+    if order
+        .iter()
+        .take(key.fifths.unsigned_abs().min(7) as usize)
+        .any(|candidate| *candidate == degree)
+    {
+        key.fifths.signum() as i32
+    } else {
+        0
+    }
+}
 const EDIT_HEIGHT: f32 = STAFF_SPACING * 6.0;
 const NATURAL_SEMITONES: [i32; 7] = [0, 2, 4, 5, 7, 9, 11];
 
@@ -17,6 +60,447 @@ struct SheetViewport {
     span: u32,
 }
 
+/// A persistent text annotation positioned in sheet-view coordinates.
+///
+/// AI_CODE
+#[derive(Clone, Debug, PartialEq)]
+struct EngravingLabel {
+    text: String,
+    x: f32,
+    y: f32,
+    color: Color,
+}
+
+/// Index for reconciling sheet annotations without respawning text entities every frame.
+///
+/// AI_CODE
+#[derive(Component)]
+pub(crate) struct SheetEngravingLabel(usize);
+
+type SheetLabelQuery<'world, 'state> = Query<
+    'world,
+    'state,
+    (
+        Entity,
+        &'static SheetEngravingLabel,
+        &'static mut Text2d,
+        &'static mut Transform,
+        &'static mut TextColor,
+    ),
+>;
+
+/// Convert supported written score metadata into viewport-aligned labels.
+///
+/// AI_CODE
+fn engraving_labels(
+    track: &ChartTrack,
+    layout: &NotationLayout,
+    viewport: SheetViewport,
+    percussion: bool,
+) -> Vec<EngravingLabel> {
+    let mut labels = Vec::new();
+    let note_color = Color::srgb(0.93, 0.94, 0.88);
+    let marker_color = Color::srgb(0.79, 0.83, 0.70);
+    let label = |text: String, x: f32, y: f32, color: Color| EngravingLabel { text, x, y, color };
+    let staff_y = |staff: u8, voice: u8| {
+        STAFF_Y - f32::from(staff.saturating_sub(1)) * 170.0 + (1.5 - f32::from(voice.min(4))) * 8.0
+    };
+
+    if let Some(x) = viewport.x_at(viewport.start) {
+        if !percussion {
+            let clef_name = match layout.clef.unwrap_or(Clef::Treble) {
+                Clef::Treble => "TREBLE CLEF",
+                Clef::Bass => "BASS CLEF",
+                Clef::Alto => "ALTO CLEF",
+                Clef::Tenor => "TENOR CLEF",
+            };
+            let staff_count = layout
+                .symbols
+                .iter()
+                .map(|symbol| symbol.staff)
+                .max()
+                .unwrap_or(1)
+                .max(
+                    layout
+                        .rests
+                        .iter()
+                        .map(|rest| rest.staff)
+                        .max()
+                        .unwrap_or(1),
+                );
+            for staff in 1..=staff_count {
+                let base = STAFF_Y - f32::from(staff.saturating_sub(1)) * 170.0;
+                labels.push(label(clef_name.into(), x + 4.0, base + 54.0, marker_color));
+                if let Some(key) = layout.key_signature {
+                    let mark = if key.fifths < 0 { "b" } else { "#" };
+                    for (index, step) in
+                        key_signature_steps(layout.clef.unwrap_or(Clef::Treble), key.fifths)
+                            .into_iter()
+                            .enumerate()
+                    {
+                        labels.push(label(
+                            mark.into(),
+                            x + 105.0 + index as f32 * 8.0,
+                            step_y(step, layout.clef.unwrap_or(Clef::Treble)) + base - STAFF_Y,
+                            marker_color,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    for (index, measure) in layout.measures.iter().enumerate() {
+        if let Some(x) = viewport.x_at(measure.start_tick) {
+            let meter_changed = index == 0
+                || layout
+                    .measures
+                    .get(index.saturating_sub(1))
+                    .is_some_and(|previous| {
+                        previous.numerator != measure.numerator
+                            || previous.denominator != measure.denominator
+                    });
+            if meter_changed {
+                labels.push(label(
+                    format!("{}/{}", measure.numerator, measure.denominator),
+                    x + 55.0,
+                    STAFF_Y + 54.0,
+                    marker_color,
+                ));
+            }
+            labels.push(label(
+                (measure.index + 1).to_string(),
+                x + 2.0,
+                STAFF_Y + 67.0,
+                marker_color,
+            ));
+        }
+    }
+
+    for symbol in &layout.symbols {
+        let Some(x) = viewport.x_at(symbol.start) else {
+            continue;
+        };
+        let y = staff_y(symbol.staff, symbol.voice);
+        match &symbol.kind {
+            NotationSymbolKind::Pitched { pitch, spelling } => {
+                let (step, accidental) = pitch_step(*pitch, spelling.as_ref());
+                let implied = key_accidental(step, layout.key_signature);
+                if accidental != implied {
+                    let glyph = match accidental {
+                        0 => "nat".to_owned(),
+                        value if value > 0 => "#".repeat(value as usize),
+                        value => "b".repeat(value.unsigned_abs() as usize),
+                    };
+                    labels.push(label(
+                        glyph,
+                        x - 15.0,
+                        step_y(step, layout.clef.unwrap_or(Clef::Treble))
+                            + staff_y(symbol.staff, symbol.voice)
+                            - STAFF_Y,
+                        note_color,
+                    ));
+                }
+                if let Some(dynamic) = symbol.dynamic {
+                    labels.push(label(
+                        format!("{dynamic:?}").to_lowercase(),
+                        x - 4.0,
+                        y - 43.0,
+                        marker_color,
+                    ));
+                }
+                for (index, articulation) in symbol.articulations.iter().enumerate() {
+                    labels.push(label(
+                        articulation_label(*articulation).into(),
+                        x + index as f32 * 10.0,
+                        y + 28.0,
+                        marker_color,
+                    ));
+                }
+                if symbol.grace.is_some() {
+                    labels.push(label("gr".into(), x - 8.0, y + 22.0, marker_color));
+                }
+                if let Some(tuning) = track.tuning.as_ref()
+                    && let Ok(open_notes) = tuning.open_midi()
+                {
+                    let preferred = super::editor_source_event(track, symbol.source)
+                        .and_then(|event| event.performance.as_ref())
+                        .and_then(|hints| hints.preferred_string)
+                        .filter(|string| {
+                            open_notes.get(*string).is_some_and(|open| *open <= *pitch)
+                        });
+                    let playable = open_notes
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(string, open)| {
+                            let fret = i16::from(*pitch)
+                                - i16::from(*open)
+                                - i16::from(track.capo.unwrap_or(0));
+                            (0..=24).contains(&fret).then_some((string, fret))
+                        })
+                        .min_by_key(|(_, fret)| *fret);
+                    let selected = preferred
+                        .and_then(|string| {
+                            let fret = i16::from(*pitch)
+                                - i16::from(*open_notes.get(string)?)
+                                - i16::from(track.capo.unwrap_or(0));
+                            (0..=24).contains(&fret).then_some((string, fret))
+                        })
+                        .or(playable);
+                    if let Some((string, fret)) = selected {
+                        let tab_y = staff_y(symbol.staff, symbol.voice)
+                            - 72.0
+                            - (open_notes.len().saturating_sub(1 + string) as f32) * STAFF_SPACING;
+                        let hint = super::editor_source_event(track, symbol.source)
+                            .and_then(|event| event.performance.as_ref())
+                            .map(|performance| match performance.transition {
+                                Some(NoteTransition::HammerOn) => "H",
+                                Some(NoteTransition::PullOff) => "P",
+                                Some(NoteTransition::Slide) => "/",
+                                None if performance.attack == Some(NoteAttack::Tap) => "T",
+                                _ => "",
+                            })
+                            .unwrap_or_default();
+                        labels.push(label(format!("{fret}{hint}"), x, tab_y, note_color));
+                    }
+                }
+            }
+            NotationSymbolKind::Percussion {
+                piece,
+                lane_span,
+                symbol,
+                ..
+            } => {
+                let mark = symbol.as_deref().unwrap_or("x");
+                labels.push(label(mark.to_owned(), x - 4.0, y, note_color));
+                if lane_span.is_some() {
+                    labels.push(label(format!("{piece} span"), x + 10.0, y, marker_color));
+                } else {
+                    labels.push(label(piece.clone(), x + 10.0, y - 10.0, marker_color));
+                }
+            }
+            NotationSymbolKind::Rest => {}
+        }
+    }
+    for group in &layout.tuplets {
+        let Some(first) = group.first().and_then(|index| layout.symbols.get(*index)) else {
+            continue;
+        };
+        let Some(tuplet) = first.tuplet else {
+            continue;
+        };
+        let Some(start_x) = viewport.x_at(first.start) else {
+            continue;
+        };
+        let end_tick = group
+            .iter()
+            .filter_map(|index| layout.symbols.get(*index))
+            .map(|symbol| symbol.start)
+            .max()
+            .unwrap_or(first.start);
+        let end_x = viewport.x_at(end_tick).unwrap_or(start_x);
+        labels.push(label(
+            format!("{}:{}", tuplet.actual, tuplet.normal),
+            (start_x + end_x) / 2.0,
+            staff_y(first.staff, first.voice) + 38.0,
+            marker_color,
+        ));
+    }
+    for rest in &layout.rests {
+        if let Some(x) = viewport.x_at(rest.start) {
+            if let Some(tuplet) = rest.tuplet {
+                labels.push(label(
+                    format!("{}:{}", tuplet.actual, tuplet.normal),
+                    x + 7.0,
+                    staff_y(rest.staff, rest.voice) - 18.0,
+                    marker_color,
+                ));
+            }
+            if rest.whole_measure {
+                labels.push(label(
+                    "whole measure".into(),
+                    x,
+                    staff_y(rest.staff, rest.voice) - 20.0,
+                    marker_color,
+                ));
+            }
+        }
+    }
+
+    for lyric in &layout.lyrics {
+        if let Some(x) = viewport.x_at(lyric.start) {
+            let mut text = lyric.text.clone();
+            if lyric.hyphen_after
+                || matches!(
+                    lyric.syllable,
+                    Some(SyllableKind::Begin | SyllableKind::Middle)
+                )
+            {
+                text.push('-');
+            }
+            if let Some(verse) = lyric.verse {
+                text = format!("{verse}. {text}");
+            }
+            labels.push(label(text, x, STAFF_Y - 245.0, marker_color));
+        }
+    }
+
+    for tempo in &layout.tempo_text {
+        if let Some(x) = viewport.x_at(tempo.tick) {
+            let text = tempo.bpm.map_or_else(
+                || tempo.text.clone(),
+                |bpm| format!("{} ({bpm:.0})", tempo.text),
+            );
+            labels.push(label(text, x, STAFF_Y + 90.0, marker_color));
+        }
+    }
+    for marker in &layout.markers {
+        let (tick, text) = score_marker_label(marker);
+        if let Some(x) = viewport.x_at(tick) {
+            labels.push(label(text, x + 5.0, STAFF_Y + 74.0, marker_color));
+        }
+    }
+    for expression in &layout.expressions {
+        let (start, text) = match expression {
+            ScoreExpression::Accelerando { start, .. } => (*start, "accel."),
+            ScoreExpression::Ritardando { start, .. } => (*start, "rit."),
+            ScoreExpression::Crescendo { start, .. } => (*start, "cresc."),
+            ScoreExpression::Diminuendo { start, .. } => (*start, "dim."),
+        };
+        if let Some(x) = viewport.x_at(start) {
+            labels.push(label(text.into(), x, STAFF_Y - 210.0, marker_color));
+        }
+    }
+    for phrase in &layout.phrase_spans {
+        if let Some(x) = viewport.x_at(phrase.start) {
+            labels.push(label("phrase".into(), x, STAFF_Y - 225.0, marker_color));
+        }
+    }
+    if let Some(tuning) = track.tuning.as_ref()
+        && let Ok(open_notes) = tuning.open_midi()
+        && let Some(x) = viewport.x_at(viewport.start)
+    {
+        let staff_count = layout
+            .symbols
+            .iter()
+            .map(|symbol| symbol.staff)
+            .max()
+            .unwrap_or(1)
+            .max(
+                layout
+                    .rests
+                    .iter()
+                    .map(|rest| rest.staff)
+                    .max()
+                    .unwrap_or(1),
+            );
+        for staff in 1..=staff_count {
+            let base = STAFF_Y - f32::from(staff.saturating_sub(1)) * 170.0;
+            for (string, midi) in open_notes.iter().enumerate() {
+                let y = base
+                    - 72.0
+                    - (open_notes.len().saturating_sub(1 + string) as f32) * STAFF_SPACING;
+                labels.push(label(midi_note_name(*midi), x + 2.0, y, marker_color));
+            }
+        }
+    }
+    labels
+}
+
+/// Return an octave-qualified note name for a tuning label.
+///
+/// AI_CODE
+fn midi_note_name(midi: u8) -> String {
+    const NAMES: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
+    format!(
+        "{}{}",
+        NAMES[(midi % 12) as usize],
+        i16::from(midi) / 12 - 1
+    )
+}
+
+/// Abbreviate an articulation for the compact sheet annotation layer.
+///
+/// AI_CODE
+fn articulation_label(articulation: Articulation) -> &'static str {
+    match articulation {
+        Articulation::Staccato => ".",
+        Articulation::Tenuto => "-",
+        Articulation::Marcato => ">",
+        Articulation::Accent => ">",
+        Articulation::Fermata => "fermata",
+        Articulation::Grace => "gr",
+    }
+}
+
+/// Convert each written navigation marker into a visible sheet label.
+///
+/// AI_CODE
+fn score_marker_label(marker: &ScoreMarker) -> (u32, String) {
+    match marker {
+        ScoreMarker::RepeatStart { tick } => (*tick, "repeat start".into()),
+        ScoreMarker::RepeatEnd { tick, times } => (*tick, format!("repeat x{times}")),
+        ScoreMarker::EndingStart { tick, number } => (*tick, format!("ending {number}")),
+        ScoreMarker::EndingEnd { tick, number } => (*tick, format!("end ending {number}")),
+        ScoreMarker::Segno { tick } => (*tick, "segno".into()),
+        ScoreMarker::Coda { tick } => (*tick, "coda".into()),
+        ScoreMarker::Fine { tick } => (*tick, "fine".into()),
+        ScoreMarker::DaCapo { tick } => (*tick, "D.C.".into()),
+        ScoreMarker::DalSegno { tick } => (*tick, "D.S.".into()),
+        ScoreMarker::Rehearsal { tick, label } => (*tick, label.clone()),
+    }
+}
+
+/// Keep generated score labels in sync without allocating new entities every frame.
+///
+/// AI_CODE
+fn reconcile_engraving_labels(
+    commands: &mut Commands,
+    entities: &mut SheetLabelQuery,
+    labels: &[EngravingLabel],
+) {
+    let existing = entities
+        .iter_mut()
+        .map(|(entity, marker, _, _, _)| (marker.0, entity))
+        .collect::<std::collections::HashMap<_, _>>();
+    for (index, label) in labels.iter().enumerate() {
+        if let Some(entity) = existing.get(&index)
+            && let Ok((_, _, mut text, mut transform, mut color)) = entities.get_mut(*entity)
+        {
+            text.0.clone_from(&label.text);
+            transform.translation = Vec3::new(label.x, label.y, 8.0);
+            color.0 = label.color;
+        } else {
+            commands.spawn((
+                Text2d::new(label.text.clone()),
+                TextFont {
+                    font_size: FontSize::Px(13.0),
+                    ..default()
+                },
+                TextColor(label.color),
+                Transform::from_xyz(label.x, label.y, 8.0),
+                SheetEngravingLabel(index),
+            ));
+        }
+    }
+    for (entity, marker, _, _, _) in entities.iter() {
+        if marker.0 >= labels.len() {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+/// Remove labels when leaving the sheet view or when the focused track disappears.
+///
+/// AI_CODE
+fn clear_engraving_labels(commands: &mut Commands, entities: &mut SheetLabelQuery) {
+    for (entity, _, _, _, _) in entities.iter_mut() {
+        commands.entity(entity).despawn();
+    }
+}
+
 impl SheetViewport {
     /// Convert a visible tick to a horizontal coordinate.
     ///
@@ -27,6 +511,19 @@ impl SheetViewport {
             return None;
         }
         Some(self.left + (self.right - self.left) * offset as f32 / self.span as f32)
+    }
+
+    /// Keep a score relationship visible at the viewport edge when its endpoint is off-screen.
+    ///
+    /// AI_CODE
+    fn x_at_clamped(self, tick: u32) -> f32 {
+        if tick < self.start {
+            self.left
+        } else if tick >= self.start.saturating_add(self.span) {
+            self.right - f32::EPSILON
+        } else {
+            self.x_at(tick).unwrap_or(self.left)
+        }
     }
 
     /// Convert a horizontal coordinate inside the viewport to an unsnapped tick.
@@ -178,26 +675,34 @@ fn draw_curve(gizmos: &mut Gizmos, start: Vec2, end: Vec2, height: f32, color: C
 ///
 /// AI_CODE
 pub(crate) fn sheet_view_system(
+    mut commands: Commands,
     mut gizmos: Gizmos,
     mut document: ResMut<EditorDocument>,
     mut tools: ResMut<SheetTools>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut labels: SheetLabelQuery,
 ) {
     if document.view_mode != EditorViewMode::Sheet
         || document.metadata_mode
         || document.text_entry.is_some()
     {
+        clear_engraving_labels(&mut commands, &mut labels);
         return;
     }
-    let Ok(window) = windows.single() else { return };
+    let Ok(window) = windows.single() else {
+        clear_engraving_labels(&mut commands, &mut labels);
+        return;
+    };
     let width = window.width();
     if width <= STAFF_MARGIN * 2.0 || window.height() <= EDIT_HEIGHT * 2.0 {
+        clear_engraving_labels(&mut commands, &mut labels);
         return;
     }
     let span = document.chart.resolution.saturating_mul(4);
     if span == 0 {
+        clear_engraving_labels(&mut commands, &mut labels);
         return;
     }
     let viewport = SheetViewport {
@@ -207,62 +712,206 @@ pub(crate) fn sheet_view_system(
         span,
     };
     let Some(track) = document.chart.tracks.get(document.track_focus) else {
+        clear_engraving_labels(&mut commands, &mut labels);
         return;
     };
     let percussion = track.kind == InstrumentKind::Percussion;
     let layout = layout_track(&document.chart, track);
+    let labels_data = engraving_labels(track, &layout, viewport, percussion);
+    reconcile_engraving_labels(&mut commands, &mut labels, &labels_data);
     let clef = layout.clef.unwrap_or(Clef::Treble);
     let staff_color = Color::srgb(0.55, 0.60, 0.63);
     let note_color = Color::srgb(0.93, 0.94, 0.88);
     let inferred_color = Color::srgb(0.55, 0.65, 0.66);
     let cursor_color = Color::srgb(0.36, 0.83, 0.68);
+    let marker_color = Color::srgb(0.79, 0.83, 0.70);
 
     let lane_count = if percussion {
         track.kit.as_ref().map_or(0, |kit| kit.lanes)
     } else {
         5
     };
+    let staff_count = layout
+        .symbols
+        .iter()
+        .map(|symbol| symbol.staff)
+        .max()
+        .unwrap_or(1)
+        .max(
+            layout
+                .rests
+                .iter()
+                .map(|rest| rest.staff)
+                .max()
+                .unwrap_or(1),
+        );
+    let staff_base_y = |staff: u8| STAFF_Y - f32::from(staff.saturating_sub(1)) * 170.0;
+    let note_y = |staff: u8, voice: u8| staff_base_y(staff) + (1.5 - f32::from(voice.min(4))) * 8.0;
     let line_y = |lane: usize| {
         STAFF_Y + (lane_count.saturating_sub(1) as f32 / 2.0 - lane as f32) * STAFF_SPACING
     };
-    for line in 0..lane_count {
-        let y = line_y(line);
-        gizmos.line_2d(
-            Vec2::new(viewport.left, y),
-            Vec2::new(viewport.right, y),
-            staff_color,
-        );
+    let chord_head_offset = |index: usize| {
+        let Some(symbol) = layout.symbols.get(index) else {
+            return 0.0;
+        };
+        layout
+            .chord_groups
+            .iter()
+            .find(|group| group.events.contains(&index))
+            .and_then(|group| {
+                let (NotationSymbolKind::Pitched { pitch, spelling }, Some(other)) = (
+                    &symbol.kind,
+                    group.events.iter().find(|other| **other != index),
+                ) else {
+                    return None;
+                };
+                let other = layout.symbols.get(*other)?;
+                if other.start != symbol.start {
+                    return None;
+                }
+                let NotationSymbolKind::Pitched {
+                    pitch: other_pitch,
+                    spelling: other_spelling,
+                } = &other.kind
+                else {
+                    return None;
+                };
+                let (step, _) = pitch_step(*pitch, spelling.as_ref());
+                let (other_step, _) = pitch_step(*other_pitch, other_spelling.as_ref());
+                ((step - other_step).abs() == 1).then_some(if step < other_step {
+                    -5.0
+                } else {
+                    5.0
+                })
+            })
+            .unwrap_or(0.0)
+    };
+    if percussion {
+        for line in 0..lane_count {
+            let y = line_y(line);
+            gizmos.line_2d(
+                Vec2::new(viewport.left, y),
+                Vec2::new(viewport.right, y),
+                staff_color,
+            );
+        }
+    } else {
+        for staff in 1..=staff_count {
+            let base = staff_base_y(staff);
+            for line in 0..5 {
+                let y = base + (2.0 - line as f32) * STAFF_SPACING;
+                gizmos.line_2d(
+                    Vec2::new(viewport.left, y),
+                    Vec2::new(viewport.right, y),
+                    staff_color,
+                );
+            }
+            if let Some(tuning) = track.tuning.as_ref()
+                && let Ok(open_notes) = tuning.open_midi()
+            {
+                let tab_top = base - 72.0;
+                for string in 0..open_notes.len() {
+                    let y = tab_top
+                        - (open_notes.len().saturating_sub(1 + string) as f32) * STAFF_SPACING;
+                    gizmos.line_2d(
+                        Vec2::new(viewport.left, y),
+                        Vec2::new(viewport.right, y),
+                        staff_color,
+                    );
+                }
+            }
+        }
     }
     for measure in &layout.measures {
         for tick in [measure.start_tick, measure.end_tick] {
             if let Some(x) = viewport.x_at(tick) {
-                gizmos.line_2d(
-                    Vec2::new(x, STAFF_Y - STAFF_SPACING * 2.0),
-                    Vec2::new(x, STAFF_Y + STAFF_SPACING * 2.0),
-                    staff_color,
-                );
+                let top = STAFF_Y + STAFF_SPACING * 2.0 + 24.0;
+                let bottom = if percussion {
+                    STAFF_Y - STAFF_SPACING * 2.0
+                } else {
+                    staff_base_y(staff_count) - 105.0
+                };
+                gizmos.line_2d(Vec2::new(x, bottom), Vec2::new(x, top), staff_color);
             }
         }
     }
+    for marker in &layout.markers {
+        match marker {
+            ScoreMarker::RepeatStart { tick } | ScoreMarker::RepeatEnd { tick, .. } => {
+                if let Some(x) = viewport.x_at(*tick) {
+                    let top = STAFF_Y + STAFF_SPACING * 2.0;
+                    let bottom = if percussion {
+                        STAFF_Y - STAFF_SPACING * 2.0
+                    } else {
+                        staff_base_y(staff_count) - STAFF_SPACING * 2.0
+                    };
+                    let direction = if matches!(marker, ScoreMarker::RepeatStart { .. }) {
+                        1.0
+                    } else {
+                        -1.0
+                    };
+                    gizmos.line_2d(
+                        Vec2::new(x + direction * 4.0, bottom),
+                        Vec2::new(x + direction * 4.0, top),
+                        staff_color,
+                    );
+                    let dot_y = STAFF_Y;
+                    for offset in [-5.0, 5.0] {
+                        gizmos.circle_2d(
+                            Vec2::new(x + direction * 12.0, dot_y + offset),
+                            1.8,
+                            staff_color,
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for marker in &layout.markers {
+        if let ScoreMarker::EndingStart { tick, number } = marker
+            && let Some(end) = layout.markers.iter().find_map(|candidate| match candidate {
+                ScoreMarker::EndingEnd {
+                    tick: end_tick,
+                    number: end_number,
+                } if number == end_number && end_tick > tick => Some(*end_tick),
+                _ => None,
+            })
+            && let Some(start_x) = viewport.x_at(*tick)
+        {
+            let end_x = viewport.x_at_clamped(end);
+            let y = STAFF_Y + STAFF_SPACING * 3.0 + 26.0;
+            gizmos.line_2d(Vec2::new(start_x, y), Vec2::new(end_x, y), staff_color);
+            gizmos.line_2d(
+                Vec2::new(start_x, y - 8.0),
+                Vec2::new(start_x, y),
+                staff_color,
+            );
+        }
+    }
     for (symbol_index, symbol) in layout.symbols.iter().enumerate() {
-        let Some(x) = viewport.x_at(symbol.start) else {
+        let Some(x) = viewport
+            .x_at(symbol.start)
+            .map(|x| x + chord_head_offset(symbol_index))
+        else {
             continue;
         };
-        let (y, accidental) = match &symbol.kind {
+        let y = match &symbol.kind {
             NotationSymbolKind::Pitched { pitch, spelling } => {
-                let (step, accidental) = pitch_step(*pitch, spelling.as_ref());
-                (step_y(step, clef), accidental)
+                let (step, _) = pitch_step(*pitch, spelling.as_ref());
+                step_y(step, clef) + note_y(symbol.staff, symbol.voice) - STAFF_Y
             }
-            NotationSymbolKind::Percussion { lane, .. } => (lane.map_or(STAFF_Y, line_y), 0),
+            NotationSymbolKind::Percussion { lane, .. } => lane.map_or(STAFF_Y, line_y),
             NotationSymbolKind::Rest => continue,
         };
         if y.abs() > window.height() / 2.0 - 12.0 {
             continue;
         }
         if !percussion {
-            let offset = ((y - STAFF_Y) / STAFF_SPACING).round() as i32;
+            let base = staff_base_y(symbol.staff);
+            let offset = ((y - base) / STAFF_SPACING).round() as i32;
             for line in 3..=offset.abs() {
-                let ledger_y = STAFF_Y + line as f32 * STAFF_SPACING * offset.signum() as f32;
+                let ledger_y = base + line as f32 * STAFF_SPACING * offset.signum() as f32;
                 gizmos.line_2d(
                     Vec2::new(x - 9.0, ledger_y),
                     Vec2::new(x + 9.0, ledger_y),
@@ -270,7 +919,42 @@ pub(crate) fn sheet_view_system(
                 );
             }
         }
-        gizmos.circle_2d(Vec2::new(x, y), 5.0, note_color);
+        match &symbol.kind {
+            NotationSymbolKind::Percussion {
+                symbol: Some(mark),
+                lane_span,
+                ..
+            } if mark.eq_ignore_ascii_case("x") || lane_span.is_some() => {
+                gizmos.line_2d(
+                    Vec2::new(x - 5.0, y - 5.0),
+                    Vec2::new(x + 5.0, y + 5.0),
+                    note_color,
+                );
+                gizmos.line_2d(
+                    Vec2::new(x - 5.0, y + 5.0),
+                    Vec2::new(x + 5.0, y - 5.0),
+                    note_color,
+                );
+                if lane_span.is_some() {
+                    gizmos.line_2d(
+                        Vec2::new(x, STAFF_Y + STAFF_SPACING * 2.0),
+                        Vec2::new(x, STAFF_Y - STAFF_SPACING * 2.0),
+                        note_color,
+                    );
+                }
+            }
+            NotationSymbolKind::Percussion {
+                symbol: Some(mark), ..
+            } if mark.eq_ignore_ascii_case("diamond") => {
+                gizmos.line_2d(Vec2::new(x, y + 6.0), Vec2::new(x + 6.0, y), note_color);
+                gizmos.line_2d(Vec2::new(x + 6.0, y), Vec2::new(x, y - 6.0), note_color);
+                gizmos.line_2d(Vec2::new(x, y - 6.0), Vec2::new(x - 6.0, y), note_color);
+                gizmos.line_2d(Vec2::new(x - 6.0, y), Vec2::new(x, y + 6.0), note_color);
+            }
+            _ => {
+                gizmos.circle_2d(Vec2::new(x, y), 5.0, note_color);
+            }
+        }
         if symbol.value != NoteValue::Whole {
             gizmos.line_2d(
                 Vec2::new(x + 5.0, y),
@@ -303,42 +987,42 @@ pub(crate) fn sheet_view_system(
                 note_color,
             );
         }
-        if accidental != 0 {
-            let ax = x - 13.0;
-            gizmos.line_2d(Vec2::new(ax, y - 7.0), Vec2::new(ax, y + 7.0), note_color);
-            gizmos.line_2d(
-                Vec2::new(ax - 3.0, y),
-                Vec2::new(ax + 3.0, y + 2.0),
-                note_color,
-            );
-            if accidental > 0 {
-                gizmos.line_2d(
-                    Vec2::new(ax + 3.0, y - 7.0),
-                    Vec2::new(ax + 3.0, y + 7.0),
-                    note_color,
-                );
-                gizmos.line_2d(
-                    Vec2::new(ax - 3.0, y - 4.0),
-                    Vec2::new(ax + 3.0, y - 2.0),
-                    note_color,
-                );
-            }
-        }
     }
     // \\/ AI_CODE \\
     let symbol_position = |index: usize| {
         let symbol = layout.symbols.get(index)?;
-        let x = viewport.x_at(symbol.start)?;
+        let x = viewport.x_at_clamped(symbol.start) + chord_head_offset(index);
         let y = match &symbol.kind {
             NotationSymbolKind::Pitched { pitch, spelling } => {
                 let (step, _) = pitch_step(*pitch, spelling.as_ref());
-                step_y(step, clef)
+                step_y(step, clef) + note_y(symbol.staff, symbol.voice) - STAFF_Y
             }
             NotationSymbolKind::Percussion { lane, .. } => lane.map_or(STAFF_Y, line_y),
             NotationSymbolKind::Rest => return None,
         };
         Some(Vec2::new(x, y))
     };
+    for group in &layout.chord_groups {
+        let positions = group
+            .events
+            .iter()
+            .filter_map(|index| symbol_position(*index))
+            .collect::<Vec<_>>();
+        if positions.len() > 1 {
+            let x = positions.iter().map(|position| position.x).sum::<f32>()
+                / positions.len() as f32
+                + 5.0;
+            let top = positions
+                .iter()
+                .map(|position| position.y)
+                .fold(f32::MAX, f32::min);
+            let bottom = positions
+                .iter()
+                .map(|position| position.y)
+                .fold(f32::MIN, f32::max);
+            gizmos.line_2d(Vec2::new(x, top), Vec2::new(x, bottom + 25.0), note_color);
+        }
+    }
     for group in &layout.beams {
         for pair in group.windows(2) {
             let (Some(start), Some(end)) = (symbol_position(pair[0]), symbol_position(pair[1]))
@@ -415,6 +1099,104 @@ pub(crate) fn sheet_view_system(
             staff_color,
         );
     }
+    for expression in &layout.expressions {
+        let (start, duration, crescendo) = match expression {
+            ScoreExpression::Crescendo {
+                start,
+                duration_ticks,
+            } => (*start, *duration_ticks, true),
+            ScoreExpression::Diminuendo {
+                start,
+                duration_ticks,
+            } => (*start, *duration_ticks, false),
+            ScoreExpression::Accelerando {
+                start,
+                duration_ticks,
+                ..
+            } => {
+                let end = start.saturating_add(*duration_ticks);
+                if let Some(start_x) = viewport.x_at(*start) {
+                    let end_x = viewport.x_at_clamped(end);
+                    let y = if percussion {
+                        STAFF_Y - STAFF_SPACING * 3.0 - 20.0
+                    } else {
+                        staff_base_y(staff_count) - 125.0
+                    };
+                    draw_curve(
+                        &mut gizmos,
+                        Vec2::new(start_x, y),
+                        Vec2::new(end_x, y + 8.0),
+                        3.0,
+                        marker_color,
+                    );
+                }
+                continue;
+            }
+            ScoreExpression::Ritardando {
+                start,
+                duration_ticks,
+                ..
+            } => {
+                let end = start.saturating_add(*duration_ticks);
+                if let Some(start_x) = viewport.x_at(*start) {
+                    let end_x = viewport.x_at_clamped(end);
+                    let y = if percussion {
+                        STAFF_Y - STAFF_SPACING * 3.0 - 20.0
+                    } else {
+                        staff_base_y(staff_count) - 125.0
+                    };
+                    draw_curve(
+                        &mut gizmos,
+                        Vec2::new(start_x, y + 8.0),
+                        Vec2::new(end_x, y),
+                        3.0,
+                        marker_color,
+                    );
+                }
+                continue;
+            }
+        };
+        let end = start.saturating_add(duration);
+        let Some(start_x) = viewport.x_at(start) else {
+            continue;
+        };
+        let end_x = viewport.x_at_clamped(end);
+        let y = if percussion {
+            STAFF_Y - STAFF_SPACING * 3.0
+        } else {
+            staff_base_y(staff_count) - 100.0
+        };
+        let (start_gap, end_gap) = if crescendo { (2.0, 16.0) } else { (16.0, 2.0) };
+        gizmos.line_2d(
+            Vec2::new(start_x, y - start_gap),
+            Vec2::new(end_x, y - end_gap),
+            staff_color,
+        );
+        gizmos.line_2d(
+            Vec2::new(start_x, y + start_gap),
+            Vec2::new(end_x, y + end_gap),
+            staff_color,
+        );
+    }
+    for phrase in &layout.phrase_spans {
+        let end = phrase.start.saturating_add(phrase.duration_ticks);
+        if let Some(start_x) = viewport.x_at(phrase.start) {
+            let end_x = viewport.x_at_clamped(end);
+            let y = STAFF_Y - STAFF_SPACING * 3.0 - 20.0;
+            gizmos.line_2d(Vec2::new(start_x, y), Vec2::new(end_x, y), marker_color);
+        }
+    }
+    for lyric in &layout.lyrics {
+        if !lyric.melisma {
+            continue;
+        }
+        let end = lyric.start.saturating_add(lyric.duration_ticks);
+        if let Some(start_x) = viewport.x_at(lyric.start) {
+            let end_x = viewport.x_at_clamped(end);
+            let y = STAFF_Y - 245.0;
+            gizmos.line_2d(Vec2::new(start_x, y), Vec2::new(end_x, y), marker_color);
+        }
+    }
     // /\\ AI_CODE /\\
     for rest in &layout.rests {
         if let Some(x) = viewport.x_at(rest.start) {
@@ -423,7 +1205,7 @@ pub(crate) fn sheet_view_system(
             } else {
                 inferred_color
             };
-            let position = Vec2::new(x, STAFF_Y + (f32::from(rest.voice) - 1.0) * 12.0);
+            let position = Vec2::new(x, note_y(rest.staff, rest.voice));
             draw_rest(&mut gizmos, position, rest.value, color);
             for dot in 0..rest.dots {
                 gizmos.circle_2d(
@@ -592,6 +1374,106 @@ mod tests {
         assert_eq!(pitch_step(61, Some(&flat)), (4 * 7 + 1, -1));
         assert_eq!(pitch_step(61, None), (4 * 7, 1));
         assert_eq!(pitch_at(STAFF_Y + EDIT_HEIGHT + 1.0, Clef::Treble), None);
+    }
+
+    /// Key signatures use conventional staff positions for each clef and note spelling.
+    ///
+    /// AI_CODE
+    #[test]
+    fn key_signature_positions_and_cancellations_follow_clef() {
+        assert_eq!(key_signature_steps(Clef::Treble, 2), vec![38, 35]);
+        assert_eq!(key_signature_steps(Clef::Bass, -2), vec![20, 23]);
+        assert_eq!(
+            key_accidental(
+                4 * 7 + 3,
+                Some(KeySignature {
+                    fifths: 2,
+                    mode: KeyMode::Major
+                })
+            ),
+            1
+        );
+        assert_eq!(
+            key_accidental(
+                4 * 7 + 1,
+                Some(KeySignature {
+                    fifths: 2,
+                    mode: KeyMode::Major
+                })
+            ),
+            0
+        );
+    }
+
+    /// Engraving labels preserve written metadata and align lyrics and tablature with time.
+    ///
+    /// AI_CODE
+    #[test]
+    fn engraving_labels_cover_score_metadata_lyrics_and_tab() {
+        let mut document = super::super::new_chart_document();
+        document
+            .chart
+            .tracks
+            .push(super::super::new_track(InstrumentKind::Strings));
+        let track = &mut document.chart.tracks[0];
+        track.clef = Some(Clef::Treble);
+        track.key_signature = Some(KeySignature {
+            fifths: 1,
+            mode: KeyMode::Major,
+        });
+        track.phrases.push(VocalPhrase {
+            start: 0,
+            duration_ticks: 960,
+            text: "hello".into(),
+            syllable: Some(SyllableKind::Begin),
+            melisma: true,
+            hyphen_after: true,
+            breath_after: false,
+            notes: Vec::new(),
+        });
+        document.chart.tempo_text.push(TempoText {
+            tick: 0,
+            text: "Allegro".into(),
+            bpm: Some(120.0),
+        });
+        document.chart.structure.push(ScoreMarker::Rehearsal {
+            tick: 0,
+            label: "A".into(),
+        });
+        document.chart.expressions.push(ScoreExpression::Crescendo {
+            start: 0,
+            duration_ticks: 960,
+        });
+        let mut tools = SheetTools::default();
+        tools.dynamic = Some(DynamicLevel::Mf);
+        tools.articulation = Some(Articulation::Accent);
+        assert!(super::super::sheet_edit_pitch(&mut document, 0, 60, &tools));
+        assert!(super::super::sheet_edit_pitch(&mut document, 0, 65, &tools));
+
+        let track = &document.chart.tracks[0];
+        let layout = layout_track(&document.chart, track);
+        let viewport = SheetViewport {
+            left: -100.0,
+            right: 100.0,
+            start: 0,
+            span: 3840,
+        };
+        let labels = engraving_labels(&document.chart.tracks[0], &layout, viewport, false);
+        let text = labels
+            .iter()
+            .map(|label| label.text.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(text.contains(&"TREBLE CLEF"));
+        assert!(text.contains(&"#"));
+        assert!(text.contains(&"nat"));
+        assert!(text.contains(&"mf"));
+        assert!(text.contains(&">"));
+        assert!(text.contains(&"hello-"));
+        assert!(text.contains(&"Allegro (120)"));
+        assert!(text.contains(&"A"));
+        assert!(text.contains(&"cresc."));
+        assert!(text.contains(&"E1"));
     }
 
     /// The time viewport is bounded, half-open, and preserves its left tick.
