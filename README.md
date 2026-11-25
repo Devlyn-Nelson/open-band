@@ -200,8 +200,9 @@ allow syncopated note placement. Bar lines are brightest, beat lines darker, and
 fade darker without going black. Density and beat divisions are saved in user settings and
 do not modify chart data.
 Tab mode renders the focused track vertically with time flowing downward. Scroll the mouse
-wheel to traverse time; use `+` / `-` or the `ZOOM` toolbar buttons to change beats per
-screen without changing the snap grid. The `SNAP` toolbar button cycles the shared snap
+wheel to traverse time; the view extends to the bottom of the window, and taller windows show
+more of the song at the same note scale. Use `+` / `-` or the `ZOOM` toolbar buttons to
+change tab zoom density without changing the snap grid. The `SNAP` toolbar button cycles the shared snap
 interval. Click a string to choose a fret from the tuning-derived fret/note grid. For shared
 percussion lanes, select the desired kit piece with `PIECE`, then click that lane again;
 lane-spanning pieces use the separate `SPAN` rail. Drag a note's lower endpoint to resize it

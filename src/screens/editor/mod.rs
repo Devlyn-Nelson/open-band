@@ -2871,7 +2871,7 @@ pub(crate) fn editor_tracks_display(
             InstrumentKind::Voice => "voice track".into(),
         });
         *text = Text::new(format!(
-            "{}  //  {}  |  {}  |  tick {}\nVERTICAL TAB  |  {} beats/screen  |  snap {:?}\nWheel: time  +/-: zoom  Click string: choose fret  Drag note end: resize\nPIECE: cycle kit piece  PgUp/PgDn: track  Left/Right: time  V: sheet\n{}",
+            "{}  //  {}  |  {}  |  tick {}\nVERTICAL TAB  |  zoom {}  |  snap {:?}\nWheel: time  +/-: zoom  Taller windows show more time  Click string: choose fret  Drag note end: resize\nPIECE: cycle kit piece  PgUp/PgDn: track  Left/Right: time  V: sheet\n{}",
             document.chart.title,
             track.map_or("No track", |track| track.name.as_str()),
             detail,

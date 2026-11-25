@@ -3,7 +3,9 @@ use bevy::input::mouse::MouseWheel;
 use bevy::ui_widgets::Activate;
 
 const TAB_TOP: f32 = 250.0;
-const TAB_BOTTOM: f32 = -300.0;
+const TAB_BOTTOM_MARGIN: f32 = 24.0;
+const TAB_REFERENCE_BOTTOM: f32 = -300.0;
+const TAB_REFERENCE_HEIGHT: f32 = TAB_TOP - TAB_REFERENCE_BOTTOM;
 
 /// A persistent non-note label in the vertical tab view.
 ///
@@ -43,12 +45,24 @@ type TabNoteBadgeQuery<'world, 'state> = Query<
 /// Map a tick in the active tab window to a top-to-bottom coordinate.
 ///
 /// AI_CODE
-fn tab_y(tick: u32, start: u32, span: u32) -> Option<f32> {
+fn tab_y(tick: u32, start: u32, span: u32, top: f32, bottom: f32) -> Option<f32> {
     let offset = tick.checked_sub(start)?;
     if offset >= span || span == 0 {
         return None;
     }
-    Some(TAB_TOP - (TAB_TOP - TAB_BOTTOM) * offset as f32 / span as f32)
+    Some(top - (top - bottom) * offset as f32 / span as f32)
+}
+
+/// Compute the visible tick span at the selected density for the available vertical space.
+///
+/// AI_CODE
+fn tab_visible_span(resolution: u32, beats_at_reference_height: u8, height: f32) -> u32 {
+    let available_height =
+        (TAB_TOP - (-height / 2.0 + TAB_BOTTOM_MARGIN)).max(TAB_REFERENCE_HEIGHT.min(80.0));
+    let ticks = f64::from(resolution.max(1))
+        * f64::from(beats_at_reference_height.max(2))
+        * f64::from(available_height / TAB_REFERENCE_HEIGHT);
+    ticks.round().clamp(1.0, f64::from(u32::MAX)) as u32
 }
 
 /// Place a tab event at a selected string and fret, retaining written pitch separately
@@ -333,7 +347,12 @@ pub(crate) fn tab_view_system(
     }
     let Ok(window) = windows.single() else { return };
     let resolution = document.chart.resolution.max(1);
-    let span = resolution.saturating_mul(u32::from(document.tab_beats_per_screen.max(2)));
+    let top = TAB_TOP;
+    let bottom = (-window.height() / 2.0 + TAB_BOTTOM_MARGIN).min(top - 80.0);
+    let viewport_height = top - bottom;
+    let span = tab_visible_span(resolution, document.tab_beats_per_screen, window.height());
+    let view_start = document.current_tick;
+    let y_for_tick = |tick| tab_y(tick, view_start, span, top, bottom);
     for event in wheel.read() {
         let direction = match event.y.total_cmp(&0.0) {
             std::cmp::Ordering::Greater => -1i64,
@@ -377,8 +396,8 @@ pub(crate) fn tab_view_system(
     for lane in 0..lanes {
         let x = x_for_lane(lane);
         gizmos.line_2d(
-            Vec2::new(x, TAB_TOP),
-            Vec2::new(x, TAB_BOTTOM),
+            Vec2::new(x, top),
+            Vec2::new(x, bottom),
             Color::srgb(0.55, 0.60, 0.63),
         );
         let name = if percussion {
@@ -394,26 +413,26 @@ pub(crate) fn tab_view_system(
                     |midi| note_name(midi).to_owned(),
                 )
         };
-        next_labels.push((name, x, TAB_TOP + 20.0, Color::srgb(0.92, 0.94, 0.88)));
+        next_labels.push((name, x, top + 20.0, Color::srgb(0.92, 0.94, 0.88)));
     }
     if percussion {
         let span_x = left - 48.0;
         gizmos.line_2d(
-            Vec2::new(span_x, TAB_TOP),
-            Vec2::new(span_x, TAB_BOTTOM),
+            Vec2::new(span_x, top),
+            Vec2::new(span_x, bottom),
             Color::srgb(0.79, 0.63, 0.31),
         );
         next_labels.push((
             "SPAN".into(),
             span_x,
-            TAB_TOP + 20.0,
+            top + 20.0,
             Color::srgb(0.92, 0.94, 0.88),
         ));
     }
     let beat = document.snap_interval.ticks(resolution).max(1);
     let mut tick = document.current_tick;
     while tick < document.current_tick.saturating_add(span) {
-        if let Some(y) = tab_y(tick, document.current_tick, span) {
+        if let Some(y) = y_for_tick(tick) {
             gizmos.line_2d(
                 Vec2::new(left - 30.0, y),
                 Vec2::new(right + 30.0, y),
@@ -432,7 +451,7 @@ pub(crate) fn tab_view_system(
         }
     }
     for symbol in &layout.symbols {
-        let Some(y) = tab_y(symbol.start, document.current_tick, span) else {
+        let Some(y) = y_for_tick(symbol.start) else {
             continue;
         };
         let lane = tab_lane_for_symbol(&track, symbol);
@@ -485,7 +504,7 @@ pub(crate) fn tab_view_system(
         };
         next_badges.push((text, x, y));
         let end = symbol.start.saturating_add(symbol.duration);
-        if let Some(end_y) = tab_y(end, document.current_tick, span) {
+        if let Some(end_y) = y_for_tick(end) {
             gizmos.line_2d(
                 Vec2::new(x, y + 10.0),
                 Vec2::new(x, end_y),
@@ -577,8 +596,7 @@ pub(crate) fn tab_view_system(
         window.height() / 2.0 - cursor.y,
     );
     let tick = document.current_tick.saturating_add(
-        ((TAB_TOP - position.y.clamp(TAB_BOTTOM, TAB_TOP)) / (TAB_TOP - TAB_BOTTOM) * span as f32)
-            as u32,
+        ((top - position.y.clamp(bottom, top)) / viewport_height * span as f32) as u32,
     );
     let snapped = snap_editor_tick(&document, tick);
     if mouse.just_released(MouseButton::Left)
@@ -597,10 +615,10 @@ pub(crate) fn tab_view_system(
     if percussion && position.x >= left - 78.0 && position.x <= left - 20.0 {
         if document.tab_resize.is_some() {
             if let Some(resize) = document.tab_resize {
-                if let Some(y) = tab_y(resize.start_tick, document.current_tick, span) {
+                if let Some(y) = y_for_tick(resize.start_tick) {
                     gizmos.line_2d(
                         Vec2::new(left - 48.0, y),
-                        Vec2::new(left - 48.0, position.y.clamp(TAB_BOTTOM, TAB_TOP)),
+                        Vec2::new(left - 48.0, position.y.clamp(bottom, top)),
                         Color::srgb(0.90, 0.75, 0.34),
                     );
                 }
@@ -615,12 +633,8 @@ pub(crate) fn tab_view_system(
                         lane_span: Some(_),
                         ..
                     }
-                ) && tab_y(
-                    symbol.start.saturating_add(symbol.duration),
-                    document.current_tick,
-                    span,
-                )
-                .is_some_and(|end_y| (position.y - end_y).abs() <= 12.0)
+                ) && y_for_tick(symbol.start.saturating_add(symbol.duration))
+                    .is_some_and(|end_y| (position.y - end_y).abs() <= 12.0)
             }) {
                 document.tab_resize = Some(TabDurationResize {
                     source: symbol.source,
@@ -656,7 +670,7 @@ pub(crate) fn tab_view_system(
         let start = document
             .tab_resize
             .map_or(snapped, |resize| resize.start_tick);
-        if let Some(y) = tab_y(start, document.current_tick, span) {
+        if let Some(y) = y_for_tick(start) {
             gizmos.line_2d(
                 Vec2::new(x_for_lane(lane), y),
                 Vec2::new(x_for_lane(lane), position.y),
@@ -669,12 +683,8 @@ pub(crate) fn tab_view_system(
         if let Some(symbol) = layout.symbols.iter().find(|symbol| {
             tab_lane_for_symbol(&track, symbol) == Some(lane)
                 && symbol.start.saturating_add(symbol.duration) > symbol.start
-                && tab_y(
-                    symbol.start.saturating_add(symbol.duration),
-                    document.current_tick,
-                    span,
-                )
-                .is_some_and(|end_y| (position.y - end_y).abs() <= 12.0)
+                && y_for_tick(symbol.start.saturating_add(symbol.duration))
+                    .is_some_and(|end_y| (position.y - end_y).abs() <= 12.0)
         }) {
             document.tab_resize = Some(TabDurationResize {
                 source: symbol.source,
@@ -728,10 +738,26 @@ mod tests {
     /// AI_CODE
     #[test]
     fn tab_time_maps_top_to_bottom() {
-        assert_eq!(tab_y(100, 100, 1000), Some(TAB_TOP));
-        assert_eq!(tab_y(600, 100, 1000), Some((TAB_TOP + TAB_BOTTOM) / 2.0));
-        assert_eq!(tab_y(1100, 100, 1000), None);
-        assert_eq!(tab_y(99, 100, 1000), None);
+        let bottom = -300.0;
+        assert_eq!(tab_y(100, 100, 1000, TAB_TOP, bottom), Some(TAB_TOP));
+        assert_eq!(
+            tab_y(600, 100, 1000, TAB_TOP, bottom),
+            Some((TAB_TOP + bottom) / 2.0)
+        );
+        assert_eq!(tab_y(1100, 100, 1000, TAB_TOP, bottom), None);
+        assert_eq!(tab_y(99, 100, 1000, TAB_TOP, bottom), None);
+    }
+
+    /// Taller windows extend the view to the bottom and show more time at the same density.
+    ///
+    /// AI_CODE
+    #[test]
+    fn tab_visible_span_grows_with_window_height() {
+        let standard = tab_visible_span(960, 8, 720.0);
+        let tall = tab_visible_span(960, 8, 1440.0);
+        assert!(standard > 960 * 8);
+        assert!(tall > standard);
+        assert_eq!(TAB_TOP - (-720.0 / 2.0 + TAB_BOTTOM_MARGIN), 586.0);
     }
 
     /// A fret choice resolves through tuning/capo and records its preferred string separately.
