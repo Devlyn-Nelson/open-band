@@ -47,7 +47,33 @@ fn key_accidental(step: i32, key: Option<KeySignature>) -> i32 {
     }
 }
 const EDIT_HEIGHT: f32 = STAFF_SPACING * 6.0;
+const TAB_STAFF_GAP: f32 = STAFF_SPACING * 2.5;
 const NATURAL_SEMITONES: [i32; 7] = [0, 2, 4, 5, 7, 9, 11];
+
+/// Position a written staff, accounting for the space required by its tablature.
+///
+/// AI_CODE
+fn sheet_staff_y(staff: u8, string_count: usize) -> f32 {
+    let staff_spacing = if string_count == 0 {
+        170.0
+    } else {
+        EDIT_HEIGHT * 2.0
+            + TAB_STAFF_GAP
+            + string_count.saturating_sub(1) as f32 * STAFF_SPACING
+            + STAFF_SPACING
+    };
+    STAFF_Y - f32::from(staff.saturating_sub(1)) * staff_spacing
+}
+
+/// Position a string line below the staff's editable pitch range.
+///
+/// AI_CODE
+fn sheet_tab_string_y(staff: u8, string: usize, string_count: usize) -> f32 {
+    sheet_staff_y(staff, string_count)
+        - EDIT_HEIGHT
+        - TAB_STAFF_GAP
+        - string_count.saturating_sub(1 + string) as f32 * STAFF_SPACING
+}
 
 /// A four-quarter-note viewport in centered window coordinates.
 ///
@@ -164,8 +190,12 @@ fn engraving_labels(
     let note_color = Color::srgb(0.93, 0.94, 0.88);
     let marker_color = Color::srgb(0.79, 0.83, 0.70);
     let label = |text: String, x: f32, y: f32, color: Color| EngravingLabel { text, x, y, color };
+    let string_count = track
+        .tuning
+        .as_ref()
+        .map_or(0, |tuning| tuning.strings.len());
     let staff_y = |staff: u8, voice: u8| {
-        STAFF_Y - f32::from(staff.saturating_sub(1)) * 170.0 + (1.5 - f32::from(voice.min(4))) * 8.0
+        sheet_staff_y(staff, string_count) + (1.5 - f32::from(voice.min(4))) * 8.0
     };
 
     if let Some(x) = viewport.x_at(viewport.start) {
@@ -191,7 +221,7 @@ fn engraving_labels(
                         .unwrap_or(1),
                 );
             for staff in 1..=staff_count {
-                let base = STAFF_Y - f32::from(staff.saturating_sub(1)) * 170.0;
+                let base = sheet_staff_y(staff, string_count);
                 labels.push(label(clef_name.into(), x + 4.0, base + 54.0, marker_color));
                 if let Some(key) = layout.key_signature {
                     let mark = if key.fifths < 0 { "b" } else { "#" };
@@ -310,9 +340,7 @@ fn engraving_labels(
                         })
                         .or(playable);
                     if let Some((string, fret)) = selected {
-                        let tab_y = staff_y(symbol.staff, symbol.voice)
-                            - 72.0
-                            - (open_notes.len().saturating_sub(1 + string) as f32) * STAFF_SPACING;
+                        let tab_y = sheet_tab_string_y(symbol.staff, string, open_notes.len());
                         let hint = super::editor_source_event(track, symbol.source)
                             .and_then(|event| event.performance.as_ref())
                             .map(|performance| match performance.transition {
@@ -457,11 +485,8 @@ fn engraving_labels(
                     .unwrap_or(1),
             );
         for staff in 1..=staff_count {
-            let base = STAFF_Y - f32::from(staff.saturating_sub(1)) * 170.0;
             for (string, midi) in open_notes.iter().enumerate() {
-                let y = base
-                    - 72.0
-                    - (open_notes.len().saturating_sub(1 + string) as f32) * STAFF_SPACING;
+                let y = sheet_tab_string_y(staff, string, open_notes.len());
                 labels.push(label(midi_note_name(*midi), x + 2.0, y, marker_color));
             }
         }
@@ -816,7 +841,11 @@ pub(crate) fn sheet_view_system(
                 .max()
                 .unwrap_or(1),
         );
-    let staff_base_y = |staff: u8| STAFF_Y - f32::from(staff.saturating_sub(1)) * 170.0;
+    let string_count = track
+        .tuning
+        .as_ref()
+        .map_or(0, |tuning| tuning.strings.len());
+    let staff_base_y = |staff: u8| sheet_staff_y(staff, string_count);
     let note_y = |staff: u8, voice: u8| staff_base_y(staff) + (1.5 - f32::from(voice.min(4))) * 8.0;
     let line_y = |lane: usize| {
         STAFF_Y + (lane_count.saturating_sub(1) as f32 / 2.0 - lane as f32) * STAFF_SPACING
@@ -880,10 +909,8 @@ pub(crate) fn sheet_view_system(
             if let Some(tuning) = track.tuning.as_ref()
                 && let Ok(open_notes) = tuning.open_midi()
             {
-                let tab_top = base - 72.0;
                 for string in 0..open_notes.len() {
-                    let y = tab_top
-                        - (open_notes.len().saturating_sub(1 + string) as f32) * STAFF_SPACING;
+                    let y = sheet_tab_string_y(staff, string, open_notes.len());
                     gizmos.line_2d(
                         Vec2::new(viewport.left, y),
                         Vec2::new(viewport.right, y),
@@ -896,8 +923,10 @@ pub(crate) fn sheet_view_system(
     let guide_top = STAFF_Y + STAFF_SPACING * 2.0 + 24.0;
     let guide_bottom = if percussion {
         STAFF_Y - STAFF_SPACING * 2.0
+    } else if string_count > 0 {
+        sheet_tab_string_y(staff_count, 0, string_count)
     } else {
-        staff_base_y(staff_count) - 105.0
+        staff_base_y(staff_count) - EDIT_HEIGHT
     };
     let beat_divisions = settings
         .sheet_beat_divisions
@@ -1471,6 +1500,25 @@ pub(crate) fn sheet_view_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Tab lines remain below the lowest editable note, including voice offsets, on every staff.
+    ///
+    /// AI_CODE
+    #[test]
+    fn tablature_clears_editable_staff_and_other_staves() {
+        for string_count in [4, 6, 7] {
+            for staff in [1, 2] {
+                let base = sheet_staff_y(staff, string_count);
+                let lowest_note = base - EDIT_HEIGHT + (1.5 - 4.0) * 8.0;
+                let top_tab_line = sheet_tab_string_y(staff, string_count - 1, string_count);
+                assert!(lowest_note - top_tab_line >= STAFF_SPACING);
+                assert!(sheet_tab_string_y(staff, 0, string_count) <= top_tab_line);
+            }
+            let bottom_tab_line = sheet_tab_string_y(1, 0, string_count);
+            let next_staff_highest_note = sheet_staff_y(2, string_count) + EDIT_HEIGHT;
+            assert!(bottom_tab_line - next_staff_highest_note >= STAFF_SPACING);
+        }
+    }
 
     /// Middle lines, ledger steps, and enharmonic spelling use diatonic coordinates.
     ///

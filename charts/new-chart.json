@@ -65,165 +65,176 @@
           "id": "event-000001",
           "start": 0,
           "length": 2,
-          "note": 57,
+          "note": 33,
           "spelling": {
             "step": "A",
             "alter": 0,
-            "octave": 3
+            "octave": 1
           }
         },
         {
           "id": "event-000002",
-          "start": 3840,
-          "length": 2,
-          "note": 57,
+          "start": 1440,
+          "length": 8,
+          "note": 43,
           "spelling": {
-            "step": "A",
+            "step": "G",
             "alter": 0,
-            "octave": 3
+            "octave": 2
           }
         },
         {
           "id": "event-000003",
-          "start": 7680,
-          "length": 2,
-          "note": 57,
+          "start": 1920,
+          "length": 8,
+          "note": 45,
           "spelling": {
             "step": "A",
             "alter": 0,
-            "octave": 3
+            "octave": 2
           }
         },
         {
           "id": "event-000004",
-          "start": 11520,
-          "length": 2,
-          "note": 57,
+          "start": 3840,
+          "length": 4,
+          "note": 33,
           "spelling": {
             "step": "A",
             "alter": 0,
-            "octave": 3
+            "octave": 1
           }
         },
         {
           "id": "event-000005",
-          "start": 1440,
-          "length": 8,
-          "note": 53,
+          "start": 7680,
+          "length": 4,
+          "note": 33,
           "spelling": {
-            "step": "F",
+            "step": "A",
             "alter": 0,
-            "octave": 3
+            "octave": 1
           }
         },
         {
           "id": "event-000006",
-          "start": 1920,
-          "length": 8,
-          "note": 52,
+          "start": 11520,
+          "length": 4,
+          "note": 35,
           "spelling": {
-            "step": "E",
+            "step": "B",
             "alter": 0,
-            "octave": 3
+            "octave": 1
           }
         },
         {
           "id": "event-000007",
           "start": 5280,
           "length": 8,
-          "note": 50,
+          "note": 45,
           "spelling": {
-            "step": "D",
+            "step": "A",
             "alter": 0,
-            "octave": 3
+            "octave": 2
           }
         },
         {
           "id": "event-000008",
           "start": 5760,
           "length": 8,
-          "note": 52,
+          "note": 43,
           "spelling": {
-            "step": "E",
+            "step": "G",
             "alter": 0,
-            "octave": 3
+            "octave": 2
           }
         },
         {
           "id": "event-000009",
           "start": 6240,
           "length": 8,
-          "note": 55,
+          "note": 47,
           "spelling": {
-            "step": "G",
+            "step": "B",
             "alter": 0,
-            "octave": 3
+            "octave": 2
           }
         },
         {
           "id": "event-000010",
           "start": 9120,
           "length": 8,
-          "note": 53,
+          "note": 43,
           "spelling": {
-            "step": "F",
+            "step": "G",
             "alter": 0,
-            "octave": 3
+            "octave": 2
           }
         },
         {
           "id": "event-000011",
           "start": 9600,
           "length": 8,
-          "note": 52,
+          "note": 47,
           "spelling": {
-            "step": "E",
+            "step": "B",
             "alter": 0,
-            "octave": 3
+            "octave": 2
           }
         },
         {
           "id": "event-000012",
-          "start": 10080,
-          "length": 4,
-          "note": 55,
+          "start": 10560,
+          "length": 16,
+          "note": 47,
           "spelling": {
-            "step": "G",
+            "step": "B",
             "alter": 0,
-            "octave": 3
+            "octave": 2
           }
         },
         {
           "id": "event-000013",
-          "start": 12960,
-          "length": 2,
-          "note": 52,
+          "start": 10880,
+          "length": 16,
+          "note": 43,
           "spelling": {
-            "step": "E",
+            "step": "G",
             "alter": 0,
-            "octave": 3
+            "octave": 2
           }
         },
         {
           "id": "event-000014",
-          "start": 14400,
+          "start": 12960,
           "length": 8,
-          "note": 53,
+          "note": 47,
           "spelling": {
-            "step": "F",
+            "step": "B",
             "alter": 0,
-            "octave": 3
+            "octave": 2
           }
         },
         {
           "id": "event-000015",
-          "start": 14880,
+          "start": 13440,
           "length": 8,
-          "note": 55,
+          "note": 43,
           "spelling": {
             "step": "G",
             "alter": 0,
-            "octave": 3
+            "octave": 2
+          }
+        },
+        {
+          "id": "event-000016",
+          "start": 13920,
+          "length": 4,
+          "note": 47,
+          "spelling": {
+            "step": "B",
+            "alter": 0,
+            "octave": 2
           }
         }
       ],
