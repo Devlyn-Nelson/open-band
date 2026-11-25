@@ -1,5 +1,6 @@
 use crate::*;
 use bevy::input::keyboard::KeyboardInput;
+use bevy::ui_widgets::Button;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -84,7 +85,33 @@ pub(crate) struct SheetTools {
     pub(crate) dynamic: Option<DynamicLevel>,
     pub(crate) articulation: Option<Articulation>,
     pub(crate) piece_index: usize,
+    pub(crate) slur: bool,
+    pub(crate) slur_anchor: Option<String>,
 }
+
+/// A control in the sheet editor's clickable notation palette.
+///
+/// AI_CODE
+#[derive(Component, Clone, Copy)]
+pub(crate) enum SheetToolAction {
+    Duration(NoteValue),
+    Dots,
+    Tuplet,
+    Rest,
+    Tie,
+    Remove,
+    Voice,
+    Dynamic,
+    Articulation,
+    Piece,
+    Slur,
+}
+
+/// Marks toolbar buttons so editor cleanup removes only its own UI.
+///
+/// AI_CODE
+#[derive(Component)]
+pub(crate) struct SheetToolbarButton;
 
 impl Default for SheetTools {
     fn default() -> Self {
@@ -99,6 +126,8 @@ impl Default for SheetTools {
             dynamic: None,
             articulation: None,
             piece_index: 0,
+            slur: false,
+            slur_anchor: None,
         }
     }
 }
@@ -396,6 +425,100 @@ fn sheet_edit_percussion(
     ensure_stable_event_ids(&mut document.chart);
     document.dirty = true;
     true
+}
+
+/// Select two existing pitched events to author a stable-ID slur relationship.
+///
+/// AI_CODE
+pub(super) fn sheet_edit_slur(
+    document: &mut EditorDocument,
+    tick: u32,
+    pitch: u8,
+    tools: &mut SheetTools,
+) -> bool {
+    ensure_stable_event_ids(&mut document.chart);
+    let target_id = {
+        let Some(track) = document.chart.tracks.get(document.track_focus) else {
+            return false;
+        };
+        let layout = layout_track(&document.chart, track);
+        let Some(source) = layout
+            .symbols
+            .iter()
+            .find(|symbol| {
+                symbol.start == tick
+                    && symbol.voice == tools.voice
+                    && matches!(symbol.kind, NotationSymbolKind::Pitched { pitch: value, .. } if value == pitch)
+            })
+            .map(|symbol| symbol.source)
+        else {
+            return false;
+        };
+        let Some(id) = editor_source_event(track, source).and_then(|event| event.id.clone()) else {
+            return false;
+        };
+        id
+    };
+
+    let Some(anchor) = tools.slur_anchor.take() else {
+        tools.slur_anchor = Some(target_id);
+        document.status = "Slur start selected; choose its ending note".into();
+        return true;
+    };
+    if anchor == target_id {
+        tools.slur_anchor = Some(anchor);
+        document.status = "Choose a different ending note for the slur".into();
+        return false;
+    }
+    let Some(track) = document.chart.tracks.get_mut(document.track_focus) else {
+        return false;
+    };
+    if !track
+        .slurs
+        .iter()
+        .any(|relation| relation.from == anchor && relation.to == target_id)
+    {
+        track.slurs.push(EventRelation {
+            from: anchor,
+            to: target_id,
+        });
+    }
+    tools.slur = false;
+    document.status = "Slur added".into();
+    document.dirty = true;
+    true
+}
+
+#[test]
+/// Slur selection links two authored notes by stable event ID.
+///
+/// AI_CODE
+fn sheet_slur_tool_authors_stable_event_relation() {
+    let mut document = new_chart_document();
+    document
+        .chart
+        .tracks
+        .push(new_track(InstrumentKind::Strings));
+    let mut tools = SheetTools::default();
+    assert!(sheet_edit_pitch(&mut document, 0, 60, &tools));
+    assert!(sheet_edit_pitch(&mut document, 960, 62, &tools));
+
+    tools.slur = true;
+    assert!(sheet_edit_slur(&mut document, 0, 60, &mut tools));
+    assert!(tools.slur_anchor.is_some());
+    assert!(sheet_edit_slur(&mut document, 960, 62, &mut tools));
+    assert!(!tools.slur);
+    assert_eq!(document.chart.tracks[0].slurs.len(), 1);
+    assert_ne!(
+        document.chart.tracks[0].slurs[0].from,
+        document.chart.tracks[0].slurs[0].to
+    );
+    assert_eq!(
+        layout_track(&document.chart, &document.chart.tracks[0])
+            .slurs
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -1159,24 +1282,185 @@ pub(crate) fn setup_editor(mut commands: Commands) {
         TextColor(Color::srgb(0.9, 0.95, 1.0)),
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(40.0),
+            top: Val::Px(122.0),
             left: Val::Px(70.0),
             right: Val::Px(40.0),
             ..default()
         },
         EditorText,
     ));
+    // \\/ AI_CODE \\
+    let toolbar = [
+        ("WHOLE", SheetToolAction::Duration(NoteValue::Whole)),
+        ("HALF", SheetToolAction::Duration(NoteValue::Half)),
+        ("QUARTER", SheetToolAction::Duration(NoteValue::Quarter)),
+        ("EIGHTH", SheetToolAction::Duration(NoteValue::Eighth)),
+        ("16TH", SheetToolAction::Duration(NoteValue::Sixteenth)),
+        ("DOT", SheetToolAction::Dots),
+        ("TRIPLET", SheetToolAction::Tuplet),
+        ("REST", SheetToolAction::Rest),
+        ("TIE", SheetToolAction::Tie),
+        ("PLACE/REMOVE", SheetToolAction::Remove),
+        ("VOICE", SheetToolAction::Voice),
+        ("DYNAMIC", SheetToolAction::Dynamic),
+        ("ARTIC", SheetToolAction::Articulation),
+        ("PIECE", SheetToolAction::Piece),
+        ("SLUR", SheetToolAction::Slur),
+    ];
+    for (index, (label, action)) in toolbar.into_iter().enumerate() {
+        let column = index % 7;
+        let row = index / 7;
+        commands.spawn((
+            Button::default(),
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(12.0 + row as f32 * 34.0),
+                left: Val::Px(12.0 + column as f32 * 88.0),
+                width: Val::Px(82.0),
+                height: Val::Px(28.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.13, 0.18, 0.19)),
+            BorderColor::all(Color::srgb(0.36, 0.48, 0.46)),
+            Text::new(label),
+            TextFont {
+                font_size: FontSize::Px(12.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.9, 0.95, 0.9)),
+            action,
+            SheetToolbarButton,
+        ));
+    }
+    // /\\ AI_CODE /\\
 }
 
 /// AI_CODE
-pub(crate) fn cleanup_editor(mut commands: Commands, entities: Query<Entity, With<EditorText>>) {
+pub(crate) fn cleanup_editor(
+    mut commands: Commands,
+    entities: Query<Entity, With<EditorText>>,
+    toolbar: Query<Entity, With<SheetToolbarButton>>,
+) {
     for entity in &entities {
+        commands.entity(entity).despawn();
+    }
+    for entity in &toolbar {
         commands.entity(entity).despawn();
     }
     commands.remove_resource::<EditorDocument>();
     commands.remove_resource::<EditorBrowser>();
     commands.remove_resource::<EditorLibraries>();
     commands.remove_resource::<SheetTools>();
+}
+
+/// Apply clicks from the sheet notation palette to the active editor tools.
+///
+/// AI_CODE
+pub(crate) fn sheet_toolbar_input(
+    document: Res<EditorDocument>,
+    mut tools: ResMut<SheetTools>,
+    buttons: Query<(&Interaction, &SheetToolAction), Changed<Interaction>>,
+) {
+    if document.view_mode != EditorViewMode::Sheet || document.metadata_mode {
+        return;
+    }
+    for (interaction, action) in &buttons {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        match action {
+            SheetToolAction::Duration(value) => tools.duration = *value,
+            SheetToolAction::Dots => tools.dots = (tools.dots + 1) % 4,
+            SheetToolAction::Tuplet => {
+                tools.tuplet = if tools.tuplet.is_some() {
+                    None
+                } else {
+                    Some(Tuplet {
+                        actual: 3,
+                        normal: 2,
+                    })
+                };
+            }
+            SheetToolAction::Rest => tools.rest = !tools.rest,
+            SheetToolAction::Tie => tools.tied = !tools.tied,
+            SheetToolAction::Remove => tools.remove = !tools.remove,
+            SheetToolAction::Voice => tools.voice = tools.voice % 4 + 1,
+            SheetToolAction::Dynamic => {
+                tools.dynamic = match tools.dynamic {
+                    None => Some(DynamicLevel::Ppp),
+                    Some(DynamicLevel::Ppp) => Some(DynamicLevel::Pp),
+                    Some(DynamicLevel::Pp) => Some(DynamicLevel::Mp),
+                    Some(DynamicLevel::Mp) => Some(DynamicLevel::Mf),
+                    Some(DynamicLevel::Mf) => Some(DynamicLevel::F),
+                    Some(DynamicLevel::F) => Some(DynamicLevel::Ff),
+                    Some(DynamicLevel::Ff) => Some(DynamicLevel::Fff),
+                    Some(DynamicLevel::Fff) => None,
+                };
+            }
+            SheetToolAction::Articulation => {
+                tools.articulation = match tools.articulation {
+                    None => Some(Articulation::Staccato),
+                    Some(Articulation::Staccato) => Some(Articulation::Tenuto),
+                    Some(Articulation::Tenuto) => Some(Articulation::Marcato),
+                    Some(Articulation::Marcato) => Some(Articulation::Accent),
+                    Some(Articulation::Accent) => Some(Articulation::Fermata),
+                    _ => None,
+                };
+            }
+            SheetToolAction::Piece => {
+                if let Some(track) = document.chart.tracks.get(document.track_focus)
+                    && let Some(kit) = track.kit.as_ref()
+                    && !kit.pieces.is_empty()
+                {
+                    tools.piece_index = (tools.piece_index + 1) % kit.pieces.len();
+                }
+            }
+            SheetToolAction::Slur => {
+                tools.slur = !tools.slur;
+                tools.slur_anchor = None;
+            }
+        }
+    }
+}
+
+/// Keep toolbar visibility and active-state colors in sync with the current sheet tools.
+///
+/// AI_CODE
+pub(crate) fn sheet_toolbar_display(
+    document: Res<EditorDocument>,
+    tools: Res<SheetTools>,
+    mut buttons: Query<(&SheetToolAction, &mut BackgroundColor, &mut Visibility)>,
+) {
+    let visible = document.view_mode == EditorViewMode::Sheet
+        && !document.metadata_mode
+        && document.text_entry.is_none();
+    for (action, mut background, mut visibility) in &mut buttons {
+        *visibility = if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        let active = match action {
+            SheetToolAction::Duration(value) => tools.duration == *value,
+            SheetToolAction::Dots => tools.dots > 0,
+            SheetToolAction::Tuplet => tools.tuplet.is_some(),
+            SheetToolAction::Rest => tools.rest,
+            SheetToolAction::Tie => tools.tied,
+            SheetToolAction::Remove => tools.remove,
+            SheetToolAction::Voice => false,
+            SheetToolAction::Dynamic => tools.dynamic.is_some(),
+            SheetToolAction::Articulation => tools.articulation.is_some(),
+            SheetToolAction::Piece => false,
+            SheetToolAction::Slur => tools.slur,
+        };
+        *background = BackgroundColor(if active {
+            Color::srgb(0.12, 0.42, 0.34)
+        } else {
+            Color::srgb(0.13, 0.18, 0.19)
+        });
+    }
 }
 
 /// AI_CODE

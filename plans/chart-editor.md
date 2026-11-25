@@ -72,13 +72,15 @@ for those views, so this part is still open.
 
 ### 6. Sheet view (editor)
 
-In progress: a graphical four-quarter-note staff, keyboard-operated notation palette,
-snapped pitched/rest placement, and selected-piece percussion lane placement are present.
-Still needed: a clickable toolbar, complete relationship authoring, and visual/manual QA.
-Full score engraving remains in 6.1.
+Implemented: a graphical four-quarter-note staff, clickable notation toolbar, snapped
+pitched/rest placement, selected-piece percussion lane placement, chord stacking, per-note
+removal, and stable-ID slur authoring. Shared layout beams, ties, slurs, and tuplets are
+rendered. Manual visual QA remains; complete score engraving remains in 6.1.
 
-- Toolbar: note-duration palette (whole/half/quarter/eighth/sixteenth, tuplets, dot/rest/
-  tie controls, dynamics, articulations, and a Place/Remove tool selector).
+- Toolbar: clickable note-duration palette (whole/half/quarter/eighth/sixteenth), tuplets,
+  dot/rest/tie controls, dynamics, articulations, voice selection, percussion piece
+  selection, slur authoring, and a Place/Remove tool selector. Keyboard shortcuts remain
+  available.
 - Staff rendering for the focused track (B5), using the Notation Engine (B4): pitched
   staff for `Strings`/`Voice` tracks; a rhythm staff (one line per lane, no pitch) for
   `Percussion` tracks. Explicit rests are rendered exactly; inferred rests fill only gaps
@@ -89,6 +91,9 @@ Full score engraving remains in 6.1.
 - Same-beat stacking: clicking an occupied beat position with an unoccupied
   line/space adds a stacked note (chord) rather than replacing the existing note. "Remove
   Note" removes only the specific note at the clicked pitch, not the whole beat position.
+- Relationship authoring: the Slur tool links two existing pitched notes by stable event
+  IDs; the shared notation layout supplies beam, tie, slur, and tuplet groups to the sheet
+  renderer.
 
 ### 6.1. Complete score rendering
 

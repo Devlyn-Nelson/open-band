@@ -157,6 +157,23 @@ fn draw_rest(gizmos: &mut Gizmos, position: Vec2, value: NoteValue, color: Color
     }
 }
 
+/// Draw a compact arched relationship between two notation positions.
+///
+/// AI_CODE
+fn draw_curve(gizmos: &mut Gizmos, start: Vec2, end: Vec2, height: f32, color: Color) {
+    if end.x <= start.x {
+        return;
+    }
+    let mut previous = start;
+    for segment in 1..=12 {
+        let progress = segment as f32 / 12.0;
+        let point =
+            start.lerp(end, progress) + Vec2::Y * (height * 4.0 * progress * (1.0 - progress));
+        gizmos.line_2d(previous, point, color);
+        previous = point;
+    }
+}
+
 /// Render and edit the focused track in a centered, four-beat sheet viewport.
 ///
 /// AI_CODE
@@ -227,7 +244,7 @@ pub(crate) fn sheet_view_system(
             }
         }
     }
-    for symbol in &layout.symbols {
+    for (symbol_index, symbol) in layout.symbols.iter().enumerate() {
         let Some(x) = viewport.x_at(symbol.start) else {
             continue;
         };
@@ -261,7 +278,11 @@ pub(crate) fn sheet_view_system(
                 note_color,
             );
         }
-        if matches!(symbol.value, NoteValue::Eighth | NoteValue::Sixteenth) {
+        let beamed = layout
+            .beams
+            .iter()
+            .any(|group| group.contains(&symbol_index));
+        if matches!(symbol.value, NoteValue::Eighth | NoteValue::Sixteenth) && !beamed {
             gizmos.line_2d(
                 Vec2::new(x + 5.0, y + 25.0),
                 Vec2::new(x + 12.0, y + 19.0),
@@ -304,6 +325,97 @@ pub(crate) fn sheet_view_system(
             }
         }
     }
+    // \\/ AI_CODE \\
+    let symbol_position = |index: usize| {
+        let symbol = layout.symbols.get(index)?;
+        let x = viewport.x_at(symbol.start)?;
+        let y = match &symbol.kind {
+            NotationSymbolKind::Pitched { pitch, spelling } => {
+                let (step, _) = pitch_step(*pitch, spelling.as_ref());
+                step_y(step, clef)
+            }
+            NotationSymbolKind::Percussion { lane, .. } => lane.map_or(STAFF_Y, line_y),
+            NotationSymbolKind::Rest => return None,
+        };
+        Some(Vec2::new(x, y))
+    };
+    for group in &layout.beams {
+        for pair in group.windows(2) {
+            let (Some(start), Some(end)) = (symbol_position(pair[0]), symbol_position(pair[1]))
+            else {
+                continue;
+            };
+            gizmos.line_2d(
+                start + Vec2::new(5.0, 25.0),
+                end + Vec2::new(5.0, 25.0),
+                note_color,
+            );
+            if layout.symbols[pair[0]].value == NoteValue::Sixteenth
+                || layout.symbols[pair[1]].value == NoteValue::Sixteenth
+            {
+                gizmos.line_2d(
+                    start + Vec2::new(5.0, 20.0),
+                    end + Vec2::new(5.0, 20.0),
+                    note_color,
+                );
+            }
+        }
+    }
+    for chain in &layout.ties {
+        for pair in chain.windows(2) {
+            let (Some(start), Some(end)) = (symbol_position(pair[0]), symbol_position(pair[1]))
+            else {
+                continue;
+            };
+            draw_curve(
+                &mut gizmos,
+                start + Vec2::new(5.0, 0.0),
+                end - Vec2::new(5.0, 0.0),
+                9.0,
+                note_color,
+            );
+        }
+    }
+    for relation in &layout.slurs {
+        let (Some(start), Some(end)) =
+            (symbol_position(relation.from), symbol_position(relation.to))
+        else {
+            continue;
+        };
+        draw_curve(
+            &mut gizmos,
+            start + Vec2::new(5.0, 0.0),
+            end - Vec2::new(5.0, 0.0),
+            18.0,
+            note_color,
+        );
+    }
+    for group in &layout.tuplets {
+        let positions = group
+            .iter()
+            .filter_map(|index| symbol_position(*index))
+            .collect::<Vec<_>>();
+        let (Some(first), Some(last)) = (positions.first(), positions.last()) else {
+            continue;
+        };
+        let y = positions
+            .iter()
+            .map(|position| position.y)
+            .fold(f32::MIN, f32::max)
+            + 35.0;
+        gizmos.line_2d(
+            Vec2::new(first.x, y - 5.0),
+            Vec2::new(first.x, y),
+            staff_color,
+        );
+        gizmos.line_2d(Vec2::new(first.x, y), Vec2::new(last.x, y), staff_color);
+        gizmos.line_2d(
+            Vec2::new(last.x, y),
+            Vec2::new(last.x, y - 5.0),
+            staff_color,
+        );
+    }
+    // /\\ AI_CODE /\\
     for rest in &layout.rests {
         if let Some(x) = viewport.x_at(rest.start) {
             let color = if rest.explicit {
@@ -437,13 +549,17 @@ pub(crate) fn sheet_view_system(
                     };
                     gizmos.circle_2d(Vec2::new(x, y), 8.0, cursor_color);
                     if mouse.just_pressed(MouseButton::Left) {
-                        sheet_edit_spelled_pitch(
-                            &mut document,
-                            snapped,
-                            pitch,
-                            Some(spelling),
-                            &tools,
-                        );
+                        if tools.slur {
+                            super::sheet_edit_slur(&mut document, snapped, pitch, &mut tools);
+                        } else {
+                            sheet_edit_spelled_pitch(
+                                &mut document,
+                                snapped,
+                                pitch,
+                                Some(spelling),
+                                &tools,
+                            );
+                        }
                     }
                 }
             }

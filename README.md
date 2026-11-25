@@ -181,10 +181,14 @@ resolution and the active time signature; tempo changes do not move the grid.
 Sheet mode shows a four-quarter-note staff starting at the shared position. Click a line
 or space to place a note using the active snap interval; hold `Shift` for a sharp or
 `Alt` for a flat. In percussion tracks, `P` cycles kit pieces and clicks target the
-selected piece's lane. The on-screen palette uses `F1`-`F5` for duration, `F6` for dots,
-`F7` for triplets, `F8` for rests, `F9` for the tied flag, `F10` for place/remove,
-`F11` for voice, `F12` for dynamics, and `A` for articulations. Removal has no undo.
-The palette is keyboard-operated; complete notation rendering is not yet implemented.
+selected piece's lane. The clickable on-screen palette selects duration, dots, triplets,
+rests, ties, place/remove, voice, dynamics, articulations, percussion pieces, and the slur
+tool. Keyboard shortcuts remain available: `F1`-`F5` for duration, `F6` for dots, `F7` for
+triplets, `F8` for rests, `F9` for the tied flag, `F10` for place/remove, `F11` for voice,
+`F12` for dynamics, `A` for articulations, and `P` for percussion pieces. With the slur tool
+active, click two existing pitched notes in order to link them by stable event IDs. The sheet
+draws beams, ties, slurs, and tuplet brackets from the shared notation layout. Removal has
+no undo; full score engraving and manual visual QA remain in progress.
 Tab mode remains a text preview.
 In the event JSON editor, use `Left` / `Right`, `Home` / `End`, `Backspace`, and `Delete`
 to edit text, `Enter` to commit, or `Esc` to cancel. `Ctrl+A` clears the text. Invalid JSON
