@@ -2,10 +2,20 @@ use super::*;
 use bevy::input::mouse::MouseWheel;
 use bevy::ui_widgets::Activate;
 
-const TAB_TOP: f32 = 250.0;
+const TAB_TOP_SCREEN_MARGIN: f32 = 300.0;
 const TAB_BOTTOM_MARGIN: f32 = 24.0;
-const TAB_REFERENCE_BOTTOM: f32 = -300.0;
-const TAB_REFERENCE_HEIGHT: f32 = TAB_TOP - TAB_REFERENCE_BOTTOM;
+const TAB_REFERENCE_WINDOW_HEIGHT: f32 = 720.0;
+const TAB_REFERENCE_HEIGHT: f32 =
+    TAB_REFERENCE_WINDOW_HEIGHT - TAB_TOP_SCREEN_MARGIN - TAB_BOTTOM_MARGIN;
+
+/// Keep the tab start below editor controls while using the remaining vertical screen space.
+///
+/// AI_CODE
+fn tab_viewport_bounds(window_height: f32) -> (f32, f32) {
+    let bottom = -window_height / 2.0 + TAB_BOTTOM_MARGIN;
+    let preferred_top = window_height / 2.0 - TAB_TOP_SCREEN_MARGIN;
+    (preferred_top.max(bottom + 80.0), bottom)
+}
 
 /// A persistent non-note label in the vertical tab view.
 ///
@@ -57,8 +67,8 @@ fn tab_y(tick: u32, start: u32, span: u32, top: f32, bottom: f32) -> Option<f32>
 ///
 /// AI_CODE
 fn tab_visible_span(resolution: u32, beats_at_reference_height: u8, height: f32) -> u32 {
-    let available_height =
-        (TAB_TOP - (-height / 2.0 + TAB_BOTTOM_MARGIN)).max(TAB_REFERENCE_HEIGHT.min(80.0));
+    let (top, bottom) = tab_viewport_bounds(height);
+    let available_height = (top - bottom).max(80.0);
     let ticks = f64::from(resolution.max(1))
         * f64::from(beats_at_reference_height.max(2))
         * f64::from(available_height / TAB_REFERENCE_HEIGHT);
@@ -347,8 +357,7 @@ pub(crate) fn tab_view_system(
     }
     let Ok(window) = windows.single() else { return };
     let resolution = document.chart.resolution.max(1);
-    let top = TAB_TOP;
-    let bottom = (-window.height() / 2.0 + TAB_BOTTOM_MARGIN).min(top - 80.0);
+    let (top, bottom) = tab_viewport_bounds(window.height());
     let viewport_height = top - bottom;
     let span = tab_visible_span(resolution, document.tab_beats_per_screen, window.height());
     let view_start = document.current_tick;
@@ -739,13 +748,14 @@ mod tests {
     #[test]
     fn tab_time_maps_top_to_bottom() {
         let bottom = -300.0;
-        assert_eq!(tab_y(100, 100, 1000, TAB_TOP, bottom), Some(TAB_TOP));
+        let top = 250.0;
+        assert_eq!(tab_y(100, 100, 1000, top, bottom), Some(top));
         assert_eq!(
-            tab_y(600, 100, 1000, TAB_TOP, bottom),
-            Some((TAB_TOP + bottom) / 2.0)
+            tab_y(600, 100, 1000, top, bottom),
+            Some((top + bottom) / 2.0)
         );
-        assert_eq!(tab_y(1100, 100, 1000, TAB_TOP, bottom), None);
-        assert_eq!(tab_y(99, 100, 1000, TAB_TOP, bottom), None);
+        assert_eq!(tab_y(1100, 100, 1000, top, bottom), None);
+        assert_eq!(tab_y(99, 100, 1000, top, bottom), None);
     }
 
     /// Taller windows extend the view to the bottom and show more time at the same density.
@@ -755,9 +765,14 @@ mod tests {
     fn tab_visible_span_grows_with_window_height() {
         let standard = tab_visible_span(960, 8, 720.0);
         let tall = tab_visible_span(960, 8, 1440.0);
-        assert!(standard > 960 * 8);
+        assert_eq!(standard, 960 * 8);
         assert!(tall > standard);
-        assert_eq!(TAB_TOP - (-720.0 / 2.0 + TAB_BOTTOM_MARGIN), 586.0);
+        let (standard_top, standard_bottom) = tab_viewport_bounds(720.0);
+        let (tall_top, tall_bottom) = tab_viewport_bounds(1440.0);
+        assert_eq!(standard_top - standard_bottom, 396.0);
+        assert_eq!(tall_top - tall_bottom, 1116.0);
+        assert_eq!(720.0 / 2.0 - standard_top, TAB_TOP_SCREEN_MARGIN);
+        assert_eq!(1440.0 / 2.0 - tall_top, TAB_TOP_SCREEN_MARGIN);
     }
 
     /// A fret choice resolves through tuning/capo and records its preferred string separately.
