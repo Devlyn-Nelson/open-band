@@ -63,6 +63,17 @@ fn tab_y(tick: u32, start: u32, span: u32, top: f32, bottom: f32) -> Option<f32>
     Some(top - (top - bottom) * offset as f32 / span as f32)
 }
 
+/// Clip a note's duration endpoint to the bottom of the visible tab window.
+///
+/// AI_CODE
+fn tab_duration_end_y(start: u32, duration: u32, view_start: u32, span: u32, top: f32, bottom: f32) -> Option<f32> {
+    tab_y(start, view_start, span, top, bottom)?;
+    if duration == 0 {
+        return None;
+    }
+    Some(tab_y(start.saturating_add(duration), view_start, span, top, bottom).unwrap_or(bottom))
+}
+
 /// Compute the visible tick span at the selected density for the available vertical space.
 ///
 /// AI_CODE
@@ -585,12 +596,18 @@ pub(crate) fn tab_view_system(
             NotationSymbolKind::Rest => continue,
         };
         next_badges.push((text, x, y));
-        let end = symbol.start.saturating_add(symbol.duration);
-        if let Some(end_y) = y_for_tick(end) {
+        if let Some(end_y) = tab_duration_end_y(symbol.start, symbol.duration, view_start, span, top, bottom) {
+            for offset in -3..=3 {
+                gizmos.line_2d(
+                    Vec2::new(x + offset as f32, y),
+                    Vec2::new(x + offset as f32, end_y),
+                    Color::srgb(0.16, 0.54, 0.44),
+                );
+            }
             gizmos.line_2d(
-                Vec2::new(x, y + 10.0),
-                Vec2::new(x, end_y),
-                Color::srgb(0.86, 0.88, 0.82),
+                Vec2::new(x - 6.0, end_y),
+                Vec2::new(x + 6.0, end_y),
+                Color::srgb(0.16, 0.54, 0.44),
             );
         }
     }
@@ -845,6 +862,18 @@ pub(crate) fn tab_view_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Duration bars end at the authored tick or clip at the viewport boundary.
+    ///
+    /// AI_CODE
+    #[test]
+    fn tab_duration_bars_follow_note_end_and_clip() {
+        assert_eq!(tab_duration_end_y(0, 480, 0, 1920, 100.0, -300.0), Some(0.0));
+        assert_eq!(tab_duration_end_y(0, 240, 0, 1920, 100.0, -300.0), Some(50.0));
+        assert_eq!(tab_duration_end_y(960, 1920, 0, 1920, 100.0, -300.0), Some(-300.0));
+        assert_eq!(tab_duration_end_y(0, 1920, 0, 1920, 100.0, -300.0), Some(-300.0));
+        assert_eq!(tab_duration_end_y(0, 0, 0, 1920, 100.0, -300.0), None);
+    }
 
     /// Subdivision guides are unlabeled, progressively darker, and follow active meter beats.
     ///

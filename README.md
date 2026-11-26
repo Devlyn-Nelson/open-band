@@ -221,6 +221,8 @@ cycles the legacy interval for time navigation and the resize minimum; `DIV -` /
 control pointer placement precision in both views. Click a string to choose a fret from
 the tuning-derived fret/note grid.
 In place mode, a circle marks the snapped insertion position on the hovered string/lane.
+Each note badge has a green duration bar extending downward to its end tick, with
+a short end cap. Bars extending beyond the visible window clip at the bottom edge.
 The `PLACE/REMOVE` toolbar toggle and `F10` work in tab mode too. In remove mode,
 the outline surrounds the hovered note badge; click it to delete only that event,
 without choosing a fret or percussion piece. This also works on the `SPAN` rail.
