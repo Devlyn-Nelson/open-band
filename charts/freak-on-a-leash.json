@@ -85,29 +85,6 @@
             "vibrato": null
           },
           "note": 32
-        },
-        {
-          "id": "event-000004",
-          "start": 0,
-          "length": 8,
-          "performance": {
-            "preferred_string": 2,
-            "attack": null,
-            "transition": null,
-            "bend": null,
-            "motion": null,
-            "percussion_dynamics": null,
-            "roll": null,
-            "droll": null,
-            "percussion_grace": null,
-            "percussion_technique": null,
-            "sticking": null,
-            "hi_hat": null,
-            "harmonic": null,
-            "palm_mute": false,
-            "vibrato": null
-          },
-          "note": 32
         }
       ],
       "ties": [],

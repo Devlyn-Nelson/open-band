@@ -103,7 +103,7 @@ fn sheet_span(width: f32, resolution: u32, pixels_per_beat: u16) -> u32 {
 /// Snap a sheet tick to the nearest subdivision in the active meter beat.
 ///
 /// AI_CODE
-fn snap_sheet_tick(chart: &Chart, tick: u32, divisions: u8) -> u32 {
+pub(super) fn snap_sheet_tick(chart: &Chart, tick: u32, divisions: u8) -> u32 {
     let resolution = chart.resolution.max(1);
     let layouts = measures(chart, tick.saturating_add(1));
     let Some(measure) = layouts
@@ -127,7 +127,7 @@ fn snap_sheet_tick(chart: &Chart, tick: u32, divisions: u8) -> u32 {
 /// Return a greyscale subdivision guide color, darkest at the finest division.
 ///
 /// AI_CODE
-fn subdivision_guide_color(index: u8, divisions: u8) -> Color {
+pub(super) fn subdivision_guide_color(index: u8, divisions: u8) -> Color {
     let progress =
         f32::from(index.saturating_sub(1)) / f32::from(divisions.saturating_sub(2).max(1));
     let brightness = 0.34 - progress.clamp(0.0, 1.0) * 0.14;
@@ -137,7 +137,7 @@ fn subdivision_guide_color(index: u8, divisions: u8) -> Color {
 /// Return guide ticks strictly inside one beat for the configured division count.
 ///
 /// AI_CODE
-fn beat_subdivision_ticks(beat_start: u32, beat_ticks: u32, divisions: u8) -> Vec<u32> {
+pub(super) fn beat_subdivision_ticks(beat_start: u32, beat_ticks: u32, divisions: u8) -> Vec<u32> {
     let divisions = divisions.clamp(1, SHEET_BEAT_DIVISIONS_MAX);
     (1..divisions)
         .map(|index| {
@@ -1387,6 +1387,9 @@ pub(crate) fn sheet_view_system(
         cursor_color,
     );
 
+    if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
+        return;
+    }
     for (key, value) in [
         (KeyCode::F1, NoteValue::Whole),
         (KeyCode::F2, NoteValue::Half),

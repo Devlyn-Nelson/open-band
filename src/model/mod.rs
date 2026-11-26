@@ -1766,6 +1766,8 @@ impl Chart {
             let event_ids = track
                 .notes
                 .iter()
+                .chain(track.phrases.iter().flat_map(|phrase| phrase.notes.iter()))
+                .chain(track.lyric_verses.iter().flat_map(|verse| verse.phrases.iter()).flat_map(|phrase| phrase.notes.iter()))
                 .filter_map(|event| event.id.as_deref())
                 .collect::<Vec<_>>();
             for (index, event) in track.notes.iter().enumerate() {

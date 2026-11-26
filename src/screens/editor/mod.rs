@@ -181,6 +181,10 @@ pub(crate) enum EditorTextTarget {
     VocalRangeHigh,
     ScoreEvent(EventSource),
     NewScoreEvent,
+    ScoreNotation(EventSource),
+    ScorePerformance(EventSource),
+    ScoreRelationships,
+    ScoreNavigation,
 }
 
 /// AI_CODE
@@ -312,6 +316,486 @@ fn replace_editor_event(
     *target = event;
     document.dirty = true;
     Ok(())
+}
+
+/// Editable score relationships; phrase spans remain separate from their authored notes.
+///
+/// AI_CODE
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditorRelationships {
+    ties: Vec<EventRelation>,
+    slurs: Vec<EventRelation>,
+    #[serde(default)]
+    chords: Vec<EditorChord>,
+    phrases: Vec<Phrase>,
+    star_power_phrases: Vec<Phrase>,
+}
+
+/// Assign a shared chord ID to its complete set of stable event IDs atomically.
+///
+/// AI_CODE
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditorChord {
+    id: String,
+    events: Vec<String>,
+}
+
+/// Navigation and expressive spans can be replaced without rewriting the event timeline.
+///
+/// AI_CODE
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditorNavigation {
+    structure: Vec<ScoreMarker>,
+    tempo_text: Vec<TempoText>,
+    expressions: Vec<ScoreExpression>,
+}
+
+const EDITOR_NOTATION_FIELDS: &[&str] = &[
+    "length", "voice", "staff", "dots", "tied", "tuplet", "chord", "dynamic",
+    "articulations", "stem", "grace", "spelling",
+];
+
+/// Open a section-specific JSON editor using the same cursor and commit controls as event edits.
+///
+/// AI_CODE
+fn begin_score_section_edit(
+    document: &mut EditorDocument,
+    target: EditorTextTarget,
+) -> Result<(), String> {
+    let track = document.chart.tracks.get(document.track_focus).ok_or("No focused track")?;
+    let value = match target {
+        EditorTextTarget::ScoreNotation(source) | EditorTextTarget::ScorePerformance(source) => {
+            let event = editor_source_event(track, source).ok_or("No selected event")?;
+            let mut value = serde_json::to_value(event).map_err(|error| error.to_string())?;
+            if matches!(target, EditorTextTarget::ScoreNotation(_)) {
+                let fields = value.as_object_mut().ok_or("Expected event object")?;
+                fields.retain(|key, _| EDITOR_NOTATION_FIELDS.contains(&key.as_str()));
+                for (key, field) in serde_json::json!({
+                    "voice":event.voice,"staff":event.staff,"dots":event.dots,"tied":event.tied,
+                    "tuplet":event.tuplet,"chord":event.chord,"dynamic":event.dynamic,
+                    "articulations":event.articulations,"stem":event.stem,"grace":event.grace,
+                    "spelling":null
+                }).as_object().ok_or("Expected notation object")? {
+                    fields.entry(key.clone()).or_insert(field.clone());
+                }
+                value
+            } else {
+                let mut hints = value.get("performance").filter(|value| !value.is_null()).cloned()
+                    .unwrap_or_else(|| serde_json::json!({"preferred_string":null,"attack":null,"transition":null,
+                        "roll":null,"droll":null,"palm_mute":false}));
+                if let NoteContent::Percussive { piece } = &event.content {
+                    hints["piece"] = serde_json::json!(piece);
+                }
+                if let NoteContent::Pitched { note, .. } = &event.content
+                    && let Some(string) = event.performance.as_ref().and_then(|hints| hints.preferred_string)
+                    && let Some(open) = track.tuning.as_ref().and_then(|tuning| tuning.open_midi().ok())
+                        .and_then(|notes| notes.get(string).copied())
+                {
+                    hints["preferred_fret"] = serde_json::json!(i16::from(*note) - i16::from(open) - i16::from(track.capo.unwrap_or(0)));
+                }
+                hints
+            }
+        }
+        EditorTextTarget::ScoreRelationships => serde_json::to_value(EditorRelationships {
+            ties: track.ties.clone(),
+            slurs: track.slurs.clone(),
+            chords: {
+                let mut groups = std::collections::BTreeMap::<String, Vec<String>>::new();
+                for event in all_track_events(track) {
+                    if let (Some(chord), Some(id)) = (&event.chord, &event.id) {
+                        groups.entry(chord.clone()).or_default().push(id.clone());
+                    }
+                }
+                groups.into_iter().map(|(id, events)| EditorChord { id, events }).collect()
+            },
+            phrases: track.phrases.iter().map(|phrase| Phrase {
+                start: phrase.start,
+                duration_ticks: phrase.duration_ticks,
+            }).collect(),
+            star_power_phrases: track.star_power_phrases.clone(),
+        }).map_err(|error| error.to_string())?,
+        EditorTextTarget::ScoreNavigation => serde_json::to_value(EditorNavigation {
+            structure: document.chart.structure.clone(),
+            tempo_text: document.chart.tempo_text.clone(),
+            expressions: document.chart.expressions.clone(),
+        }).map_err(|error| error.to_string())?,
+        _ => return Err("Not a score section".into()),
+    };
+    let buffer = value.to_string();
+    document.event_text_cursor = Some(buffer.len());
+    document.text_entry = Some(EditorTextEntry { target, buffer });
+    Ok(())
+}
+
+/// Validate a section edit on a cloned score before committing, preserving unrelated data.
+///
+/// AI_CODE
+fn replace_score_section(
+    document: &mut EditorDocument,
+    target: EditorTextTarget,
+    buffer: &str,
+) -> Result<(), String> {
+    let mut chart = document.chart.clone();
+    let track = chart.tracks.get_mut(document.track_focus).ok_or("No focused track")?;
+    match target {
+        EditorTextTarget::ScoreNotation(source) | EditorTextTarget::ScorePerformance(source) => {
+            let tuning = track.tuning.clone();
+            let capo = track.capo.unwrap_or(0);
+            let kind = track.kind;
+            let event = editor_source_event_mut(track, source).ok_or("Event no longer exists")?;
+            let mut input: serde_json::Value = serde_json::from_str(buffer).map_err(|error| error.to_string())?;
+            let mut value = serde_json::to_value(&*event).map_err(|error| error.to_string())?;
+            if matches!(target, EditorTextTarget::ScoreNotation(_)) {
+                let fields = input.as_object().ok_or("Notation must be a JSON object")?;
+                for (key, field) in fields {
+                    if !EDITOR_NOTATION_FIELDS.contains(&key.as_str()) {
+                        return Err(format!("{key} is not a notation field"));
+                    }
+                    value[key] = field.clone();
+                }
+            } else {
+                if let Some(fields) = input.as_object_mut() {
+                    if let Some(piece) = fields.remove("piece") {
+                        if kind != InstrumentKind::Percussion {
+                            return Err("Piece mapping is only available on percussion events".into());
+                        }
+                        value["piece"] = piece;
+                    }
+                    if let Some(fret) = fields.remove("preferred_fret") {
+                        let fret = fret.as_u64().filter(|fret| *fret <= 24).ok_or("Preferred fret must be 0-24")?;
+                        let string = fields.get("preferred_string").and_then(|string| string.as_u64())
+                            .and_then(|string| usize::try_from(string).ok()).ok_or("Choose a preferred string with the fret")?;
+                        let notes = tuning.as_ref().ok_or("Fret guidance requires a tuning")?.open_midi()?;
+                        let open = notes.get(string).ok_or("Preferred string is outside the tuning")?;
+                        if event.note().map(u64::from) != Some(u64::from(*open) + u64::from(capo) + fret) {
+                            return Err("Preferred string/fret must match the written pitch".into());
+                        }
+                    }
+                    let allowed = serde_json::to_value(serde_json::from_value::<PerformanceHints>(serde_json::json!({}))
+                        .map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+                    if let Some(key) = fields.keys().find(|key| allowed.get(*key).is_none()) {
+                        return Err(format!("{key} is not a performance field"));
+                    }
+                } else if !input.is_null() {
+                    return Err("Performance must be an object or null".into());
+                }
+                value["performance"] = input;
+            }
+            let replacement: ChartEvent = serde_json::from_value(value).map_err(|error| error.to_string())?;
+            if replacement.voice == 0 || replacement.staff == 0 || replacement.dots > 2
+                || replacement.tuplet.is_some_and(|tuplet| !tuplet.valid())
+            {
+                return Err("Notation needs positive voice/staff, at most two dots, and a valid tuplet ratio".into());
+            }
+            if let NoteContent::Pitched { note, spelling: Some(spelling) } = &replacement.content {
+                let degree = ['C', 'D', 'E', 'F', 'G', 'A', 'B']
+                    .iter().position(|step| *step == spelling.step.to_ascii_uppercase())
+                    .ok_or("Spelling step must be A-G")?;
+                let natural = [0, 2, 4, 5, 7, 9, 11][degree];
+                let spelled = (i32::from(spelling.octave) + 1) * 12 + natural + i32::from(spelling.alter);
+                if spelled != i32::from(*note) {
+                    return Err("Spelling must preserve the sounding MIDI pitch".into());
+                }
+            }
+            *event = replacement;
+        }
+        EditorTextTarget::ScoreRelationships => {
+            let edit: EditorRelationships = serde_json::from_str(buffer).map_err(|error| error.to_string())?;
+            let events = all_track_events(track).collect::<Vec<_>>();
+            for (kind, relations) in [("tie", &edit.ties), ("slur", &edit.slurs)] {
+                let mut pairs = HashSet::new();
+                for relation in relations {
+                    if !pairs.insert((&relation.from, &relation.to)) {
+                        return Err(format!("Duplicate {kind} relationship"));
+                    }
+                    let from = events.iter().find(|event| event.id.as_ref() == Some(&relation.from))
+                        .ok_or("Unknown relationship start event ID")?;
+                    let to = events.iter().find(|event| event.id.as_ref() == Some(&relation.to))
+                        .ok_or("Unknown relationship end event ID")?;
+                    if from.start >= to.start || from.voice != to.voice || from.staff != to.staff {
+                        return Err(format!("A {kind} must go forward in time on the same voice and staff"));
+                    }
+                    if kind == "tie" && (from.note().is_none() || from.note() != to.note()
+                        || from.start.checked_add(from.duration_ticks(chart.resolution)) != Some(to.start))
+                    {
+                        return Err("Tie endpoints must have matching pitches and contiguous timing".into());
+                    }
+                }
+            }
+            let mut assigned = HashSet::new();
+            let mut chord_ids = HashSet::new();
+            for chord in &edit.chords {
+                if chord.id.trim().is_empty() || !chord_ids.insert(&chord.id) || chord.events.len() < 2 {
+                    return Err("Chord groups need a unique non-empty ID and at least two events".into());
+                }
+                let mut members = Vec::new();
+                for id in &chord.events {
+                    if !assigned.insert(id.clone()) {
+                        return Err("An event cannot belong to multiple chord groups".into());
+                    }
+                    let event = events.iter().find(|event| event.id.as_deref() == Some(id)).ok_or("Unknown chord event ID")?;
+                    if !matches!(event.content, NoteContent::Pitched { .. }) {
+                        return Err("Chord members must be pitched events".into());
+                    }
+                    members.push(*event);
+                }
+                let first = members[0];
+                if members.iter().any(|event| event.start != first.start || event.voice != first.voice
+                    || event.staff != first.staff || event.length != first.length || event.dots != first.dots
+                    || event.tuplet != first.tuplet)
+                {
+                    return Err("Chord members must share tick, voice, staff, and duration".into());
+                }
+            }
+            for span in edit.phrases.iter().chain(&edit.star_power_phrases) {
+                if span.duration_ticks == 0 || span.start.checked_add(span.duration_ticks).is_none() {
+                    return Err("Phrase spans need a non-zero duration within the tick range".into());
+                }
+            }
+            if edit.phrases.len() < track.phrases.len()
+                && track.phrases[edit.phrases.len()..].iter().any(|phrase| !phrase.notes.is_empty())
+            {
+                return Err("Cannot remove a phrase span containing notes".into());
+            }
+            track.ties = edit.ties;
+            track.slurs = edit.slurs;
+            for event in track.notes.iter_mut()
+                .chain(track.phrases.iter_mut().flat_map(|phrase| phrase.notes.iter_mut()))
+                .chain(track.lyric_verses.iter_mut().flat_map(|verse| verse.phrases.iter_mut()).flat_map(|phrase| phrase.notes.iter_mut()))
+            {
+                event.chord = edit.chords.iter().find(|chord| event.id.as_ref().is_some_and(|id| chord.events.contains(id)))
+                    .map(|chord| chord.id.clone());
+            }
+            for (index, span) in edit.phrases.iter().enumerate() {
+                if let Some(phrase) = track.phrases.get_mut(index) {
+                    phrase.start = span.start;
+                    phrase.duration_ticks = span.duration_ticks;
+                } else {
+                    track.phrases.push(VocalPhrase {
+                        start: span.start, duration_ticks: span.duration_ticks, text: String::new(),
+                        syllable: None, melisma: false, hyphen_after: false, breath_after: false,
+                        notes: Vec::new(),
+                    });
+                }
+            }
+            track.phrases.truncate(edit.phrases.len());
+            track.star_power_phrases = edit.star_power_phrases;
+        }
+        EditorTextTarget::ScoreNavigation => {
+            let edit: EditorNavigation = serde_json::from_str(buffer).map_err(|error| error.to_string())?;
+            chart.structure = edit.structure;
+            chart.tempo_text = edit.tempo_text;
+            chart.expressions = edit.expressions;
+        }
+        _ => return Err("Not a score section".into()),
+    }
+    let existing_warnings = document.chart.validate();
+    if let Some(warning) = chart.validate().into_iter().find(|warning| !existing_warnings.contains(warning)) {
+        return Err(warning);
+    }
+    document.chart = chart;
+    document.dirty = true;
+    Ok(())
+}
+
+/// Notation and performance section edits preserve pitch, timing, and stable event IDs.
+///
+/// AI_CODE
+#[test]
+fn score_section_edits_preserve_pitch_and_independent_hints() {
+    let mut document = new_chart_document();
+    document.chart.tracks.push(new_track(InstrumentKind::Strings));
+    assert!(sheet_edit_pitch(&mut document, 0, 61, &SheetTools::default()));
+    let id = document.chart.tracks[0].notes[0].id.clone();
+    replace_score_section(&mut document, EditorTextTarget::ScoreNotation(EventSource::Track(0)),
+        r#"{"spelling":{"step":"D","alter":-1,"octave":4},"dynamic":"mf","articulations":["accent"]}"#).unwrap();
+    replace_score_section(&mut document, EditorTextTarget::ScorePerformance(EventSource::Track(0)),
+        r#"{"preferred_string":0,"palm_mute":true}"#).unwrap();
+    let event = &document.chart.tracks[0].notes[0];
+    assert_eq!(event.id, id);
+    assert_eq!(event.start, 0);
+    assert!(matches!(&event.content, NoteContent::Pitched { note: 61, spelling: Some(spelling) } if spelling.step == 'D' && spelling.alter == -1));
+    assert!(event.performance.as_ref().unwrap().palm_mute);
+    let before = serde_json::to_string(&document.chart).unwrap();
+    assert!(replace_score_section(&mut document, EditorTextTarget::ScoreNotation(EventSource::Track(0)),
+        r#"{"spelling":{"step":"C","alter":0,"octave":4}}"#).is_err());
+    assert_eq!(serde_json::to_string(&document.chart).unwrap(), before);
+}
+
+/// Explicit ties, slurs, chords, and phrase spans round-trip without changing authored notes.
+///
+/// AI_CODE
+#[test]
+fn score_section_relationships_and_navigation_round_trip() {
+    let mut document = new_chart_document();
+    document.chart.tracks.push(new_track(InstrumentKind::Strings));
+    document.chart.tracks[0].notes = serde_json::from_str(r#"[
+        {"id":"a","start":0,"length":4,"note":61},
+        {"id":"b","start":0,"length":4,"note":65},
+        {"id":"c","start":960,"length":4,"note":61}
+    ]"#).unwrap();
+    replace_score_section(&mut document, EditorTextTarget::ScoreRelationships, r#"{
+        "ties":[{"from":"a","to":"c"}],"slurs":[{"from":"b","to":"c"}],
+        "chords":[{"id":"harmony","events":["a","b"]}],
+        "phrases":[{"start":0,"duration_ticks":1920}],"star_power_phrases":[]
+    }"#).unwrap();
+    let layout = layout_track(&document.chart, &document.chart.tracks[0]);
+    assert_eq!(layout.chord_groups.len(), 1);
+    assert_eq!(layout.ties.len(), 1);
+    assert_eq!(layout.slurs.len(), 1);
+    replace_score_section(&mut document, EditorTextTarget::ScoreNotation(EventSource::Track(1)),
+        r#"{"grace":{"kind":"acciaccatura","slash":true,"principal":"c","order":0}}"#).unwrap();
+    replace_score_section(&mut document, EditorTextTarget::ScoreNotation(EventSource::Track(2)),
+        r#"{"tuplet":{"actual":5,"normal":4},"dots":1,"stem":"up"}"#).unwrap();
+    let timeline = serde_json::to_string(&document.chart.tracks).unwrap();
+    replace_score_section(&mut document, EditorTextTarget::ScoreNavigation, r#"{
+        "structure":[{"type":"repeat_start","tick":0},{"type":"repeat_end","tick":960,"times":3},
+            {"type":"ending_start","tick":0,"number":1},{"type":"ending_end","tick":960,"number":1},
+            {"type":"segno","tick":0},{"type":"coda","tick":960},{"type":"fine","tick":960},
+            {"type":"rehearsal","tick":0,"label":"Verse"}],
+        "tempo_text":[{"tick":0,"text":"Moderato","bpm":null}],"expressions":[]
+    }"#).unwrap();
+    assert_eq!(serde_json::to_string(&document.chart.tracks).unwrap(), timeline);
+    let json = serde_json::to_string(&document.chart).unwrap();
+    let reloaded: Chart = serde_json::from_str(&json).unwrap();
+    assert_eq!(serde_json::to_string(&reloaded).unwrap(), json);
+    let before = json;
+    assert!(replace_score_section(&mut document, EditorTextTarget::ScoreRelationships, r#"{
+        "ties":[{"from":"missing","to":"c"}],"slurs":[],"chords":[],"phrases":[],"star_power_phrases":[]
+    }"#).is_err());
+    assert_eq!(serde_json::to_string(&document.chart).unwrap(), before);
+}
+
+/// Control shortcuts open section editors through the Bevy input path without other actions.
+///
+/// AI_CODE
+#[test]
+fn score_section_keyboard_controls_open_and_commit() {
+    let mut document = new_chart_document();
+    document.chart.tracks.push(new_track(InstrumentKind::Strings));
+    assert!(sheet_edit_pitch(&mut document, 0, 61, &SheetTools::default()));
+    let mut app = App::new();
+    app.add_message::<KeyboardInput>()
+        .insert_resource(ButtonInput::<KeyCode>::default())
+        .insert_resource(document)
+        .insert_resource(EditorLibraries { tunings: Vec::new(), kits: Vec::new() })
+        .add_systems(Update, editor_tracks_input);
+    for key in [KeyCode::KeyE, KeyCode::KeyP, KeyCode::KeyL, KeyCode::KeyM] {
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::ControlLeft);
+            keys.press(key);
+        }
+        app.update();
+        let document = app.world().resource::<EditorDocument>();
+        let target = document.text_entry.as_ref().unwrap().target;
+        assert!(matches!((key, target),
+            (KeyCode::KeyE, EditorTextTarget::ScoreNotation(_))
+            | (KeyCode::KeyP, EditorTextTarget::ScorePerformance(_))
+            | (KeyCode::KeyL, EditorTextTarget::ScoreRelationships)
+            | (KeyCode::KeyM, EditorTextTarget::ScoreNavigation)));
+        assert!(!document.metadata_mode);
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::Enter);
+        }
+        app.update();
+        assert!(app.world().resource::<EditorDocument>().text_entry.is_none());
+    }
+    begin_score_section_edit(&mut app.world_mut().resource_mut::<EditorDocument>(),
+        EditorTextTarget::ScoreNotation(EventSource::Track(0))).unwrap();
+    app.world_mut().resource_mut::<EditorDocument>().text_entry.as_mut().unwrap().buffer =
+        r#"{"dots":255}"#.into();
+    {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.reset_all();
+        keys.press(KeyCode::Enter);
+    }
+    app.update();
+    let document = app.world().resource::<EditorDocument>();
+    assert!(document.text_entry.is_some());
+    assert_eq!(document.chart.tracks[0].notes[0].dots, 0);
+}
+
+/// Performance mapping supports matching fret guidance and kit pieces without changing rhythm.
+///
+/// AI_CODE
+#[test]
+fn score_section_performance_maps_frets_and_percussion() {
+    let mut document = new_chart_document();
+    document.chart.tracks.push(new_track(InstrumentKind::Strings));
+    document.chart.tracks[0].tuning = Some(Tuning {
+        strings: ["A0", "D1", "G1", "C2", "F2"].map(str::to_owned).to_vec(),
+    });
+    document.chart.tracks[0].capo = Some(2);
+    assert!(sheet_edit_pitch(&mut document, 0, 28, &SheetTools::default()));
+    let target = EditorTextTarget::ScorePerformance(EventSource::Track(0));
+    replace_score_section(&mut document, target,
+        r#"{"preferred_string":0,"preferred_fret":5,"attack":"tap","transition":"slide"}"#).unwrap();
+    begin_score_section_edit(&mut document, target).unwrap();
+    let form: serde_json::Value = serde_json::from_str(&document.text_entry.as_ref().unwrap().buffer).unwrap();
+    assert_eq!(form["preferred_fret"], 5);
+    let before = serde_json::to_string(&document.chart).unwrap();
+    assert!(replace_score_section(&mut document, target,
+        r#"{"preferred_string":0,"preferred_fret":6}"#).is_err());
+    assert!(replace_score_section(&mut document, target, r#"{"typo":true}"#).is_err());
+    assert_eq!(serde_json::to_string(&document.chart).unwrap(), before);
+    replace_score_section(&mut document, target, "null").unwrap();
+    assert!(document.chart.tracks[0].notes[0].performance.is_none());
+
+    document.chart.tracks.push(new_track(InstrumentKind::Percussion));
+    document.track_focus = 1;
+    let kit = document.chart.tracks[1].kit.as_ref().unwrap();
+    let first = kit.pieces[0].name.clone();
+    let second = kit.pieces[1].name.clone();
+    document.chart.tracks[1].notes = serde_json::from_value(serde_json::json!([
+        {"id":"drum-a","start":0,"length":4,"piece":first}
+    ])).unwrap();
+    replace_score_section(&mut document, target, &serde_json::json!({
+        "piece":second,"roll":first,"percussion_dynamics":"accent"
+    }).to_string()).unwrap();
+    let event = &document.chart.tracks[1].notes[0];
+    assert_eq!(event.start, 0);
+    assert_eq!(event.length, NoteValue::Quarter);
+    assert!(matches!(&event.content, NoteContent::Percussive { piece } if *piece == second));
+    assert_eq!(event.performance.as_ref().unwrap().roll.as_deref(), Some(first.as_str()));
+    replace_score_section(&mut document, target, &serde_json::json!({"droll":first}).to_string()).unwrap();
+    assert_eq!(document.chart.tracks[1].notes[0].performance.as_ref().unwrap().droll.as_deref(), Some(first.as_str()));
+    let json = serde_json::to_string(&document.chart).unwrap();
+    assert_eq!(serde_json::to_string(&serde_json::from_str::<Chart>(&json).unwrap()).unwrap(), json);
+}
+
+/// Phrase relationship edits preserve lyric notes and allow their stable IDs as endpoints.
+///
+/// AI_CODE
+#[test]
+fn score_section_vocal_relationships_preserve_phrase_notes() {
+    let mut document = new_chart_document();
+    document.chart.tracks.push(new_track(InstrumentKind::Voice));
+    document.chart.tracks[0].phrases = serde_json::from_str(r#"[{
+        "start":0,"duration_ticks":1920,"text":"Hello","notes":[
+            {"id":"vocal-a","start":0,"length":4,"note":60},
+            {"id":"vocal-b","start":960,"length":4,"note":60}
+        ]
+    }]"#).unwrap();
+    let notes = serde_json::to_string(&document.chart.tracks[0].phrases[0].notes).unwrap();
+    let target = EditorTextTarget::ScoreRelationships;
+    replace_score_section(&mut document, target, r#"{
+        "ties":[{"from":"vocal-a","to":"vocal-b"}],
+        "slurs":[{"from":"vocal-a","to":"vocal-b"}],"chords":[],
+        "phrases":[{"start":0,"duration_ticks":2400}],"star_power_phrases":[]
+    }"#).unwrap();
+    assert_eq!(document.chart.tracks[0].phrases[0].text, "Hello");
+    assert_eq!(serde_json::to_string(&document.chart.tracks[0].phrases[0].notes).unwrap(), notes);
+    assert!(document.chart.validate().is_empty());
+    assert!(replace_score_section(&mut document, target,
+        r#"{"ties":[],"slurs":[],"chords":[],"phrases":[],"star_power_phrases":[]}"#).is_err());
+    assert_eq!(document.chart.tracks[0].phrases.len(), 1);
 }
 
 /// Place or remove a pitched score event at the snapped editor position.
@@ -992,7 +1476,12 @@ fn commit_text_entry(document: &mut EditorDocument, target: EditorTextTarget, va
                 }
             }
         }
-        EditorTextTarget::ScoreEvent(_) | EditorTextTarget::NewScoreEvent => return,
+        EditorTextTarget::ScoreEvent(_)
+        | EditorTextTarget::NewScoreEvent
+        | EditorTextTarget::ScoreNotation(_)
+        | EditorTextTarget::ScorePerformance(_)
+        | EditorTextTarget::ScoreRelationships
+        | EditorTextTarget::ScoreNavigation => return,
     }
     document.dirty = true;
 }
@@ -1628,14 +2117,14 @@ pub(crate) fn sheet_toolbar_input(
                 .min(SHEET_PIXELS_PER_BEAT_MAX);
             save_settings(&settings);
         }
-        SheetToolAction::SheetDivisionDown if document.view_mode == EditorViewMode::Sheet => {
+        SheetToolAction::SheetDivisionDown => {
             settings.sheet_beat_divisions = settings
                 .sheet_beat_divisions
                 .saturating_sub(1)
                 .max(SHEET_BEAT_DIVISIONS_MIN);
             save_settings(&settings);
         }
-        SheetToolAction::SheetDivisionUp if document.view_mode == EditorViewMode::Sheet => {
+        SheetToolAction::SheetDivisionUp => {
             settings.sheet_beat_divisions = settings
                 .sheet_beat_divisions
                 .saturating_add(1)
@@ -1644,9 +2133,7 @@ pub(crate) fn sheet_toolbar_input(
         }
         SheetToolAction::TabSnap | SheetToolAction::ZoomIn | SheetToolAction::ZoomOut => {}
         SheetToolAction::SheetDenser
-        | SheetToolAction::SheetSpacer
-        | SheetToolAction::SheetDivisionDown
-        | SheetToolAction::SheetDivisionUp => {}
+        | SheetToolAction::SheetSpacer => {}
     }
 }
 
@@ -1667,13 +2154,14 @@ pub(crate) fn sheet_toolbar_display(
     let visible = !document.metadata_mode && document.text_entry.is_none();
     for (action, mut background, mut visibility, mut text) in &mut buttons {
         let action_visible = match action {
+            SheetToolAction::Remove
+            | SheetToolAction::SheetDivisionDown
+            | SheetToolAction::SheetDivisionUp => true,
             SheetToolAction::TabSnap | SheetToolAction::ZoomIn | SheetToolAction::ZoomOut => {
                 document.view_mode == EditorViewMode::Tab
             }
             SheetToolAction::SheetDenser
-            | SheetToolAction::SheetSpacer
-            | SheetToolAction::SheetDivisionDown
-            | SheetToolAction::SheetDivisionUp => document.view_mode == EditorViewMode::Sheet,
+            | SheetToolAction::SheetSpacer => document.view_mode == EditorViewMode::Sheet,
             SheetToolAction::Piece => {
                 document.view_mode == EditorViewMode::Sheet
                     || document.view_mode == EditorViewMode::Tab
@@ -2390,6 +2878,12 @@ pub(crate) fn editor_tracks_input(
                     EditorTextTarget::ScoreEvent(source) => {
                         Some(replace_editor_event(&mut document, source, &entry.buffer))
                     }
+                    EditorTextTarget::ScoreNotation(_)
+                    | EditorTextTarget::ScorePerformance(_)
+                    | EditorTextTarget::ScoreRelationships
+                    | EditorTextTarget::ScoreNavigation => {
+                        Some(replace_score_section(&mut document, entry.target, &entry.buffer))
+                    }
                     EditorTextTarget::NewScoreEvent => Some(
                         serde_json::from_str::<ChartEvent>(&entry.buffer)
                             .map_err(|error| error.to_string())
@@ -2411,11 +2905,11 @@ pub(crate) fn editor_tracks_input(
                 };
                 match result {
                     Some(Err(error)) => {
-                        document.status = format!("Event edit failed: {error}");
+                        document.status = format!("Score edit failed: {error}");
                         document.text_entry = Some(entry);
                     }
                     Some(Ok(())) => {
-                        document.status = "Event updated".into();
+                        document.status = "Score updated".into();
                         document.event_text_cursor = None;
                     }
                     None => commit_text_entry(&mut document, entry.target, entry.buffer),
@@ -2428,6 +2922,25 @@ pub(crate) fn editor_tracks_input(
         return;
     }
     keyboard_events.clear();
+    if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
+        let target = if keyboard.just_pressed(KeyCode::KeyM) {
+            Some(EditorTextTarget::ScoreNavigation)
+        } else if keyboard.just_pressed(KeyCode::KeyL) {
+            Some(EditorTextTarget::ScoreRelationships)
+        } else if keyboard.just_pressed(KeyCode::KeyE) {
+            focused_event_source(&document).map(EditorTextTarget::ScoreNotation)
+        } else if keyboard.just_pressed(KeyCode::KeyP) {
+            focused_event_source(&document).map(EditorTextTarget::ScorePerformance)
+        } else {
+            None
+        };
+        if let Some(target) = target {
+            if let Err(error) = begin_score_section_edit(&mut document, target) {
+                document.status = error;
+            }
+            return;
+        }
+    }
     if keyboard.just_pressed(KeyCode::Escape) {
         if document.metadata_mode {
             document.metadata_mode = false;
@@ -2849,6 +3362,31 @@ pub(crate) fn editor_tracks_display(
     let Ok(mut text) = text.single_mut() else {
         return;
     };
+    if let Some(entry) = &document.text_entry {
+        let section = match entry.target {
+            EditorTextTarget::ScoreNotation(_) => "NOTATION",
+            EditorTextTarget::ScorePerformance(_) => "PERFORMANCE",
+            EditorTextTarget::ScoreRelationships => "RELATIONSHIPS",
+            EditorTextTarget::ScoreNavigation => "NAVIGATION",
+            EditorTextTarget::ScoreEvent(_) | EditorTextTarget::NewScoreEvent => "EVENT",
+            _ => "METADATA",
+        };
+        let selected = match entry.target {
+            EditorTextTarget::ScoreNotation(source)
+            | EditorTextTarget::ScorePerformance(source)
+            | EditorTextTarget::ScoreEvent(source) => document.chart.tracks.get(document.track_focus)
+                .and_then(|track| editor_source_event(track, source))
+                .and_then(|event| event.id.as_deref()).unwrap_or("No event ID"),
+            _ => "",
+        };
+        let mut buffer = entry.buffer.clone();
+        buffer.insert(document.event_text_cursor.unwrap_or(buffer.len()), '|');
+        *text = Text::new(format!(
+            "{}  //  {section}  //  tick {}\n{selected}\n\n{buffer}\n\n{}",
+            document.chart.title, document.current_tick, document.status,
+        ));
+        return;
+    }
     if document.metadata_mode {
         *text = score_metadata_display(&document);
         return;

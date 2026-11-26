@@ -156,6 +156,10 @@ Once a chart is open, its track list is shown:
 | `U` / `O` | Jump to the previous/next event on the focused track, including off-grid events |
 | `J` | Cycle among events at the current tick |
 | `E` / `I` | Edit the selected event or insert a new event as score JSON |
+| `Ctrl+E` | Edit the selected event's notation without changing sounding pitch, onset, or performance |
+| `Ctrl+P` | Edit the selected event's performance hints and instrument mapping separately |
+| `Ctrl+L` | Edit the focused track's ties, slurs, chord groups, and phrase spans |
+| `Ctrl+M` | Edit score navigation markers, tempo text, and expressive spans |
 | `Delete` | Remove the selected event and its tie/slur relationships |
 | `N` | Add a new track (defaults to `Strings`) |
 | `X` | Remove the focused track |
@@ -197,20 +201,90 @@ articulations, score markers, and aligned tablature from written pitches. Percus
 follow kit metadata, while vocal lyrics retain syllable and melisma markings. Removal has no
 undo; manual visual QA across representative multi-track charts remains recommended.
 Use the `+ BARS` and `- BARS` sheet toolbar buttons to adjust note spacing (10-240 pixels per
-quarter note). Use `DIV -` and `DIV +` to choose 1-16 placement divisions per meter beat
+quarter note). In either sheet or tab mode, use `DIV -` and `DIV +` to choose
+1-16 placement divisions per meter beat; both views share the same saved setting
 (default 4); the current division count is shown on the buttons. `1` keeps only beat guides,
 while finer divisions add progressively darker grey guides and
 allow syncopated note placement. Bar lines are brightest, beat lines darker, and subdivisions
 fade darker without going black. Density and beat divisions are saved in user settings and
 do not modify chart data.
-Tab mode renders the focused track vertically with time flowing downward. Scroll the mouse
+Tab mode renders the focused track vertically with time flowing downward. Bar and beat
+guides follow the active time signature. Unlabeled subdivision lines between beats use
+the same progressively darker grey colors as the sheet view. Pointer selection and note
+placement use the shared beat-division grid, including non-power-of-two divisions.
+Scroll the mouse
 wheel to traverse time; the view extends to the bottom of the window, and taller windows show
 more of the song at the same note scale. Use `+` / `-` or the `ZOOM` toolbar buttons to
-change tab zoom density without changing the snap grid. The `SNAP` toolbar button cycles the shared snap
-interval. Click a string to choose a fret from the tuning-derived fret/note grid. For shared
+change tab zoom density without changing the placement grid. The `SNAP` toolbar button
+cycles the legacy interval for time navigation and the resize minimum; `DIV -` / `DIV +`
+control pointer placement precision in both views. Click a string to choose a fret from
+the tuning-derived fret/note grid.
+In place mode, a circle marks the snapped insertion position on the hovered string/lane.
+The `PLACE/REMOVE` toolbar toggle and `F10` work in tab mode too. In remove mode,
+the outline surrounds the hovered note badge; click it to delete only that event,
+without choosing a fret or percussion piece. This also works on the `SPAN` rail.
+Removal does not start a duration drag, and clicks outside the tab's vertical bounds
+do not insert or remove notes. For shared
 percussion lanes, select the desired kit piece with `PIECE`, then click that lane again;
 lane-spanning pieces use the separate `SPAN` rail. Drag a note's lower endpoint to resize it
 to the snap grid, capped before the next note on that string/lane.
+#### Score Relationships And Navigation
+
+The section editors use the existing JSON text-entry controls. Select an event with
+`U` / `O` (previous/next event) and `J` (stacked event), then open `Ctrl+E` or
+`Ctrl+P`. `Ctrl+L` edits relationships for the focused track; `Ctrl+M` edits
+navigation across the document. These shortcuts work in either view and in metadata mode.
+`Enter` commits and `Esc` cancels. Invalid edits stay open with an error and leave
+the document unchanged. Existing chart warnings do not block an unrelated edit.
+
+Notation (`Ctrl+E`) exposes `length`, `voice`, `staff`, `dots`, `tied`, `tuplet`,
+`chord`, `dynamic`, `articulations`, `stem`, `grace`, and `spelling`. Optional values
+can be cleared with `null`; clear articulations with `[]`. Spelling must describe
+the existing MIDI pitch, so C-sharp 4 can be respelled without changing its sound:
+
+```json
+{"spelling":{"step":"D","alter":-1,"octave":4}}
+```
+
+The notation editor merges supplied fields with the existing event. A custom tuplet
+uses `{"actual":5,"normal":4}`; grace notes use `kind` (`acciaccatura` or
+`appoggiatura`), `slash`, `principal` (an existing stable event ID), and `order`.
+Use the relationship editor to assign all chord members in one transaction.
+
+Relationships (`Ctrl+L`) replace the displayed arrays. Ties and slurs use stable
+event IDs, which are shown in the event preview and full event editor. Ties require
+matching pitches and contiguous timing; both relations stay within a voice/staff.
+Chord members must share tick, duration, voice, and staff:
+
+```json
+{
+  "ties":[{"from":"event-000001","to":"event-000003"}],
+  "slurs":[],
+  "chords":[{"id":"chord-a","events":["event-000001","event-000002"]}],
+  "phrases":[{"start":0,"duration_ticks":3840}],
+  "star_power_phrases":[]
+}
+```
+
+Phrase spans edit the existing track phrases by array index, preserving their text
+and notes. Additional spans create empty phrases. A span containing notes cannot
+be deleted through this editor. Lyric-verse phrase notes retain their existing event
+editing path. Removing chord or relation entries clears those relationships only.
+
+Performance (`Ctrl+P`) replaces only the hint object; `null` clears all hints.
+It accepts the chart's existing attack, transition, bend, motion, harmonic, percussion,
+roll, and droll fields. `preferred_string` is zero-based. Optional `preferred_fret`
+is checked against tuning, capo, and written pitch, then discarded because fret is
+derived rather than independently stored. A mismatched string/fret is rejected.
+For percussion events, `piece` changes the kit-piece mapping without changing rhythm.
+`roll` and `droll` name kit pieces and are mutually exclusive.
+
+Navigation (`Ctrl+M`) replaces `structure`, `tempo_text`, and `expressions` using
+the existing chart schema. Edit marker ticks, repeat counts, numbered endings,
+segno/coda/fine, da capo/dal segno, rehearsal labels, and expressive spans directly.
+Removing an array entry removes that marker or expression. Note timing, tempo-map
+entries, and time signatures are left unchanged. Press `S` after committing to save.
+
 In the event JSON editor, use `Left` / `Right`, `Home` / `End`, `Backspace`, and `Delete`
 to edit text, `Enter` to commit, or `Esc` to cancel. `Ctrl+A` clears the text. Invalid JSON
 stays open for correction. Editing preserves an event's ID; insertion creates a new one.

@@ -75,6 +75,58 @@ fn tab_visible_span(resolution: u32, beats_at_reference_height: u8, height: f32)
     ticks.round().clamp(1.0, f64::from(u32::MAX)) as u32
 }
 
+/// A horizontal tab guide; only meter beats carry left-side tick labels.
+///
+/// AI_CODE
+struct TabBeatGuide {
+    tick: u32,
+    color: Color,
+    label: bool,
+}
+
+/// Build meter-aware beat and unlabeled subdivision guides for the visible tab window.
+///
+/// AI_CODE
+fn tab_beat_guides(chart: &Chart, start: u32, span: u32, divisions: u8) -> Vec<TabBeatGuide> {
+    let end = start.saturating_add(span);
+    let divisions = divisions.clamp(SHEET_BEAT_DIVISIONS_MIN, SHEET_BEAT_DIVISIONS_MAX);
+    let mut guides = Vec::new();
+    for measure in measures(chart, end) {
+        if measure.end_tick <= start {
+            continue;
+        }
+        let beat_ticks = (u64::from(chart.resolution.max(1)) * 4
+            / u64::from(measure.denominator.max(1))).max(1);
+        for beat_index in 0..measure.numerator.max(1) {
+            let beat_start = u64::from(measure.start_tick) + u64::from(beat_index) * beat_ticks;
+            if beat_start >= u64::from(measure.end_tick) || beat_start >= u64::from(end) {
+                break;
+            }
+            let beat_start = beat_start as u32;
+            if beat_start >= start {
+                guides.push(TabBeatGuide {
+                    tick: beat_start,
+                    color: if beat_index == 0 { Color::srgb(0.78, 0.78, 0.78) }
+                        else { Color::srgb(0.38, 0.38, 0.38) },
+                    label: true,
+                });
+            }
+            for (index, tick) in super::sheet::beat_subdivision_ticks(
+                beat_start, beat_ticks.min(u64::from(u32::MAX)) as u32, divisions,
+            ).into_iter().enumerate() {
+                if tick >= start && tick < end && tick < measure.end_tick {
+                    guides.push(TabBeatGuide {
+                        tick,
+                        color: super::sheet::subdivision_guide_color(index as u8 + 1, divisions),
+                        label: false,
+                    });
+                }
+            }
+        }
+    }
+    guides
+}
+
 /// Place a tab event at a selected string and fret, retaining written pitch separately
 /// from the optional preferred-string performance hint.
 ///
@@ -102,8 +154,7 @@ fn tab_place_string(
     if !(0..=127).contains(&pitch) {
         return false;
     }
-    let tick = snap_editor_tick(document, tick);
-    let added = super::sheet_edit_spelled_pitch(document, tick, pitch as u8, None, tools);
+    let added = super::sheet_edit_spelled_pitch_at_tick(document, tick, pitch as u8, None, tools);
     if !added || tools.remove {
         return added;
     }
@@ -193,6 +244,25 @@ fn tab_lane_for_symbol(track: &ChartTrack, symbol: &NotationSymbol) -> Option<us
         }
         NotationSymbolKind::Rest => None,
     }
+}
+
+/// Find the nearest visible event badge on a physical lane without snapping authored time.
+///
+/// AI_CODE
+fn tab_hover_event(
+    track: &ChartTrack,
+    symbols: &[NotationSymbol],
+    lane: usize,
+    pointer_y: f32,
+    bounds: (u32, u32, f32, f32),
+) -> Option<(EventSource, f32)> {
+    let (start, span, top, bottom) = bounds;
+    symbols.iter()
+        .filter(|symbol| tab_lane_for_symbol(track, symbol) == Some(lane))
+        .filter_map(|symbol| tab_y(symbol.start, start, span, top, bottom).map(|y| (symbol.source, y)))
+        .filter(|(_, y)| (pointer_y - y).abs() <= 18.0)
+        .min_by(|(_, left), (_, right)| (pointer_y - left).abs().total_cmp(&(pointer_y - right).abs()))
+        .map(|(source, y)| (source, y))
 }
 
 /// Resize an authored tab event, capped at the next event on the same physical lane.
@@ -333,7 +403,8 @@ pub(crate) fn tab_view_system(
     mut commands: Commands,
     mut gizmos: Gizmos,
     mut document: ResMut<EditorDocument>,
-    tools: Res<SheetTools>,
+    mut tools: ResMut<SheetTools>,
+    settings: Res<PersistentSettings>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut wheel: MessageReader<MouseWheel>,
@@ -355,13 +426,17 @@ pub(crate) fn tab_view_system(
         }
         return;
     }
+    if keyboard.just_pressed(KeyCode::F10) {
+        tools.remove = !tools.remove;
+    }
+    if tools.remove {
+        document.tab_resize = None;
+    }
     let Ok(window) = windows.single() else { return };
     let resolution = document.chart.resolution.max(1);
     let (top, bottom) = tab_viewport_bounds(window.height());
     let viewport_height = top - bottom;
     let span = tab_visible_span(resolution, document.tab_beats_per_screen, window.height());
-    let view_start = document.current_tick;
-    let y_for_tick = |tick| tab_y(tick, view_start, span, top, bottom);
     for event in wheel.read() {
         let direction = match event.y.total_cmp(&0.0) {
             std::cmp::Ordering::Greater => -1i64,
@@ -372,6 +447,8 @@ pub(crate) fn tab_view_system(
         document.current_tick = (i64::from(document.current_tick) + direction * step)
             .clamp(0, i64::from(u32::MAX)) as u32;
     }
+            let view_start = document.current_tick;
+            let y_for_tick = |tick| tab_y(tick, view_start, span, top, bottom);
     if keyboard.just_pressed(KeyCode::Equal) || keyboard.just_pressed(KeyCode::NumpadAdd) {
         document.tab_beats_per_screen = document.tab_beats_per_screen.saturating_sub(1).max(2);
     }
@@ -438,25 +515,21 @@ pub(crate) fn tab_view_system(
             Color::srgb(0.92, 0.94, 0.88),
         ));
     }
-    let beat = document.snap_interval.ticks(resolution).max(1);
-    let mut tick = document.current_tick;
-    while tick < document.current_tick.saturating_add(span) {
-        if let Some(y) = y_for_tick(tick) {
+    for guide in tab_beat_guides(&document.chart, view_start, span, settings.sheet_beat_divisions) {
+        if let Some(y) = y_for_tick(guide.tick) {
             gizmos.line_2d(
                 Vec2::new(left - 30.0, y),
                 Vec2::new(right + 30.0, y),
-                Color::srgb(0.28, 0.34, 0.36),
+                guide.color,
             );
-            next_labels.push((
-                tick.to_string(),
-                left - 68.0,
-                y,
-                Color::srgb(0.92, 0.94, 0.88),
-            ));
-        }
-        tick = tick.saturating_add(beat);
-        if tick == u32::MAX {
-            break;
+            if guide.label {
+                next_labels.push((
+                    guide.tick.to_string(),
+                    left - 68.0,
+                    y,
+                    Color::srgb(0.92, 0.94, 0.88),
+                ));
+            }
         }
     }
     for symbol in &layout.symbols {
@@ -604,10 +677,13 @@ pub(crate) fn tab_view_system(
         cursor.x - window.width() / 2.0,
         window.height() / 2.0 - cursor.y,
     );
+    if position.y > top || position.y < bottom {
+        return;
+    }
     let tick = document.current_tick.saturating_add(
         ((top - position.y.clamp(bottom, top)) / viewport_height * span as f32) as u32,
     );
-    let snapped = snap_editor_tick(&document, tick);
+    let snapped = super::sheet::snap_sheet_tick(&document.chart, tick, settings.sheet_beat_divisions);
     if mouse.just_released(MouseButton::Left)
         && let Some(resize) = document.tab_resize.take()
     {
@@ -622,6 +698,20 @@ pub(crate) fn tab_view_system(
         return;
     }
     if percussion && position.x >= left - 78.0 && position.x <= left - 20.0 {
+        let hit = tab_hover_event(&track, &layout.symbols, usize::MAX, position.y,
+            (view_start, span, top, bottom));
+        if tools.remove {
+            if let Some((source, y)) = hit {
+                gizmos.circle_2d(Vec2::new(left - 48.0, y), 24.0, Color::srgb(0.36, 0.83, 0.68));
+                if mouse.just_pressed(MouseButton::Left) {
+                    super::remove_editor_event(&mut document, source);
+                }
+            }
+            return;
+        }
+        if let Some(y) = y_for_tick(snapped) {
+            gizmos.circle_2d(Vec2::new(left - 48.0, y), 8.0, Color::srgb(0.36, 0.83, 0.68));
+        }
         if document.tab_resize.is_some() {
             if let Some(resize) = document.tab_resize {
                 if let Some(y) = y_for_tick(resize.start_tick) {
@@ -660,7 +750,7 @@ pub(crate) fn tab_view_system(
                 return;
             };
             if piece.lane_span.is_some() {
-                super::sheet_edit_percussion(&mut document, snapped, 0, &tools);
+                super::sheet_edit_percussion_at_tick(&mut document, snapped, 0, &tools);
             } else {
                 document.status = "Cycle PIECE to a lane-spanning kit piece".into();
             }
@@ -674,6 +764,20 @@ pub(crate) fn tab_view_system(
     };
     if lane >= lanes || (position.x - x_for_lane(lane)).abs() > 25.0 {
         return;
+    }
+    if tools.remove {
+        if let Some((source, y)) = tab_hover_event(&track, &layout.symbols, lane, position.y,
+            (view_start, span, top, bottom))
+        {
+            gizmos.circle_2d(Vec2::new(x_for_lane(lane), y), 24.0, Color::srgb(0.36, 0.83, 0.68));
+            if mouse.just_pressed(MouseButton::Left) {
+                super::remove_editor_event(&mut document, source);
+            }
+        }
+        return;
+    }
+    if let Some(y) = y_for_tick(snapped) {
+        gizmos.circle_2d(Vec2::new(x_for_lane(lane), y), 8.0, Color::srgb(0.36, 0.83, 0.68));
     }
     if document.tab_resize.is_some() {
         let start = document
@@ -729,7 +833,7 @@ pub(crate) fn tab_view_system(
             }
             document.tab_percussion_lane = None;
             document.current_tick = snapped;
-            super::sheet_edit_percussion(&mut document, snapped, lane, &tools);
+            super::sheet_edit_percussion_at_tick(&mut document, snapped, lane, &tools);
         } else {
             document.tab_fret_string = Some(lane);
             document.tab_fret_tick = snapped;
@@ -741,6 +845,61 @@ pub(crate) fn tab_view_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Subdivision guides are unlabeled, progressively darker, and follow active meter beats.
+    ///
+    /// AI_CODE
+    #[test]
+    fn tab_subdivision_guides_share_meter_and_brightness() {
+        let mut document = super::super::new_chart_document();
+        let guides = tab_beat_guides(&document.chart, 0, 1920, 4);
+        assert_eq!(guides.iter().filter(|guide| guide.label).map(|guide| guide.tick).collect::<Vec<_>>(), vec![0, 960]);
+        assert_eq!(guides.iter().filter(|guide| !guide.label).map(|guide| guide.tick).collect::<Vec<_>>(), vec![240, 480, 720, 1200, 1440, 1680]);
+        assert!(guides[1].color.to_srgba().red > guides[2].color.to_srgba().red);
+        assert!(guides[2].color.to_srgba().red > guides[3].color.to_srgba().red);
+        assert!(tab_beat_guides(&document.chart, 0, 1920, 1).iter().all(|guide| guide.label));
+        document.chart.time_signature_map[0].numerator = 6;
+        document.chart.time_signature_map[0].denominator = 8;
+        let guides = tab_beat_guides(&document.chart, 100, 860, 2);
+        assert_eq!(guides.iter().map(|guide| guide.tick).collect::<Vec<_>>(), vec![240, 480, 720]);
+        assert_eq!(super::super::sheet::snap_sheet_tick(&document.chart, 300, 2), 240);
+    }
+
+    /// Shared beat divisions survive tab insertion even when the legacy snap grid is coarser.
+    ///
+    /// AI_CODE
+    #[test]
+    fn tab_insertion_preserves_shared_subdivision_tick() {
+        let mut document = super::super::new_chart_document();
+        document.chart.tracks.push(super::super::new_track(InstrumentKind::Strings));
+        let tick = super::super::sheet::snap_sheet_tick(&document.chart, 400, 3);
+        assert_eq!(tick, 320);
+        assert!(tab_place_string(&mut document, &SheetTools::default(), tick, 0, 5));
+        assert_eq!(document.chart.tracks[0].notes[0].start, 320);
+    }
+
+    /// Tab hover targets only nearby visible events on the chosen physical string.
+    ///
+    /// AI_CODE
+    #[test]
+    fn tab_hover_targets_lane_and_authored_tick_for_removal() {
+        let mut document = super::super::new_chart_document();
+        document.chart.tracks.push(super::super::new_track(InstrumentKind::Strings));
+        let tools = SheetTools::default();
+        assert!(tab_place_string(&mut document, &tools, 0, 0, 5));
+        assert!(tab_place_string(&mut document, &tools, 960, 1, 3));
+        let track = &document.chart.tracks[0];
+        let layout = layout_track(&document.chart, track);
+        let bounds = (0, 3840, 100.0, -300.0);
+        assert_eq!(tab_hover_event(track, &layout.symbols, 1, 100.0, bounds), None);
+        assert_eq!(tab_hover_event(track, &layout.symbols, 0, 75.0, bounds), None);
+        assert_eq!(tab_hover_event(track, &layout.symbols, 0, 100.0, (960, 3840, 100.0, -300.0)), None);
+        let (source, y) = tab_hover_event(track, &layout.symbols, 0, 98.0, bounds).unwrap();
+        assert_eq!(y, 100.0);
+        assert!(super::super::remove_editor_event(&mut document, source));
+        assert_eq!(document.chart.tracks[0].notes.len(), 1);
+        assert_eq!(document.chart.tracks[0].notes[0].start, 960);
+    }
 
     /// Activating fret five on an ADGCF bass inserts D1 at the chosen tick.
     ///

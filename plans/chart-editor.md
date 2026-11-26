@@ -112,7 +112,10 @@ vocal charts remains recommended.
 
 ### 7. Tab view (implemented)
 
-The focused track has a vertical, top-to-bottom tab view with beat/snap markers. Mouse-wheel
+The focused track has a vertical, top-to-bottom tab view with meter-aware bar/beat markers
+and unlabeled, progressively darker subdivision guides. `DIV -` / `DIV +` use the same
+persisted beat-division setting as sheet mode; pointer placement preserves those exact
+ticks through string fret selection and percussion insertion. Mouse-wheel
 scroll traverses time; toolbar zoom buttons and `+`/`-` adjust beats-per-screen separately.
 The tab snap button cycles the shared `SnapInterval` values. String clicks open a 0-24 fret
 choice grid with tuning-derived note names, and placement stores the preferred string as an
@@ -120,12 +123,33 @@ optional performance hint while preserving the written pitch. Percussion shared 
 for piece selection before placement; lane-spanning kit pieces use a separate full-width
 control rail. Same-tick chord stacking and per-note removal reuse the sheet editor behavior.
 
+The tab view shows a snapped placement circle on the hovered string/lane. The shared
+`PLACE/REMOVE` toolbar toggle and `F10` select removal; its outline follows the actual
+event badge and clicking removes that event directly, including on the SPAN rail,
+without a fret dialog or duration drag.
+
 Dragging a note's lower endpoint resizes it to the snapped minimum/duration. The end is capped
 at the next event on the same resolved string, lane, or piece; durations beyond the active
 palette's single-symbol limit set `tied` automatically. Manual visual QA across tunings,
 shared percussion lanes, lane-spanning pieces, and overlapping notes remains recommended.
 
-### 7.1. Score relationships and navigation editing
+### 7.1. Score relationships and navigation editing (implemented)
+
+Section-specific JSON editors are available in sheet/tab and metadata views:
+`Ctrl+E` edits focused-event notation (including enharmonic spelling, custom tuplets,
+grace notes, articulations, and dynamics) without changing pitch, onset, or hints;
+`Ctrl+P` edits performance and instrument mapping separately. `Ctrl+L` edits stable-ID
+ties/slurs, complete chord groups, track phrase spans, and star-power spans atomically.
+`Ctrl+M` edits navigation markers, repeat counts, ending numbers, rehearsal/tempo text,
+and expressive spans without rewriting the authored event timeline.
+
+Commits parse and validate before mutation. Invalid edits remain open for correction;
+optional fields and arrays can be cleared to remove notation, hints, or relationships.
+Phrase span edits preserve existing lyrics and notes, and reject removal of spans
+containing notes. Preferred fret is verified against tuning/capo/pitch rather than stored
+as competing notation truth. The existing full event editor remains available for pitch
+and timeline changes. Regression tests cover isolation, relationships/navigation round trips,
+fret/percussion mapping, keyboard dispatch, and invalid-commit retention. Manual visual QA remains.
 
 - Edit enharmonic spelling independently from sounding MIDI pitch.
 - Create and edit ties, slurs, phrase spans, chord groups, tuplets, grace notes, and
