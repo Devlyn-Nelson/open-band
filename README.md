@@ -193,13 +193,22 @@ In percussion tracks, `P` cycles kit pieces and clicks target the
 selected piece's lane. The clickable on-screen palette selects duration, dots, triplets,
 rests, ties, place/remove, voice, dynamics, articulations, percussion pieces, and the slur
 tool. Keyboard shortcuts remain available: `F1`-`F5` for duration, `F6` for dots, `F7` for
-triplets, `F8` for rests, `F9` for the tied flag, `F10` for place/remove, `F11` for voice,
-`F12` for dynamics, `A` for articulations, and `P` for percussion pieces. With the slur tool
+triplets, `F8` for rests, `F9` for automatic tie placement, `F10` for place/remove, `F11` for voice,
+`F12` for dynamics, `A` for articulations, and `P` for percussion pieces. When `TIE`
+is enabled, placing a note connects it to a preceding note of the same pitch, voice,
+and staff whose duration ends exactly at the new note's start. Dots and tuplets count
+toward that duration. No match means no tie; the new note is not marked as the start
+of a future tie. Existing notes are unchanged by toggling the tool. Percussion uses
+the same rule with matching kit pieces. The inspector's **Tie to next** field remains
+available for forward ties on existing notes. With the slur tool
 active, click two existing pitched notes in order to link them by stable event IDs. The sheet
 draws beams (including half-length secondary beamlets for isolated sixteenths next
 to eighth notes), ties, slurs, tuplets, rests, clefs, key signatures, accidentals, dynamics,
 with dotted short notes remaining beamed to contiguous or overlapping neighbors within
-the same beat; rests, gaps, and beat boundaries still break beam groups. It also draws
+the same beat; tie connections, rests, gaps, and beat boundaries break beam groups.
+Explicit stable-ID ties and the legacy tied flag prevent beams across the tied pair,
+but each endpoint can still beam to neighboring notes on its other side.
+It also draws
 articulations, score markers, and aligned tablature from written pitches. Percussion symbols
 follow kit metadata, while vocal lyrics retain syllable and melisma markings. Removal has no
 undo; manual visual QA across representative multi-track charts remains recommended.

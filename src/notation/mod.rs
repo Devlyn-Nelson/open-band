@@ -229,7 +229,18 @@ fn measure_containing(measures: &[Measure], tick: u32) -> Option<&Measure> {
 /// A rest, a longer note, or a beat boundary breaks the run.
 ///
 /// AI_CODE
+#[cfg(test)]
 fn beam_groups(notes: &[ChartEvent], resolution: u32, measures: &[Measure]) -> Vec<Vec<usize>> {
+    beam_groups_without_ties(notes, resolution, measures, &[])
+}
+
+/// Break beams across resolved tie connections while allowing beams on either side. AI_CODE
+fn beam_groups_without_ties(
+    notes: &[ChartEvent],
+    resolution: u32,
+    measures: &[Measure],
+    ties: &[Vec<usize>],
+) -> Vec<Vec<usize>> {
     let mut groups = Vec::new();
     let mut lanes = notes
         .iter()
@@ -259,6 +270,10 @@ fn beam_groups(notes: &[ChartEvent], resolution: u32, measures: &[Measure]) -> V
             let continues = beamable
                 && beat.is_some()
                 && beat == current_beat
+                && !current.last().is_some_and(|previous| {
+                    ties.iter().any(|chain| chain.windows(2)
+                        .any(|pair| pair[0] == *previous && pair[1] == index))
+                })
                 && (previous_end.is_some_and(|end| end >= note.start)
                     || previous_start == Some(note.start));
             if continues {
@@ -313,6 +328,40 @@ fn dotted_notes_keep_beams_within_the_beat() {
     notes[1].start = 480;
     notes.insert(1, serde_json::from_str(r#"{"start":240,"length":16,"rest":true}"#).unwrap());
     assert!(beam_groups(&notes, 960, &bars).is_empty());
+}
+
+/// Tie connections break beams but their endpoints can beam to neighboring notes. AI_CODE
+#[test]
+fn resolved_ties_break_beams() {
+    let mut chart: Chart = serde_json::from_str(r#"{
+        "version":1,"title":"Tie beams","resolution":960,
+        "tempo_map":[{"start":0,"bpm":100}],
+        "time_signature_map":[{"start":0,"numerator":4,"denominator":4}],
+        "tracks":[{"name":"Voice","kind":"voice","notes":[
+            {"id":"a","start":0,"length":16,"note":60},
+            {"id":"b","start":240,"length":16,"note":60},
+            {"id":"c","start":480,"length":16,"note":62},
+            {"id":"d","start":720,"length":16,"note":64}
+        ],"ties":[{"from":"a","to":"b"}]}]
+    }"#).unwrap();
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert_eq!(layout.ties, vec![vec![0, 1]]);
+    assert_eq!(layout.beams, vec![vec![1, 2, 3]]);
+    chart.tracks[0].ties.clear();
+    chart.tracks[0].notes[0].tied = true;
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert_eq!(layout.ties, vec![vec![0, 1]]);
+    assert_eq!(layout.beams, vec![vec![1, 2, 3]]);
+    chart.tracks[0].notes[0].tied = false;
+    assert_eq!(layout_track(&chart, &chart.tracks[0]).beams, vec![vec![0, 1, 2, 3]]);
+    chart.tracks[0].notes[2].content = NoteContent::Pitched { note: 60, spelling: None };
+    chart.tracks[0].ties.push(EventRelation { from: "b".into(), to: "c".into() });
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert_eq!(layout.ties, vec![vec![1, 2]]);
+    assert_eq!(layout.beams, vec![vec![0, 1], vec![2, 3]]);
+    chart.tracks[0].ties.clear();
+    chart.tracks[0].notes[1].tied = true;
+    assert_eq!(layout_track(&chart, &chart.tracks[0]).beams, vec![vec![0, 1], vec![2, 3]]);
 }
 
 /// Fills `[gap_start, gap_end)` with the fewest standard rest symbols, splitting at any
@@ -498,7 +547,7 @@ pub(crate) fn layout_track(chart: &Chart, track: &ChartTrack) -> NotationLayout 
 
     let ties = relation_ties(&notes, &track.ties, chart.resolution);
     let slurs = slur_relations(&notes, &track.slurs);
-    let beams = beam_groups(&notes, chart.resolution, &measures);
+    let beams = beam_groups_without_ties(&notes, chart.resolution, &measures, &ties);
     let tuplets = tuplet_groups(&notes, chart.resolution);
     let chord_groups = chord_groups(&notes);
     let symbols = notation_symbols(&events, track, chart.resolution);

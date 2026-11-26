@@ -861,7 +861,7 @@ pub(super) fn sheet_edit_spelled_pitch_at_tick(
         voice: tools.voice,
         staff: 1,
         dots: tools.dots,
-        tied: tools.tied && !tools.rest,
+        tied: false,
         tuplet: tools.tuplet,
         chord: None,
         dynamic: tools.dynamic,
@@ -906,8 +906,101 @@ pub(super) fn sheet_edit_spelled_pitch_at_tick(
             track.notes[index].chord = Some(chord);
         }
     }
+    if tools.tied && !tools.rest {
+        tie_inserted_event_to_previous(document);
+    }
     document.dirty = true;
     true
+}
+
+/// Tie the newest event to a matching preceding event using stable IDs, not insertion order.
+///
+/// AI_CODE
+fn tie_inserted_event_to_previous(document: &mut EditorDocument) {
+    let Some(track) = document.chart.tracks.get(document.track_focus) else { return };
+    let Some(inserted) = track.notes.last() else { return };
+    let predecessor = all_track_events(track)
+        .filter(|event| {
+            event.start < inserted.start
+                && event.voice == inserted.voice
+                && event.staff == inserted.staff
+                && event.start.checked_add(event.duration_ticks(document.chart.resolution)) == Some(inserted.start)
+                && match (&event.content, &inserted.content) {
+                    (NoteContent::Pitched { note: left, .. }, NoteContent::Pitched { note: right, .. }) => left == right,
+                    (NoteContent::Percussive { piece: left }, NoteContent::Percussive { piece: right }) => left == right,
+                    _ => false,
+                }
+        })
+        .max_by_key(|event| event.start);
+    let relation = predecessor.and_then(|event| Some(EventRelation {
+        from: event.id.clone()?,
+        to: inserted.id.clone()?,
+    }));
+    if let Some(relation) = relation {
+        let track = &mut document.chart.tracks[document.track_focus];
+        if !track.ties.contains(&relation) {
+            track.ties.push(relation);
+        }
+    }
+}
+
+/// Placement ties connect backwards only when pitch, onset, voice, and staff are compatible.
+///
+/// AI_CODE
+#[test]
+fn placement_tie_connects_matching_predecessor() {
+    let mut document = new_chart_document();
+    document.chart.tracks.push(new_track(InstrumentKind::Voice));
+    let mut tools = SheetTools::default();
+    tools.duration = NoteValue::Eighth;
+    tools.dots = 1;
+    tools.tied = true;
+    assert!(sheet_edit_spelled_pitch_at_tick(&mut document, 0, 60, None, &tools));
+    assert!(document.chart.tracks[0].ties.is_empty());
+    assert!(!document.chart.tracks[0].notes[0].tied);
+    assert!(sheet_edit_spelled_pitch_at_tick(&mut document, 720, 60, None, &tools));
+    assert_eq!(document.chart.tracks[0].ties.len(), 1);
+    let track = &document.chart.tracks[0];
+    assert_eq!(track.ties[0].from, track.notes[0].id.as_ref().unwrap().as_str());
+    assert_eq!(track.ties[0].to, track.notes[1].id.as_ref().unwrap().as_str());
+    assert_eq!(layout_track(&document.chart, track).ties.len(), 1);
+    assert!(track.notes.iter().all(|event| !event.tied));
+    assert!(sheet_edit_spelled_pitch_at_tick(&mut document, 1440, 62, None, &tools));
+    assert_eq!(document.chart.tracks[0].ties.len(), 1);
+    tools.voice = 2;
+    assert!(sheet_edit_spelled_pitch_at_tick(&mut document, 1440, 60, None, &tools));
+    assert_eq!(document.chart.tracks[0].ties.len(), 1);
+    tools.voice = 1;
+    assert!(sheet_edit_spelled_pitch_at_tick(&mut document, 1680, 60, None, &tools));
+    assert_eq!(document.chart.tracks[0].ties.len(), 1);
+    tools.tied = false;
+    assert!(sheet_edit_spelled_pitch_at_tick(&mut document, 1440, 60, None, &tools));
+    assert_eq!(document.chart.tracks[0].ties.len(), 1);
+}
+
+/// Automatic ties use chronological pitch matches within a staff, independent of chord order.
+/// AI_CODE
+#[test]
+fn placement_tie_handles_chords_and_staff_boundaries() {
+    let mut document = new_chart_document();
+    document.chart.tracks.push(new_track(InstrumentKind::Voice));
+    document.chart.tracks[0].notes = serde_json::from_str(r#"[
+        {"id":"other-staff","start":0,"length":4,"staff":2,"note":60},
+        {"id":"matching","start":0,"length":4,"note":60},
+        {"id":"chord-tone","start":0,"length":4,"note":64},
+        {"id":"unrelated","start":1920,"length":4,"note":67}
+    ]"#).unwrap();
+    let mut tools = SheetTools::default();
+    tools.tied = true;
+    assert!(sheet_edit_spelled_pitch_at_tick(&mut document, 960, 60, None, &tools));
+    assert_eq!(document.chart.tracks[0].ties[0].from, "matching");
+    document.chart.tracks[0].notes[4].staff = 2;
+    document.chart.tracks[0].ties.clear();
+    tie_inserted_event_to_previous(&mut document);
+    assert_eq!(document.chart.tracks[0].ties[0].from, "other-staff");
+    let json = serde_json::to_string(&document.chart).unwrap();
+    let reloaded: Chart = serde_json::from_str(&json).unwrap();
+    assert_eq!(reloaded.tracks[0].ties, document.chart.tracks[0].ties);
 }
 
 /// Place or remove the selected percussion piece on its configured lane.
@@ -959,7 +1052,7 @@ pub(super) fn sheet_edit_percussion_at_tick(
         voice: tools.voice,
         staff: 1,
         dots: tools.dots,
-        tied: tools.tied,
+        tied: false,
         tuplet: tools.tuplet,
         chord: None,
         dynamic: tools.dynamic,
@@ -973,6 +1066,9 @@ pub(super) fn sheet_edit_percussion_at_tick(
         .notes
         .push(event);
     ensure_stable_event_ids(&mut document.chart);
+    if tools.tied {
+        tie_inserted_event_to_previous(document);
+    }
     document.dirty = true;
     true
 }

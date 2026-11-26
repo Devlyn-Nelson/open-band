@@ -179,9 +179,25 @@
             "vibrato": null
           },
           "note": 32
+        },
+        {
+          "id": "event-000009",
+          "start": 4560,
+          "length": 8,
+          "note": 32,
+          "spelling": {
+            "step": "G",
+            "alter": 1,
+            "octave": 1
+          }
         }
       ],
-      "ties": [],
+      "ties": [
+        {
+          "from": "event-000002",
+          "to": "event-000009"
+        }
+      ],
       "slurs": [],
       "phrases": [],
       "star_power_phrases": [],
