@@ -269,7 +269,7 @@ fn engraving_labels(
         }
     }
 
-    for symbol in &layout.symbols {
+    for (symbol_index, symbol) in layout.symbols.iter().enumerate() {
         let Some(x) = viewport.x_at(symbol.start) else {
             continue;
         };
@@ -278,7 +278,9 @@ fn engraving_labels(
             NotationSymbolKind::Pitched { pitch, spelling } => {
                 let (step, accidental) = pitch_step(*pitch, spelling.as_ref());
                 let implied = key_accidental(step, layout.key_signature);
-                if accidental != implied {
+                let tie_continuation = layout.ties.iter()
+                    .any(|chain| chain.iter().skip(1).any(|index| *index == symbol_index));
+                if accidental != implied && !tie_continuation {
                     let glyph = match accidental {
                         0 => "nat".to_owned(),
                         value if value > 0 => "#".repeat(value as usize),
@@ -1556,6 +1558,44 @@ pub(crate) fn sheet_view_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Accidentals appear once per tie chain, including flat spelling and barline continuations.
+    ///
+    /// AI_CODE
+    #[test]
+    fn tied_accidentals_only_label_the_first_note() {
+        let mut chart: Chart = serde_json::from_str(r#"{
+            "version":1,"title":"Tied accidentals","resolution":960,
+            "tempo_map":[{"start":0,"bpm":100}],
+            "time_signature_map":[{"start":0,"numerator":4,"denominator":4}],
+            "tracks":[{"name":"Voice","kind":"voice","notes":[
+                {"id":"a","start":3360,"length":8,"note":61},
+                {"id":"b","start":3840,"length":8,"note":61},
+                {"id":"c","start":4320,"length":8,"note":61}
+            ],"ties":[{"from":"a","to":"b"},{"from":"b","to":"c"}]}]
+        }"#).unwrap();
+        let viewport = SheetViewport { left: -300.0, right: 300.0, start: 3000, span: 2400 };
+        let layout = layout_track(&chart, &chart.tracks[0]);
+        let labels = engraving_labels(&chart.tracks[0], &layout, viewport, false);
+        assert_eq!(labels.iter().filter(|label| label.text == "#").count(), 1);
+        chart.tracks[0].ties.clear();
+        chart.tracks[0].notes[0].tied = true;
+        chart.tracks[0].notes[1].tied = true;
+        for event in &mut chart.tracks[0].notes {
+            event.content = NoteContent::Pitched {
+                note: 61,
+                spelling: Some(PitchSpelling { step: 'D', alter: -1, octave: 4 }),
+            };
+        }
+        let layout = layout_track(&chart, &chart.tracks[0]);
+        let labels = engraving_labels(&chart.tracks[0], &layout, viewport, false);
+        assert_eq!(labels.iter().filter(|label| label.text == "b").count(), 1);
+        chart.tracks[0].notes[0].tied = false;
+        chart.tracks[0].notes[1].tied = false;
+        let layout = layout_track(&chart, &chart.tracks[0]);
+        let labels = engraving_labels(&chart.tracks[0], &layout, viewport, false);
+        assert_eq!(labels.iter().filter(|label| label.text == "b").count(), 3);
+    }
 
     /// Mixed durations receive beamlets; consecutive sixteenths retain a full secondary beam.
     ///

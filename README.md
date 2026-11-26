@@ -208,6 +208,8 @@ with dotted short notes remaining beamed to contiguous or overlapping neighbors 
 the same beat; tie connections, rests, gaps, and beat boundaries break beam groups.
 Explicit stable-ID ties and the legacy tied flag prevent beams across the tied pair,
 but each endpoint can still beam to neighboring notes on its other side.
+Accidentals are shown only on the first note of a tie chain, not repeated on tied
+continuations, including across barlines. Stored pitch and spelling remain unchanged.
 It also draws
 articulations, score markers, and aligned tablature from written pitches. Percussion symbols
 follow kit metadata, while vocal lyrics retain syllable and melisma markings. Removal has no
