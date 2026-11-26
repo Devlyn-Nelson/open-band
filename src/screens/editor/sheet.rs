@@ -819,6 +819,7 @@ pub(crate) fn sheet_view_system(
     if document.view_mode != EditorViewMode::Sheet
         || document.metadata_mode
         || document.text_entry.is_some()
+        || document.inspector.is_some()
     {
         clear_engraving_labels(&mut commands, &mut labels);
         return;

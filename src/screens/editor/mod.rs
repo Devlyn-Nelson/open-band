@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 mod sheet;
 pub(crate) use sheet::sheet_view_system;
 mod tab;
+mod inspector;
 pub(crate) use tab::{tab_fret_choice_input, tab_fret_dialog_system, tab_view_system};
 
 #[derive(Component)]
@@ -55,6 +56,7 @@ pub(crate) struct EditorDocument {
     pub(crate) event_focus: usize,
     pub(crate) event_text_cursor: Option<usize>,
     pub(crate) text_entry: Option<EditorTextEntry>,
+    pub(crate) inspector: Option<inspector::EventInspector>,
     pub(crate) metadata_mode: bool,
     pub(crate) metadata_focus: usize,
     pub(crate) structure_kind: usize,
@@ -185,6 +187,7 @@ pub(crate) enum EditorTextTarget {
     ScorePerformance(EventSource),
     ScoreRelationships,
     ScoreNavigation,
+    InspectorValue,
 }
 
 /// AI_CODE
@@ -692,7 +695,8 @@ fn score_section_keyboard_controls_open_and_commit() {
         }
         app.update();
         let document = app.world().resource::<EditorDocument>();
-        let target = document.text_entry.as_ref().unwrap().target;
+        let target = document.inspector.as_ref().map(|menu| menu.target)
+            .unwrap_or_else(|| document.text_entry.as_ref().unwrap().target);
         assert!(matches!((key, target),
             (KeyCode::KeyE, EditorTextTarget::ScoreNotation(_))
             | (KeyCode::KeyP, EditorTextTarget::ScorePerformance(_))
@@ -702,10 +706,11 @@ fn score_section_keyboard_controls_open_and_commit() {
         {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
             keys.reset_all();
-            keys.press(KeyCode::Enter);
+            keys.press(if matches!(key, KeyCode::KeyE | KeyCode::KeyP) { KeyCode::Escape } else { KeyCode::Enter });
         }
         app.update();
         assert!(app.world().resource::<EditorDocument>().text_entry.is_none());
+        assert!(app.world().resource::<EditorDocument>().inspector.is_none());
     }
     begin_score_section_edit(&mut app.world_mut().resource_mut::<EditorDocument>(),
         EditorTextTarget::ScoreNotation(EventSource::Track(0))).unwrap();
@@ -1273,6 +1278,7 @@ fn new_chart_document() -> EditorDocument {
         event_focus: 0,
         event_text_cursor: None,
         text_entry: None,
+        inspector: None,
         metadata_mode: false,
         metadata_focus: 0,
         structure_kind: 0,
@@ -1403,6 +1409,7 @@ fn load_chart_document(path: &Path) -> Result<EditorDocument, String> {
         event_focus: 0,
         event_text_cursor: None,
         text_entry: None,
+        inspector: None,
         metadata_mode: false,
         metadata_focus: 0,
         structure_kind: 0,
@@ -1481,7 +1488,8 @@ fn commit_text_entry(document: &mut EditorDocument, target: EditorTextTarget, va
         | EditorTextTarget::ScoreNotation(_)
         | EditorTextTarget::ScorePerformance(_)
         | EditorTextTarget::ScoreRelationships
-        | EditorTextTarget::ScoreNavigation => return,
+        | EditorTextTarget::ScoreNavigation
+        | EditorTextTarget::InspectorValue => return,
     }
     document.dirty = true;
 }
@@ -2037,7 +2045,7 @@ pub(crate) fn sheet_toolbar_input(
     mut settings: ResMut<PersistentSettings>,
     actions: Query<&SheetToolAction>,
 ) {
-    if document.metadata_mode || document.text_entry.is_some() {
+    if document.metadata_mode || document.text_entry.is_some() || document.inspector.is_some() {
         return;
     }
     let Ok(action) = actions.get(activate.entity) else {
@@ -2151,7 +2159,7 @@ pub(crate) fn sheet_toolbar_display(
         &mut Text,
     )>,
 ) {
-    let visible = !document.metadata_mode && document.text_entry.is_none();
+    let visible = !document.metadata_mode && document.text_entry.is_none() && document.inspector.is_none();
     for (action, mut background, mut visibility, mut text) in &mut buttons {
         let action_visible = match action {
             SheetToolAction::Remove
@@ -2875,6 +2883,7 @@ pub(crate) fn editor_tracks_input(
         if keyboard.just_pressed(KeyCode::Enter) {
             if let Some(entry) = document.text_entry.take() {
                 let result = match entry.target {
+                    EditorTextTarget::InspectorValue => Some(inspector::commit_value(&mut document, &entry.buffer)),
                     EditorTextTarget::ScoreEvent(source) => {
                         Some(replace_editor_event(&mut document, source, &entry.buffer))
                     }
@@ -2922,6 +2931,10 @@ pub(crate) fn editor_tracks_input(
         return;
     }
     keyboard_events.clear();
+    if document.inspector.is_some() {
+        inspector::input(&mut document, &keyboard);
+        return;
+    }
     if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
         let target = if keyboard.just_pressed(KeyCode::KeyM) {
             Some(EditorTextTarget::ScoreNavigation)
@@ -2935,7 +2948,12 @@ pub(crate) fn editor_tracks_input(
             None
         };
         if let Some(target) = target {
-            if let Err(error) = begin_score_section_edit(&mut document, target) {
+            let result = if matches!(target, EditorTextTarget::ScoreNotation(_) | EditorTextTarget::ScorePerformance(_)) {
+                inspector::open(&mut document, target)
+            } else {
+                begin_score_section_edit(&mut document, target)
+            };
+            if let Err(error) = result {
                 document.status = error;
             }
             return;
@@ -3362,6 +3380,15 @@ pub(crate) fn editor_tracks_display(
     let Ok(mut text) = text.single_mut() else {
         return;
     };
+    if document.inspector.is_some() {
+        *text = inspector::display(&document);
+        if let Some(entry) = &document.text_entry {
+            let mut buffer = entry.buffer.clone();
+            buffer.insert(document.event_text_cursor.unwrap_or(buffer.len()), '|');
+            text.0.push_str(&format!("\n\nValue: {buffer}"));
+        }
+        return;
+    }
     if let Some(entry) = &document.text_entry {
         let section = match entry.target {
             EditorTextTarget::ScoreNotation(_) => "NOTATION",

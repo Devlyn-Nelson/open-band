@@ -135,10 +135,15 @@ shared percussion lanes, lane-spanning pieces, and overlapping notes remains rec
 
 ### 7.1. Score relationships and navigation editing (implemented)
 
-Section-specific JSON editors are available in sheet/tab and metadata views:
-`Ctrl+E` edits focused-event notation (including enharmonic spelling, custom tuplets,
+Section-specific editors are available in sheet/tab and metadata views:
+`Ctrl+E` opens a keyboard field menu for focused-event notation (including enharmonic spelling, custom tuplets,
 grace notes, articulations, and dynamics) without changing pitch, onset, or hints;
-`Ctrl+P` edits performance and instrument mapping separately. `Ctrl+L` edits stable-ID
+`Ctrl+P` opens a separate keyboard menu for performance and instrument mapping. Up/Down
+select fields; Left/Right adjust values; Enter cycles choices or opens scalar input.
+Delete clears optional settings, and Home/End or Page keys navigate the paginated menu.
+Apply commits the draft; Esc cancels. Fret/string choices stay consistent with written
+pitch, and percussion choices come from the actual kit. Bend points and grace principals
+are editable without JSON. `Ctrl+L` retains JSON editing for stable-ID
 ties/slurs, complete chord groups, track phrase spans, and star-power spans atomically.
 `Ctrl+M` edits navigation markers, repeat counts, ending numbers, rehearsal/tempo text,
 and expressive spans without rewriting the authored event timeline.

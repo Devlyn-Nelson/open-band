@@ -198,6 +198,8 @@ triplets, `F8` for rests, `F9` for the tied flag, `F10` for place/remove, `F11` 
 active, click two existing pitched notes in order to link them by stable event IDs. The sheet
 draws beams (including half-length secondary beamlets for isolated sixteenths next
 to eighth notes), ties, slurs, tuplets, rests, clefs, key signatures, accidentals, dynamics,
+with dotted short notes remaining beamed to contiguous or overlapping neighbors within
+the same beat; rests, gaps, and beat boundaries still break beam groups. It also draws
 articulations, score markers, and aligned tablature from written pitches. Percussion symbols
 follow kit metadata, while vocal lyrics retain syllable and melisma markings. Removal has no
 undo; manual visual QA across representative multi-track charts remains recommended.
@@ -233,26 +235,36 @@ lane-spanning pieces use the separate `SPAN` rail. Drag a note's lower endpoint 
 to the snap grid, capped before the next note on that string/lane.
 #### Score Relationships And Navigation
 
-The section editors use the existing JSON text-entry controls. Select an event with
+Notation and performance use keyboard field menus. Select an event with
 `U` / `O` (previous/next event) and `J` (stacked event), then open `Ctrl+E` or
 `Ctrl+P`. `Ctrl+L` edits relationships for the focused track; `Ctrl+M` edits
 navigation across the document. These shortcuts work in either view and in metadata mode.
-`Enter` commits and `Esc` cancels. Invalid edits stay open with an error and leave
-the document unchanged. Existing chart warnings do not block an unrelated edit.
 
-Notation (`Ctrl+E`) exposes `length`, `voice`, `staff`, `dots`, `tied`, `tuplet`,
-`chord`, `dynamic`, `articulations`, `stem`, `grace`, and `spelling`. Optional values
-can be cleared with `null`; clear articulations with `[]`. Spelling must describe
-the existing MIDI pitch, so C-sharp 4 can be respelled without changing its sound:
+| Menu Key | Action |
+| --- | --- |
+| `Up` / `Down` | Select a field; the menu pages automatically |
+| `Left` / `Right` | Cycle choices, toggle flags, or adjust numbers |
+| `Enter` | Cycle a choice or open a plain text/number field |
+| `Delete` | Clear an optional field or reset a required field |
+| `Home` / `End` | Jump to the first field / Apply changes |
+| `Page Up` / `Page Down` | Move one page without switching tracks |
+| `Esc` | Cancel a value entry, or discard the menu draft and close |
 
-```json
-{"spelling":{"step":"D","alter":-1,"octave":4}}
-```
+Choose **Apply changes** and press `Enter` to commit the draft. Invalid edits stay
+open with an error and leave the document unchanged. Press `S` after closing the
+menu to save. Existing chart warnings do not block an unrelated edit.
 
-The notation editor merges supplied fields with the existing event. A custom tuplet
-uses `{"actual":5,"normal":4}`; grace notes use `kind` (`acciaccatura` or
-`appoggiatura`), `slash`, `principal` (an existing stable event ID), and `order`.
-Use the relationship editor to assign all chord members in one transaction.
+Notation (`Ctrl+E`) offers note length, dynamic, dots, voice/staff, tie, written
+spelling, custom tuplet counts, stem direction, individual articulation toggles,
+grace kind/slash/principal/order, and chord ID. Spelling choices are generated from
+the existing MIDI pitch: choose D-flat 4 instead of C-sharp 4 without changing the sound.
+Grace principals are selected from existing event IDs, not typed as JSON.
+Deleting either tuplet field clears the tuplet; deleting a grace field clears the
+grace setting. Use `Ctrl+L` to assign all chord members in one transaction.
+
+To add `mf` to an existing low bass note: select it with `U` / `O`, open `Ctrl+E`,
+select **Dynamic**, use `Left` / `Right` until it reads `mf`, then press `End` and
+`Enter` to apply. No staff click or JSON editing is needed.
 
 Relationships (`Ctrl+L`) replace the displayed arrays. Ties and slurs use stable
 event IDs, which are shown in the event preview and full event editor. Ties require
@@ -274,15 +286,20 @@ and notes. Additional spans create empty phrases. A span containing notes cannot
 be deleted through this editor. Lyric-verse phrase notes retain their existing event
 editing path. Removing chord or relation entries clears those relationships only.
 
-Performance (`Ctrl+P`) replaces only the hint object; `null` clears all hints.
-It accepts the chart's existing attack, transition, bend, motion, harmonic, percussion,
-roll, and droll fields. `preferred_string` is zero-based. Optional `preferred_fret`
-is checked against tuning, capo, and written pitch, then discarded because fret is
-derived rather than independently stored. A mismatched string/fret is rejected.
-For percussion events, `piece` changes the kit-piece mapping without changing rhythm.
-`roll` and `droll` name kit pieces and are mutually exclusive.
+Performance (`Ctrl+P`) offers attack, transition, palm mute, harmonic, vibrato,
+bend amount/release/curve points, and trill target fields. String tracks also show
+preferred string and fret choices consistent with tuning, capo, and written pitch.
+Strings are displayed one-based; the saved hints remain zero-based. Changing either
+guidance choice updates its counterpart. Fret is derived rather than separately stored.
+Percussion tracks offer kit piece, roll/droll targets, dynamics, grace, technique,
+sticking, and hi-hat choices. Choosing a roll clears droll and vice versa.
+**Add bend point** appends a point; point offsets and amounts can be edited separately.
+Deleting a point field removes that point; deleting a main bend field clears the bend.
+**Clear all hints** clears the draft hints without removing the percussion piece.
+Edits preserve hidden and unrelated hints, written pitch, and rhythm.
 
-Navigation (`Ctrl+M`) replaces `structure`, `tempo_text`, and `expressions` using
+Relationships (`Ctrl+L`) and navigation (`Ctrl+M`) still use JSON text entry.
+Navigation replaces `structure`, `tempo_text`, and `expressions` using
 the existing chart schema. Edit marker ticks, repeat counts, numbered endings,
 segno/coda/fine, da capo/dal segno, rehearsal labels, and expressive spans directly.
 Removing an array entry removes that marker or expression. Note timing, tempo-map

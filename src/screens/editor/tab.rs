@@ -334,7 +334,9 @@ pub(crate) fn tab_fret_dialog_system(
     if keyboard.just_pressed(KeyCode::Escape) {
         document.tab_fret_string = None;
     }
-    if document.view_mode != EditorViewMode::Tab || document.metadata_mode {
+    if document.view_mode != EditorViewMode::Tab || document.metadata_mode
+        || document.inspector.is_some() || document.text_entry.is_some()
+    {
         document.tab_fret_string = None;
     }
     let open = document.view_mode == EditorViewMode::Tab
@@ -383,7 +385,9 @@ pub(crate) fn tab_fret_choice_input(
     tools: Res<SheetTools>,
     choices: Query<&TabFretChoice>,
 ) {
-    if document.view_mode != EditorViewMode::Tab || document.metadata_mode {
+    if document.view_mode != EditorViewMode::Tab || document.metadata_mode
+        || document.inspector.is_some() || document.text_entry.is_some()
+    {
         return;
     }
     let Some(string) = document.tab_fret_string else {
@@ -426,6 +430,7 @@ pub(crate) fn tab_view_system(
     if document.view_mode != EditorViewMode::Tab
         || document.metadata_mode
         || document.text_entry.is_some()
+        || document.inspector.is_some()
         || document.tab_fret_string.is_some()
     {
         document.tab_resize = None;

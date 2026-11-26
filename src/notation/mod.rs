@@ -259,7 +259,8 @@ fn beam_groups(notes: &[ChartEvent], resolution: u32, measures: &[Measure]) -> V
             let continues = beamable
                 && beat.is_some()
                 && beat == current_beat
-                && (previous_end == Some(note.start) || previous_start == Some(note.start));
+                && (previous_end.is_some_and(|end| end >= note.start)
+                    || previous_start == Some(note.start));
             if continues {
                 current.push(index);
             } else {
@@ -284,6 +285,34 @@ fn beam_groups(notes: &[ChartEvent], resolution: u32, measures: &[Measure]) -> V
     }
     groups.sort_by_key(|group| group[0]);
     groups
+}
+
+/// Dotted short notes beam to contiguous or overlapping neighbors without spanning silence.
+///
+/// AI_CODE
+#[test]
+fn dotted_notes_keep_beams_within_the_beat() {
+    let chart: Chart = serde_json::from_str(r#"{
+        "version":1,"title":"Dotted beams","resolution":960,
+        "tempo_map":[{"start":0,"bpm":100}],
+        "time_signature_map":[{"start":0,"numerator":4,"denominator":4}],
+        "tracks":[]
+    }"#).unwrap();
+    let mut notes: Vec<ChartEvent> = serde_json::from_str(r#"[
+        {"start":0,"length":8,"dots":1,"note":26},
+        {"start":480,"length":16,"note":32}
+    ]"#).unwrap();
+    let bars = measures(&chart, 3840);
+    assert_eq!(beam_groups(&notes, 960, &bars), vec![vec![0, 1]]);
+    notes[1].start = 720;
+    assert_eq!(beam_groups(&notes, 960, &bars), vec![vec![0, 1]]);
+    notes[1].start = 840;
+    assert!(beam_groups(&notes, 960, &bars).is_empty());
+    notes[1].start = 960;
+    assert!(beam_groups(&notes, 960, &bars).is_empty());
+    notes[1].start = 480;
+    notes.insert(1, serde_json::from_str(r#"{"start":240,"length":16,"rest":true}"#).unwrap());
+    assert!(beam_groups(&notes, 960, &bars).is_empty());
 }
 
 /// Fills `[gap_start, gap_end)` with the fewest standard rest symbols, splitting at any
