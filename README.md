@@ -196,7 +196,8 @@ tool. Keyboard shortcuts remain available: `F1`-`F5` for duration, `F6` for dots
 triplets, `F8` for rests, `F9` for the tied flag, `F10` for place/remove, `F11` for voice,
 `F12` for dynamics, `A` for articulations, and `P` for percussion pieces. With the slur tool
 active, click two existing pitched notes in order to link them by stable event IDs. The sheet
-draws beams, ties, slurs, tuplets, rests, clefs, key signatures, accidentals, dynamics,
+draws beams (including half-length secondary beamlets for isolated sixteenths next
+to eighth notes), ties, slurs, tuplets, rests, clefs, key signatures, accidentals, dynamics,
 articulations, score markers, and aligned tablature from written pitches. Percussion symbols
 follow kit metadata, while vocal lyrics retain syllable and melisma markings. Removal has no
 undo; manual visual QA across representative multi-track charts remains recommended.

@@ -35,7 +35,7 @@
       "vocal_range": null,
       "clef": "bass",
       "key_signature": {
-        "fifths": 2,
+        "fifths": -2,
         "mode": "major"
       },
       "capo": null,
@@ -64,9 +64,9 @@
           "note": 26
         },
         {
-          "id": "event-000003",
-          "start": 4800,
-          "length": 8,
+          "id": "event-000002",
+          "start": 4320,
+          "length": 16,
           "performance": {
             "preferred_string": 1,
             "attack": null,

@@ -721,6 +721,29 @@ fn sheet_note_hit(
         .copied()
 }
 
+/// Connect sixteenth stems fully, using a half-length beamlet for isolated sixteenths.
+///
+/// AI_CODE
+fn secondary_beam_segments(notes: &[(NoteValue, Vec2)]) -> Vec<(Vec2, Vec2)> {
+    let mut segments = Vec::new();
+    for (index, (value, position)) in notes.iter().enumerate() {
+        if *value != NoteValue::Sixteenth {
+            continue;
+        }
+        let previous = index.checked_sub(1).and_then(|previous| notes.get(previous));
+        let next = notes.get(index + 1);
+        let start = *position + Vec2::new(5.0, 20.0);
+        if let Some((NoteValue::Sixteenth, end)) = next {
+            segments.push((start, *end + Vec2::new(5.0, 20.0)));
+        } else if !previous.is_some_and(|(value, _)| *value == NoteValue::Sixteenth)
+            && let Some((_, neighbor)) = next.or(previous)
+        {
+            segments.push((start, position.lerp(*neighbor, 0.5) + Vec2::new(5.0, 20.0)));
+        }
+    }
+    segments
+}
+
 /// Draw a compact rest marker, distinguishing authored and inferred silence by color.
 ///
 /// AI_CODE
@@ -1199,15 +1222,12 @@ pub(crate) fn sheet_view_system(
                 end + Vec2::new(5.0, 25.0),
                 note_color,
             );
-            if layout.symbols[pair[0]].value == NoteValue::Sixteenth
-                || layout.symbols[pair[1]].value == NoteValue::Sixteenth
-            {
-                gizmos.line_2d(
-                    start + Vec2::new(5.0, 20.0),
-                    end + Vec2::new(5.0, 20.0),
-                    note_color,
-                );
-            }
+        }
+        let notes = group.iter().filter_map(|index| {
+            symbol_position(*index).map(|position| (layout.symbols[*index].value, position))
+        }).collect::<Vec<_>>();
+        for (start, end) in secondary_beam_segments(&notes) {
+            gizmos.line_2d(start, end, note_color);
         }
     }
     for chain in &layout.ties {
@@ -1535,6 +1555,28 @@ pub(crate) fn sheet_view_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Mixed durations receive beamlets; consecutive sixteenths retain a full secondary beam.
+    ///
+    /// AI_CODE
+    #[test]
+    fn mixed_eighth_sixteenth_beams_preserve_duration_flags() {
+        let left = Vec2::new(0.0, 0.0);
+        let right = Vec2::new(100.0, 20.0);
+        let offset = Vec2::new(5.0, 20.0);
+        let middle = left.lerp(right, 0.5) + offset;
+        assert_eq!(secondary_beam_segments(&[(NoteValue::Eighth, left), (NoteValue::Sixteenth, right)]),
+            vec![(right + offset, middle)]);
+        assert_eq!(secondary_beam_segments(&[(NoteValue::Sixteenth, left), (NoteValue::Eighth, right)]),
+            vec![(left + offset, middle)]);
+        assert_eq!(secondary_beam_segments(&[(NoteValue::Sixteenth, left), (NoteValue::Sixteenth, right)]),
+            vec![(left + offset, right + offset)]);
+        assert!(secondary_beam_segments(&[(NoteValue::Eighth, left), (NoteValue::Eighth, right)]).is_empty());
+        assert_eq!(secondary_beam_segments(&[
+            (NoteValue::Sixteenth, left), (NoteValue::Sixteenth, right),
+            (NoteValue::Eighth, Vec2::new(200.0, 0.0)),
+        ]).len(), 1);
+    }
 
     /// Removal follows rendered ledger notes and accidentals, even at off-grid positions.
     ///
