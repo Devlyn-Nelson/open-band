@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "title": "Freak On A Leash",
+  "resolution": 960,
+  "tempo_map": [
+    {
+      "start": 0,
+      "bpm": 100.0
+    }
+  ],
+  "time_signature_map": [
+    {
+      "start": 0,
+      "numerator": 4,
+      "denominator": 4
+    }
+  ],
+  "tempo_text": [],
+  "expressions": [],
+  "structure": [],
+  "tracks": [
+    {
+      "name": "Bass",
+      "kind": "strings",
+      "tuning": {
+        "strings": [
+          "A0",
+          "D1",
+          "G1",
+          "C2",
+          "F2"
+        ]
+      },
+      "kit": null,
+      "vocal_range": null,
+      "clef": "bass",
+      "key_signature": {
+        "fifths": 2,
+        "mode": "major"
+      },
+      "capo": null,
+      "notes": [
+        {
+          "id": "event-000001",
+          "start": 3840,
+          "length": 8,
+          "performance": {
+            "preferred_string": 0,
+            "attack": null,
+            "transition": null,
+            "bend": null,
+            "motion": null,
+            "percussion_dynamics": null,
+            "roll": null,
+            "droll": null,
+            "percussion_grace": null,
+            "percussion_technique": null,
+            "sticking": null,
+            "hi_hat": null,
+            "harmonic": null,
+            "palm_mute": false,
+            "vibrato": null
+          },
+          "note": 26
+        },
+        {
+          "id": "event-000003",
+          "start": 4800,
+          "length": 8,
+          "performance": {
+            "preferred_string": 1,
+            "attack": null,
+            "transition": null,
+            "bend": null,
+            "motion": null,
+            "percussion_dynamics": null,
+            "roll": null,
+            "droll": null,
+            "percussion_grace": null,
+            "percussion_technique": null,
+            "sticking": null,
+            "hi_hat": null,
+            "harmonic": null,
+            "palm_mute": false,
+            "vibrato": null
+          },
+          "note": 32
+        },
+        {
+          "id": "event-000004",
+          "start": 0,
+          "length": 8,
+          "performance": {
+            "preferred_string": 2,
+            "attack": null,
+            "transition": null,
+            "bend": null,
+            "motion": null,
+            "percussion_dynamics": null,
+            "roll": null,
+            "droll": null,
+            "percussion_grace": null,
+            "percussion_technique": null,
+            "sticking": null,
+            "hi_hat": null,
+            "harmonic": null,
+            "palm_mute": false,
+            "vibrato": null
+          },
+          "note": 32
+        }
+      ],
+      "ties": [],
+      "slurs": [],
+      "phrases": [],
+      "star_power_phrases": [],
+      "lyric_verses": []
+    }
+  ]
+}

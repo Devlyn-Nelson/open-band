@@ -181,7 +181,11 @@ resolution and the active time signature; tempo changes do not move the grid.
 Sheet mode shows a staff starting at the shared position, with visible measures expanding
 to fill the available window width while keeping beat spacing readable. Click a line or space
 to place a note on the configured beat-division grid; hold `Shift` for a sharp or
-`Alt` for a flat. In percussion tracks, `P` cycles kit pieces and clicks target the
+`Alt` for a flat. In remove mode (`F10` or `PLACE/REMOVE`), with `REST` off, click
+the visible notehead to remove that event. No accidental modifier is needed, and
+removal works for ledger-line notes below the placement band and off-grid events.
+For new pitches outside the sheet placement band, use the tab fret picker.
+In percussion tracks, `P` cycles kit pieces and clicks target the
 selected piece's lane. The clickable on-screen palette selects duration, dots, triplets,
 rests, ties, place/remove, voice, dynamics, articulations, percussion pieces, and the slur
 tool. Keyboard shortcuts remain available: `F1`-`F5` for duration, `F6` for dots, `F7` for

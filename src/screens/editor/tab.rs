@@ -742,6 +742,41 @@ pub(crate) fn tab_view_system(
 mod tests {
     use super::*;
 
+    /// Activating fret five on an ADGCF bass inserts D1 at the chosen tick.
+    ///
+    /// AI_CODE
+    #[test]
+    fn tab_fret_activation_places_low_bass_note() {
+        let mut document = super::super::new_chart_document();
+        document
+            .chart
+            .tracks
+            .push(super::super::new_track(InstrumentKind::Strings));
+        document.chart.tracks[0].tuning = Some(Tuning {
+            strings: ["A0", "D1", "G1", "C2", "F2"]
+                .map(str::to_owned)
+                .to_vec(),
+        });
+        document.view_mode = EditorViewMode::Tab;
+        document.tab_fret_string = Some(0);
+        document.tab_fret_tick = 0;
+        let mut app = App::new();
+        app.insert_resource(document)
+            .insert_resource(SheetTools::default())
+            .add_observer(tab_fret_choice_input);
+        let button = app.world_mut().spawn(TabFretChoice(5)).id();
+        app.world_mut().trigger(Activate { entity: button });
+
+        let document = app.world().resource::<EditorDocument>();
+        assert_eq!(document.chart.tracks[0].notes.len(), 1);
+        let event = &document.chart.tracks[0].notes[0];
+        assert_eq!(event.start, 0);
+        assert!(matches!(event.content, NoteContent::Pitched { note: 26, .. }));
+        assert_eq!(event.performance.as_ref().unwrap().preferred_string, Some(0));
+        assert!(document.dirty);
+        assert_eq!(document.tab_fret_string, None);
+    }
+
     /// Vertical tab coordinates progress from the top of the window to the bottom in time order.
     ///
     /// AI_CODE

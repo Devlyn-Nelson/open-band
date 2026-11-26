@@ -700,6 +700,27 @@ fn pitch_at(y: f32, clef: Clef) -> Option<u8> {
     step_to_pitch(middle_step(clef) + offset)
 }
 
+/// Select the closest rendered notehead without reconstructing its pitch or snapping its tick.
+///
+/// AI_CODE
+fn sheet_note_hit(
+    position: Vec2,
+    noteheads: &[(EventSource, Vec2)],
+) -> Option<(EventSource, Vec2)> {
+    noteheads
+        .iter()
+        .filter(|(_, center)| {
+            let offset = position - *center;
+            offset.x.abs() <= 10.0 && offset.y.abs() <= 8.0
+        })
+        .min_by(|(_, left), (_, right)| {
+            position
+                .distance_squared(*left)
+                .total_cmp(&position.distance_squared(*right))
+        })
+        .copied()
+}
+
 /// Draw a compact rest marker, distinguishing authored and inferred silence by color.
 ///
 /// AI_CODE
@@ -1031,6 +1052,7 @@ pub(crate) fn sheet_view_system(
             );
         }
     }
+    let mut noteheads = Vec::new();
     for (symbol_index, symbol) in layout.symbols.iter().enumerate() {
         let Some(x) = viewport
             .x_at(symbol.start)
@@ -1049,6 +1071,7 @@ pub(crate) fn sheet_view_system(
         if y.abs() > window.height() / 2.0 - 12.0 {
             continue;
         }
+        noteheads.push((symbol.source, Vec2::new(x, y)));
         if !percussion {
             let base = staff_base_y(symbol.staff);
             let offset = ((y - base) / STAFF_SPACING).round() as i32;
@@ -1431,6 +1454,15 @@ pub(crate) fn sheet_view_system(
     }
     if let Some(cursor) = window.cursor_position() {
         let position = Vec2::new(cursor.x - width / 2.0, window.height() / 2.0 - cursor.y);
+        if tools.remove && !tools.rest {
+            if let Some((source, center)) = sheet_note_hit(position, &noteheads) {
+                gizmos.circle_2d(center, 8.0, cursor_color);
+                if mouse.just_pressed(MouseButton::Left) {
+                    super::remove_editor_event(&mut document, source);
+                }
+            }
+            return;
+        }
         if let Some(tick) = viewport.tick_at(position.x) {
             let snapped = snap_sheet_tick(&document.chart, tick, settings.sheet_beat_divisions);
             if let Some(x) = viewport.x_at(snapped) {
@@ -1500,6 +1532,59 @@ pub(crate) fn sheet_view_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Removal follows rendered ledger notes and accidentals, even at off-grid positions.
+    ///
+    /// AI_CODE
+    #[test]
+    fn sheet_removal_hits_low_and_accidental_noteheads() {
+        let mut document = super::super::new_chart_document();
+        document
+            .chart
+            .tracks
+            .push(super::super::new_track(InstrumentKind::Strings));
+        let tools = SheetTools::default();
+        let flat = PitchSpelling {
+            step: 'G',
+            alter: -1,
+            octave: 1,
+        };
+        for (tick, pitch, spelling) in [(0, 26, None), (977, 32, None), (1920, 30, Some(flat))] {
+            assert!(sheet_edit_spelled_pitch_at_tick(&mut document, tick, pitch, spelling, &tools));
+        }
+        let viewport = SheetViewport {
+            left: -300.0,
+            right: 300.0,
+            start: 0,
+            span: 3840,
+        };
+        let layout = layout_track(&document.chart, &document.chart.tracks[0]);
+        let noteheads = layout
+            .symbols
+            .iter()
+            .filter_map(|symbol| {
+                let NotationSymbolKind::Pitched { pitch, spelling } = &symbol.kind else {
+                    return None;
+                };
+                Some((
+                    symbol.source,
+                    Vec2::new(
+                        viewport.x_at(symbol.start)?,
+                        step_y(pitch_step(*pitch, spelling.as_ref()).0, Clef::Bass) + 4.0,
+                    ),
+                ))
+            })
+            .collect::<Vec<_>>();
+        assert!(pitch_at(noteheads[0].1.y, Clef::Bass).is_none());
+        assert_eq!(sheet_note_hit(noteheads[0].1 + Vec2::new(20.0, 0.0), &noteheads), None);
+        for (source, center) in noteheads.iter().rev() {
+            let hit = sheet_note_hit(*center + Vec2::new(2.0, 1.0), &noteheads).unwrap();
+            assert_eq!(hit.0, *source);
+            assert!(super::super::remove_editor_event(&mut document, hit.0));
+        }
+        assert!(document.chart.tracks[0].notes.is_empty());
+        assert!(document.dirty);
+    }
 
     /// Tab lines remain below the lowest editable note, including voice offsets, on every staff.
     ///
