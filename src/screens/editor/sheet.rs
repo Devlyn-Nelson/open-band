@@ -209,6 +209,15 @@ fn symbol_strokes(symbol: SheetSymbol) -> Vec<(Vec2, Vec2)> {
 #[derive(Component)]
 pub(crate) struct SheetTabBadge((usize, usize));
 
+/// Empty tablature labels identify tied continuations with half-size circular badges. AI_CODE
+fn sheet_tab_badge_size(text: &str) -> Vec2 {
+    if text.is_empty() {
+        Vec2::splat(9.0)
+    } else {
+        Vec2::new((text.chars().count() as f32 * 8.0 + 8.0).max(18.0), 18.0)
+    }
+}
+
 /// Index for reconciling sheet annotations without respawning text entities every frame.
 ///
 /// AI_CODE
@@ -419,7 +428,7 @@ fn engraving_labels(
                                 _ => "",
                             })
                             .unwrap_or_default();
-                        labels.push(label(format!("{fret}{hint}"), x, tab_y, note_color));
+                        labels.push(label(if tie_continuation { String::new() } else { format!("{fret}{hint}") }, x, tab_y, note_color));
                         labels.last_mut().unwrap().tab_end = Some(symbol.start.saturating_add(symbol.duration));
                     }
                 }
@@ -1133,7 +1142,7 @@ pub(crate) fn sheet_view_system(
             if label.tab_end.is_none() && !label.articulation_overlay && label.symbol.is_none() { continue; }
             let end_tick = label.tab_end.unwrap_or(viewport.start);
             let end = viewport.x_at_clamped(end_tick);
-            let width = (label.text.chars().count() as f32 * 8.0 + 8.0).max(18.0);
+            let badge_size = sheet_tab_badge_size(&label.text);
             let parts = if let Some(symbol) = label.symbol {
                 symbol_strokes(symbol).into_iter().map(|(offset, size)|
                     (label.x + offset.x, label.y + offset.y, size.x, size.y, ""))
@@ -1142,7 +1151,7 @@ pub(crate) fn sheet_view_system(
                 vec![
                     ((label.x + end) / 2.0, label.y, (end - label.x).max(1.0), 5.0, ""),
                     (end, label.y, 1.0, 10.0, ""),
-                    (label.x, label.y, width, 18.0, label.text.as_str()),
+                    (label.x, label.y, badge_size.x, badge_size.y, label.text.as_str()),
                 ]
             };
             for (part, (x, y, part_width, height, text)) in parts.into_iter().enumerate() {
@@ -1833,6 +1842,43 @@ pub(crate) fn sheet_view_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Explicit and legacy tie continuations hide fret labels while retaining sustain endpoints. AI_CODE
+    #[test]
+    fn sheet_tab_tied_continuations_use_small_unnumbered_badges() {
+        let mut document = super::super::new_chart_document();
+        super::super::ensure_editor_has_track(&mut document);
+        let track = &mut document.chart.tracks[0];
+        let pitch = track.tuning.as_ref().unwrap().open_midi().unwrap()[0] + 5;
+        track.notes = serde_json::from_value(serde_json::json!([
+            {"id":"a","start":0,"length":4,"note":pitch,"performance":{"preferred_string":0}},
+            {"id":"b","start":960,"length":4,"note":pitch,"performance":{"preferred_string":0}},
+            {"id":"c","start":1920,"length":4,"note":pitch,"performance":{"preferred_string":0}}
+        ])).unwrap();
+        track.ties = vec![EventRelation { from: "a".into(), to: "b".into() },
+            EventRelation { from: "b".into(), to: "c".into() }];
+        let viewport = SheetViewport { left: -100.0, right: 300.0, start: 0, span: 3840 };
+        for legacy in [false, true] {
+            let track = &mut document.chart.tracks[0];
+            if legacy {
+                track.ties.clear();
+                track.notes[0].tied = true;
+                track.notes[1].tied = true;
+            }
+            let layout = layout_track(&document.chart, &document.chart.tracks[0]);
+            let labels = engraving_labels(&document.chart.tracks[0], &layout, viewport, false);
+            let badges = labels.iter().filter(|label| label.tab_end.is_some()).collect::<Vec<_>>();
+            assert_eq!(badges.len(), 3);
+            assert_eq!(badges[0].text, "5");
+            assert_eq!(sheet_tab_badge_size(&badges[0].text), Vec2::splat(18.0));
+            for (index, badge) in badges.iter().enumerate().skip(1) {
+                assert!(badge.text.is_empty());
+                assert_eq!(sheet_tab_badge_size(&badge.text), Vec2::splat(9.0));
+                assert_eq!(badge.tab_end, Some((index as u32 + 1) * 960));
+                assert_eq!(badge.y, badges[0].y);
+            }
+        }
+    }
 
     /// Naturals and fermatas select font-independent foreground shapes with valid stroke geometry. AI_CODE
     #[test]

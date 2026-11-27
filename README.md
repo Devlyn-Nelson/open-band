@@ -283,7 +283,9 @@ cover them.
 Natural accidentals use a drawn natural sign, and fermatas use an arch over a dot,
 rather than text abbreviations. Both render above grid lines without requiring a music font.
 The tablature beneath string staves uses filled green fret badges with light text
-above the staff/grid lines. Green duration bars sit above the grid but below the
+for note attacks; tied continuations use half-size green circles without fret numbers
+or technique letters, while retaining their duration bars. Badges render above
+the staff/grid lines. Green duration bars sit above the grid but below the
 badges, keeping the fret numbers foremost. These overlays do not intercept pointer input.
 Bars end at the authored note endpoint (clipped
 to the visible score edge), and technique letters remain alongside the fret numbers.
