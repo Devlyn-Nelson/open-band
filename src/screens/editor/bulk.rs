@@ -1,5 +1,280 @@
 use super::*;
 
+/// Internal note clipboard retained across documents by the editor input system. AI_CODE
+#[derive(Default)]
+pub(crate) struct EditorClipboard {
+    contents: Option<CopiedNotes>,
+}
+
+/// Authored note data plus relationships whose endpoints are both copied. AI_CODE
+struct CopiedNotes {
+    kind: InstrumentKind,
+    resolution: u32,
+    notes: Vec<ChartEvent>,
+    ties: Vec<(usize, usize)>,
+    slurs: Vec<(usize, usize)>,
+}
+
+impl EditorClipboard {
+    /// Copy without mutating score or history; an empty selection retains the previous clipboard. AI_CODE
+    pub(super) fn copy(&mut self, document: &mut EditorDocument) -> Result<(), String> {
+        let sources = selected_sources(document);
+        if sources.is_empty() { return Err("No notes selected to copy".into()); }
+        let track = &document.chart.tracks[document.track_focus];
+        let notes = sources.iter().map(|source| editor_source_event(track, *source).unwrap().clone())
+            .collect::<Vec<_>>();
+        let layout = layout_track(&document.chart, track);
+        let mut ties = Vec::new();
+        for chain in &layout.ties {
+            for pair in chain.windows(2) {
+                if let (Some(from), Some(to)) = (
+                    sources.iter().position(|source| *source == layout.symbols[pair[0]].source),
+                    sources.iter().position(|source| *source == layout.symbols[pair[1]].source),
+                ) { ties.push((from, to)); }
+            }
+        }
+        let slurs = track.slurs.iter().filter_map(|relation| Some((
+            notes.iter().position(|note| note.id.as_ref() == Some(&relation.from))?,
+            notes.iter().position(|note| note.id.as_ref() == Some(&relation.to))?,
+        ))).collect();
+        document.status = format!("Copied {} notes", notes.len());
+        self.contents = Some(CopiedNotes { kind: track.kind, resolution: document.chart.resolution, notes, ties, slurs });
+        Ok(())
+    }
+
+    /// Replace the selected notes atomically, aligning the earliest copied onset to the range start. AI_CODE
+    pub(super) fn paste(&self, document: &mut EditorDocument) -> Result<(), String> {
+        let selection = document.selection.filter(|selection| selection.track == document.track_focus)
+            .ok_or("Select a destination range before pasting")?;
+        let copied = self.contents.as_ref().ok_or("No notes copied")?;
+        let track = document.chart.tracks.get(document.track_focus).ok_or("No focused track")?;
+        if track.kind != copied.kind { return Err("Paste requires a track of the same instrument kind".into()); }
+        if document.chart.resolution != copied.resolution { return Err("Paste requires matching chart resolutions".into()); }
+        let destination = selection.anchor.min(selection.end);
+        let origin = copied.notes.iter().map(|note| note.start).min().ok_or("No notes copied")?;
+        let mut ids = document.chart.tracks.iter().flat_map(all_track_events)
+            .filter_map(|note| note.id.clone()).collect::<HashSet<_>>();
+        let mut chords = document.chart.tracks.iter().flat_map(all_track_events)
+            .filter_map(|note| note.chord.clone()).collect::<HashSet<_>>();
+        let mut chord_map = std::collections::HashMap::new();
+        let open = track.tuning.as_ref().map(|tuning| tuning.open_midi()).transpose()?;
+        let mut notes = Vec::new();
+        let mut serial = 1u64;
+        for source in &copied.notes {
+            let mut note = source.clone();
+            note.start = destination.checked_add(source.start - origin).ok_or("Paste exceeds timeline bounds")?;
+            note.start.checked_add(note.duration_ticks(document.chart.resolution)).ok_or("Paste exceeds timeline bounds")?;
+            let id = loop {
+                let id = format!("paste-event-{serial:06}");
+                serial += 1;
+                if ids.insert(id.clone()) { break id; }
+            };
+            note.id = Some(id);
+            note.tied = false;
+            if let Some(chord) = &source.chord {
+                note.chord = Some(chord_map.entry(chord.clone()).or_insert_with(|| {
+                    let mut serial = 1u64;
+                    loop {
+                        let id = format!("paste-chord-{serial:06}");
+                        serial += 1;
+                        if chords.insert(id.clone()) { break id; }
+                    }
+                }).clone());
+            }
+            match &note.content {
+                NoteContent::Percussive { piece } => {
+                    if !track.kit.as_ref().is_some_and(|kit| kit.pieces.iter().any(|candidate| candidate.name == *piece)) {
+                        return Err(format!("Destination kit has no piece named {piece}"));
+                    }
+                }
+                NoteContent::Pitched { note: pitch, .. } if track.kind == InstrumentKind::Strings => {
+                    if let Some(hints) = &mut note.performance {
+                        if !hints.preferred_string.and_then(|string| open.as_ref()?.get(string))
+                            .is_some_and(|open| (0..=24).contains(&(i16::from(*pitch) - i16::from(*open) - i16::from(track.capo.unwrap_or(0)))))
+                        { hints.preferred_string = None; }
+                    }
+                }
+                _ => {}
+            }
+            notes.push(note);
+        }
+        let remap = |pairs: &[(usize, usize)]| pairs.iter().map(|(from, to)| EventRelation {
+            from: notes[*from].id.clone().unwrap(),
+            to: notes[*to].id.clone().unwrap(),
+        }).collect::<Vec<_>>();
+        let ties = remap(&copied.ties);
+        let slurs = remap(&copied.slurs);
+        let mut candidate = new_chart_document();
+        candidate.chart = serde_json::from_value(serde_json::to_value(&document.chart).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+        candidate.track_focus = document.track_focus;
+        candidate.selection = Some(selection);
+        delete_selected(&mut candidate);
+        let track = &mut candidate.chart.tracks[document.track_focus];
+        track.notes.extend(notes);
+        track.ties.extend(ties);
+        track.slurs.extend(slurs);
+        document.chart = candidate.chart;
+        document.selection = None;
+        document.selection_drag = false;
+        document.tab_resize = None;
+        document.dirty = true;
+        document.status = format!("Pasted {} notes at tick {destination}", copied.notes.len());
+        Ok(())
+    }
+}
+
+/// Copy/paste replaces selected notes, aligns to the range boundary, and remaps internal relationships. AI_CODE
+#[test]
+fn bulk_clipboard_replaces_and_remaps_as_one_undo_step() {
+    let mut document = new_chart_document();
+    let mut track = new_track(InstrumentKind::Voice);
+    track.notes = serde_json::from_str(r#"[
+        {"id":"a","start":240,"length":8,"note":60,"chord":"chord-a","tied":true},
+        {"id":"harmony","start":240,"length":8,"note":64,"chord":"chord-a"},
+        {"id":"b","start":720,"length":8,"note":60},
+        {"id":"replace","start":1920,"length":4,"note":67},
+        {"id":"outside","start":3840,"length":4,"note":69}
+    ]"#).unwrap();
+    track.slurs = vec![EventRelation { from: "a".into(), to: "b".into() },
+        EventRelation { from: "replace".into(), to: "outside".into() }];
+    document.chart.tracks.push(track);
+    document.selection = Some(TabSelection { track: 0, anchor: 0, end: 720 });
+    document.dirty = false;
+    let mut clipboard = EditorClipboard::default();
+    clipboard.copy(&mut document).unwrap();
+    assert!(!document.dirty);
+    document.selection = Some(TabSelection { track: 0, anchor: 2400, end: 1920 });
+    document.checkpoint();
+    let before = serde_json::to_value(&document.chart).unwrap();
+    clipboard.paste(&mut document).unwrap();
+    document.checkpoint();
+    assert_eq!(document.history.undo.len(), 1);
+    let track = &document.chart.tracks[0];
+    assert_eq!(track.notes.len(), 7);
+    assert!(!track.notes.iter().any(|note| note.id.as_deref() == Some("replace")));
+    let pasted = &track.notes[4..];
+    assert_eq!(pasted.iter().map(|note| note.start).collect::<Vec<_>>(), vec![1920, 1920, 2400]);
+    assert!(pasted.iter().all(|note| !note.tied));
+    assert_ne!(pasted[0].chord.as_deref(), Some("chord-a"));
+    assert_eq!(pasted[0].chord, pasted[1].chord);
+    assert!(track.ties.iter().any(|relation| Some(&relation.from) == pasted[0].id.as_ref()
+        && Some(&relation.to) == pasted[2].id.as_ref()));
+    assert!(track.slurs.iter().any(|relation| Some(&relation.from) == pasted[0].id.as_ref()
+        && Some(&relation.to) == pasted[2].id.as_ref()));
+    let ids = track.notes.iter().filter_map(|note| note.id.as_ref()).collect::<HashSet<_>>();
+    assert_eq!(ids.len(), track.notes.len());
+    assert!(!track.slurs.iter().any(|relation| relation.from == "replace"));
+    let after = serde_json::to_value(&document.chart).unwrap();
+    document.restore_history(false);
+    assert_eq!(serde_json::to_value(&document.chart).unwrap(), before);
+    assert!(!document.dirty);
+    document.restore_history(true);
+    assert_eq!(serde_json::to_value(&document.chart).unwrap(), after);
+}
+
+/// Missing ranges, incompatible tracks, and overflow refuse paste without deleting destination notes. AI_CODE
+#[test]
+fn bulk_clipboard_requires_selection_and_valid_destination() {
+    let mut document = new_chart_document();
+    document.chart.tracks.push(new_track(InstrumentKind::Voice));
+    document.chart.tracks[0].notes = serde_json::from_str(r#"[{"id":"a","start":0,"length":4,"note":60}]"#).unwrap();
+    let mut clipboard = EditorClipboard::default();
+    assert!(clipboard.copy(&mut document).is_err());
+    document.selection = Some(TabSelection { track: 0, anchor: 0, end: 0 });
+    clipboard.copy(&mut document).unwrap();
+    document.dirty = false;
+    let before = serde_json::to_value(&document.chart).unwrap();
+    document.selection = None;
+    assert!(clipboard.paste(&mut document).is_err());
+    assert_eq!(serde_json::to_value(&document.chart).unwrap(), before);
+    document.selection = Some(TabSelection { track: 0, anchor: u32::MAX, end: u32::MAX });
+    assert!(clipboard.paste(&mut document).is_err());
+    assert_eq!(serde_json::to_value(&document.chart).unwrap(), before);
+    assert!(!document.dirty);
+    document.chart.tracks.push(new_track(InstrumentKind::Percussion));
+    document.track_focus = 1;
+    document.selection = Some(TabSelection { track: 1, anchor: 0, end: 960 });
+    let before = serde_json::to_value(&document.chart).unwrap();
+    assert!(clipboard.paste(&mut document).is_err());
+    assert_eq!(serde_json::to_value(&document.chart).unwrap(), before);
+    document.chart.tracks.push(new_track(InstrumentKind::Voice));
+    document.track_focus = 2;
+    document.selection = Some(TabSelection { track: 2, anchor: 1920, end: 1920 });
+    clipboard.paste(&mut document).unwrap();
+    assert_eq!(document.chart.tracks[2].notes[0].start, 1920);
+    assert_ne!(document.chart.tracks[2].notes[0].id.as_deref(), Some("a"));
+}
+
+/// Copy and paste shortcuts share one clipboard across updates in both graphical views. AI_CODE
+#[test]
+fn bulk_clipboard_keyboard_routing_in_both_views() {
+    for view in [EditorViewMode::Sheet, EditorViewMode::Tab] {
+        let mut document = new_chart_document();
+        document.chart.tracks.push(new_track(InstrumentKind::Voice));
+        document.chart.tracks[0].notes = serde_json::from_str(r#"[{"id":"a","start":0,"length":4,"note":60}]"#).unwrap();
+        document.view_mode = view;
+        document.selection = Some(TabSelection { track: 0, anchor: 0, end: 0 });
+        document.dirty = false;
+        let mut app = App::new();
+        app.add_message::<KeyboardInput>()
+            .insert_resource(document)
+            .insert_resource(EditorLibraries { tunings: Vec::new(), kits: Vec::new() })
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(PreUpdate, editor_history_checkpoint)
+            .add_systems(Update, editor_tracks_input)
+            .add_systems(PostUpdate, editor_history_checkpoint);
+        for key in [KeyCode::KeyC, KeyCode::KeyV] {
+            if key == KeyCode::KeyV {
+                app.world_mut().resource_mut::<EditorDocument>().selection = Some(TabSelection { track: 0, anchor: 1920, end: 1920 });
+            }
+            let mut keys = ButtonInput::default();
+            keys.press(KeyCode::ControlLeft);
+            keys.press(key);
+            app.insert_resource(keys);
+            app.update();
+        }
+        let document = app.world().resource::<EditorDocument>();
+        assert_eq!(document.view_mode, view);
+        assert_eq!(document.chart.tracks[0].notes.len(), 2);
+        assert_eq!(document.chart.tracks[0].notes[1].start, 1920);
+        assert_eq!(document.history.undo.len(), 1);
+        assert!(document.selection.is_none());
+    }
+}
+
+/// Phrase notes paste as independent authored notes, and repeated replacement never reuses IDs. AI_CODE
+#[test]
+fn bulk_clipboard_copies_phrase_notes_and_repeated_replacement() {
+    let mut document = new_chart_document();
+    let mut track = new_track(InstrumentKind::Voice);
+    track.phrases = serde_json::from_str(r#"[{"start":0,"duration_ticks":1920,"text":"la","notes":[
+        {"id":"vocal-a","start":240,"length":8,"note":60,"tied":true},
+        {"id":"vocal-b","start":720,"length":8,"note":60}
+    ]}]"#).unwrap();
+    document.chart.tracks.push(track);
+    document.selection = Some(TabSelection { track: 0, anchor: 240, end: 240 });
+    let mut clipboard = EditorClipboard::default();
+    clipboard.copy(&mut document).unwrap();
+    assert!(clipboard.contents.as_ref().unwrap().ties.is_empty());
+    document.selection = Some(TabSelection { track: 0, anchor: 960, end: 960 });
+    clipboard.paste(&mut document).unwrap();
+    let first_id = document.chart.tracks[0].notes[0].id.clone();
+    assert!(!document.chart.tracks[0].notes[0].tied);
+    assert_eq!(document.chart.tracks[0].notes[0].start, 960);
+    document.selection = Some(TabSelection { track: 0, anchor: 960, end: 960 });
+    clipboard.paste(&mut document).unwrap();
+    assert_eq!(document.chart.tracks[0].notes.len(), 1);
+    assert_ne!(document.chart.tracks[0].notes[0].id, first_id);
+    assert_eq!(document.chart.tracks[0].phrases[0].notes.len(), 2);
+    let before = serde_json::to_value(&document.chart).unwrap();
+    document.chart.resolution *= 2;
+    document.selection = Some(TabSelection { track: 0, anchor: 960, end: 960 });
+    assert!(clipboard.paste(&mut document).is_err());
+    document.chart.resolution /= 2;
+    assert_eq!(serde_json::to_value(&document.chart).unwrap(), before);
+}
+
 /// A focused-track onset range; both snapped endpoints are included. AI_CODE
 #[derive(Clone, Copy)]
 pub(super) struct TabSelection {

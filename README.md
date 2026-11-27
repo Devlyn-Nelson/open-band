@@ -139,6 +139,8 @@ Once a chart is open, its track list is shown:
 | `Ctrl+Y` / `Ctrl+Shift+Z` | Redo an undone score edit |
 | `Shift+Left` / `Shift+Right` | Extend a sheet/tab time-range selection by one snap step |
 | `Ctrl+B` | Open the bulk-edit draft for selected notes in sheet or tab view |
+| `Ctrl+C` | Copy all range-selected notes to the internal editor clipboard |
+| `Ctrl+V` | Replace selected notes with clipboard notes starting at the earlier selection boundary; requires a selection |
 | `Delete` | Remove all range-selected notes, or the focused event if no notes are selected, with tie/slur cleanup |
 | `N` | Add a new track (defaults to `Strings`) |
 | `X` | Remove the focused track |
@@ -198,7 +200,22 @@ draft open. Select the entire tie chain when changing its pitch/piece. Rhythm, I
 relationships, and unrelated performance hints remain intact; stale preferred-string
 hints are cleared if a pitch change makes them unplayable. Each batch is one undo
 step. Applied score changes and undo/redo clear the range to avoid stale selections.
-Copy/paste is not included yet.
+`Ctrl+C` copies all selected notes in either view without changing the score.
+`Ctrl+V` requires a destination selection, removes its selected notes, and duplicates
+the copied notes with their earliest onset at the earlier selection boundary.
+An empty range is a valid destination; no selection means no paste. Relative timing,
+rhythm, pitch, and notation are preserved, and copied notes may extend beyond the
+destination range. Unselected notes and rests remain untouched. Each replacement
+is one undo step; paste clears selection but keeps the clipboard for repeated use.
+
+Pasted notes receive fresh event/chord IDs and preserve only ties/slurs internal to
+the copied group. Vocal phrase notes paste as independent notes, without duplicating
+lyric text or phrase containers. Copy/paste works across tracks/documents of the same
+instrument kind and chart resolution. Percussion requires matching piece names in
+the destination kit; string hints that are unplayable in the destination tuning/capo
+are cleared without changing pitch. Invalid pastes leave the destination untouched.
+The internal clipboard lasts for the running editor session and is separate from
+the system text clipboard. Dialog text editing and metadata shortcuts are unchanged.
 
 Press `Delete` to remove every note in the active selection in either view. This
 clears the range and removes ties/slurs referencing deleted notes, leaving rests and

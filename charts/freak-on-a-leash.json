@@ -86,6 +86,100 @@
             "preferred_string": 2
           },
           "note": 38
+        },
+        {
+          "id": "paste-event-000001",
+          "start": 7680,
+          "length": 8,
+          "dots": 1,
+          "dynamic": "mf",
+          "performance": {
+            "preferred_string": 0
+          },
+          "note": 26
+        },
+        {
+          "id": "paste-event-000002",
+          "start": 8160,
+          "length": 16,
+          "performance": {
+            "preferred_string": 1
+          },
+          "note": 32
+        },
+        {
+          "id": "paste-event-000003",
+          "start": 8400,
+          "length": 8,
+          "performance": {
+            "preferred_string": 1
+          },
+          "note": 32
+        },
+        {
+          "id": "paste-event-000004",
+          "start": 8880,
+          "length": 8,
+          "performance": {
+            "preferred_string": 2
+          },
+          "note": 38
+        },
+        {
+          "id": "paste-event-000005",
+          "start": 9360,
+          "length": 4,
+          "performance": {
+            "preferred_string": 2
+          },
+          "note": 38
+        },
+        {
+          "id": "paste-event-000006",
+          "start": 11520,
+          "length": 8,
+          "dots": 1,
+          "dynamic": "mf",
+          "performance": {
+            "preferred_string": 0
+          },
+          "note": 26
+        },
+        {
+          "id": "paste-event-000007",
+          "start": 12000,
+          "length": 16,
+          "performance": {
+            "preferred_string": 1
+          },
+          "note": 32
+        },
+        {
+          "id": "paste-event-000008",
+          "start": 12240,
+          "length": 8,
+          "performance": {
+            "preferred_string": 1
+          },
+          "note": 32
+        },
+        {
+          "id": "paste-event-000009",
+          "start": 12720,
+          "length": 8,
+          "performance": {
+            "preferred_string": 2
+          },
+          "note": 38
+        },
+        {
+          "id": "paste-event-000010",
+          "start": 13200,
+          "length": 4,
+          "performance": {
+            "preferred_string": 2
+          },
+          "note": 38
         }
       ],
       "ties": [
@@ -96,6 +190,22 @@
         {
           "from": "event-000004",
           "to": "event-000005"
+        },
+        {
+          "from": "paste-event-000002",
+          "to": "paste-event-000003"
+        },
+        {
+          "from": "paste-event-000004",
+          "to": "paste-event-000005"
+        },
+        {
+          "from": "paste-event-000007",
+          "to": "paste-event-000008"
+        },
+        {
+          "from": "paste-event-000009",
+          "to": "paste-event-000010"
         }
       ],
       "slurs": [],

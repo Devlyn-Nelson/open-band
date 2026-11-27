@@ -235,7 +235,22 @@ chord/phrase ranges, kit mapping, round-trip fidelity, draft cancellation, point
 gestures in both orientations, sheet accidental-modifier isolation, keyboard dispatch
 in both views, and undo/redo. Manual visual QA remains recommended.
 
-- Copy/paste within or across tracks of the same kind remains a deferred stretch item.
+Copy/paste is implemented with `Ctrl+C` / `Ctrl+V` in sheet and tab views. Copy takes
+all selected notes into an internal session clipboard. Paste requires a destination
+range (including an empty range), replaces its selected notes, and aligns the earliest
+copied onset to the earlier boundary. Relative timing and notation are retained;
+copied duration is not clipped to the range. Without a range, paste does nothing.
+Paste is atomic and one undo step; it clears selection but retains the clipboard.
+
+Pasted events/chords get fresh IDs and internal tie/slur endpoints are remapped,
+including resolved legacy ties. Relationships crossing the copy boundary are omitted.
+Nested vocal notes become independent authored notes; lyrics/phrase containers are
+not copied. Compatible tracks/documents must have the same kind and resolution.
+Destination kits must contain copied piece names; unplayable preferred-string hints
+are cleared for the destination tuning/capo without altering sounding pitch. Failed
+validation leaves the destination unchanged. Tests cover boundary alignment,
+replacement/relationship cleanup, uniqueness, nested notes, repeated paste, incompatible
+destinations, missing selection, keyboard routing in both views, and undo/redo.
 
 Delete removes all range-selected notes in either view, including nested vocal notes,
 and cleans referencing ties/slurs. Rests and unselected notes are preserved. The range

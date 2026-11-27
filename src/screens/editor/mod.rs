@@ -3266,6 +3266,7 @@ fn score_metadata_text_fields_edit_the_score_document() {
 
 /// AI_CODE
 pub(crate) fn editor_tracks_input(
+    mut clipboard: Local<bulk::EditorClipboard>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut keyboard_events: MessageReader<KeyboardInput>,
     mut document: ResMut<EditorDocument>,
@@ -3395,6 +3396,15 @@ pub(crate) fn editor_tracks_input(
         return;
     }
     if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
+        if !document.metadata_mode && (keyboard.just_pressed(KeyCode::KeyC) || keyboard.just_pressed(KeyCode::KeyV)) {
+            let result = if keyboard.just_pressed(KeyCode::KeyC) {
+                clipboard.copy(&mut document)
+            } else {
+                clipboard.paste(&mut document)
+            };
+            if let Err(error) = result { document.status = error; }
+            return;
+        }
         if keyboard.just_pressed(KeyCode::KeyB) && !document.metadata_mode {
             if let Err(error) = bulk::open(&mut document) { document.status = error; }
             return;
