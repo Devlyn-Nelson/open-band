@@ -121,6 +121,11 @@ vocal charts remains recommended.
 
 ### 7. Tab view (implemented)
 
+The shared note-length palette, dot, triplet, rest, and tie toolbar controls are
+available in tab mode as well as sheet mode. Rest clicks insert directly without
+fret selection; explicit rests have visible, removable REST badges on the first lane.
+Duration, dots, tuplets, and backward tie placement reuse the shared insertion path.
+
 The focused track has a vertical, top-to-bottom tab view with meter-aware bar/beat markers
 and unlabeled, progressively darker subdivision guides. `DIV -` / `DIV +` use the same
 persisted beat-division setting as sheet mode; pointer placement preserves those exact

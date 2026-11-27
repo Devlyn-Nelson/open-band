@@ -185,6 +185,13 @@ audio only, not synthesized instrument-note playback, and uses the default audio
 output. Click dispatch is frame-driven; after a long stalled frame, missed beats are
 coalesced instead of sounding in a burst.
 
+Tab view also exposes the whole/half/quarter/eighth/sixteenth duration palette and
+the shared `DOT`, `TRIPLET`, `REST`, and `TIE` toolbar controls. These settings carry
+between sheet and tab and apply to newly placed notes. `REST` places an explicit
+rest directly at the snapped time without opening a fret dialog; rests appear as
+`REST` badges on the first lane and can be removed with the removal tool. `TIE`
+connects compatible preceding notes using the same rules as sheet placement.
+
 In either sheet or tab view, toggle `SELECT` and drag a time range. In tab view,
 Shift-drag also selects; in sheet view use Ctrl+Shift-drag so Shift-click remains
 available for placing sharps. Sheet ranges run horizontally; tab ranges run vertically.

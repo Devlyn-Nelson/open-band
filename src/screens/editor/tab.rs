@@ -182,6 +182,9 @@ fn tab_place_string(
     string: usize,
     fret: u8,
 ) -> bool {
+    if tools.rest {
+        return super::sheet_edit_spelled_pitch_at_tick(document, tick, 0, None, tools);
+    }
     let Some(track) = document.chart.tracks.get(document.track_focus) else {
         return false;
     };
@@ -287,7 +290,7 @@ fn tab_lane_for_symbol(track: &ChartTrack, symbol: &NotationSymbol) -> Option<us
                     .map(|(index, _)| index)
             })
         }
-        NotationSymbolKind::Rest => None,
+        NotationSymbolKind::Rest => Some(0),
     }
 }
 
@@ -697,7 +700,7 @@ pub(crate) fn tab_view_system(
                     format!("{} {piece}", symbol.as_deref().unwrap_or("x"))
                 }
             }
-            NotationSymbolKind::Rest => continue,
+            NotationSymbolKind::Rest => "REST".into(),
         };
         let continuation = tab_tie_continuation(&layout, symbol_index);
         if selected.contains(&symbol.source) {
@@ -852,6 +855,12 @@ pub(crate) fn tab_view_system(
         );
         return;
     }
+    if tools.rest && !tools.remove {
+        if mouse.just_pressed(MouseButton::Left) && position.x >= left - 78.0 && position.x <= right + 30.0 {
+            super::sheet_edit_spelled_pitch_at_tick(&mut document, snapped, 0, None, &tools);
+        }
+        return;
+    }
     if percussion && position.x >= left - 78.0 && position.x <= left - 20.0 {
         let hit = tab_hover_event(&track, &layout.symbols, usize::MAX, position.y,
             (view_start, span, top, bottom));
@@ -1003,6 +1012,37 @@ pub(crate) fn tab_view_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Tab insertion uses shared lengths, dots, tuplets, ties, and explicit rest tools. AI_CODE
+    #[test]
+    fn tab_notation_tools_control_inserted_events() {
+        let mut document = new_chart_document();
+        ensure_editor_has_track(&mut document);
+        let mut tools = SheetTools::default();
+        tools.duration = NoteValue::Eighth;
+        tools.dots = 1;
+        tools.tuplet = Some(Tuplet { actual: 3, normal: 2 });
+        tools.tied = true;
+        assert!(tab_place_string(&mut document, &tools, 0, 0, 3));
+        let duration = document.chart.tracks[0].notes[0].duration_ticks(document.chart.resolution);
+        assert_eq!(duration, 480);
+        assert!(tab_place_string(&mut document, &tools, duration, 0, 3));
+        assert_eq!(document.chart.tracks[0].ties.len(), 1);
+        assert_eq!(document.chart.tracks[0].notes[1].length, NoteValue::Eighth);
+        assert_eq!(document.chart.tracks[0].notes[1].dots, 1);
+        assert!(document.chart.tracks[0].notes[1].tuplet.is_some());
+        tools.rest = true;
+        assert!(tab_place_string(&mut document, &tools, 1920, 0, 0));
+        let rest = &document.chart.tracks[0].notes[2];
+        assert!(matches!(rest.content, NoteContent::Rest));
+        assert!(rest.performance.is_none());
+        assert_eq!(rest.duration_ticks(document.chart.resolution), 480);
+        let layout = layout_track(&document.chart, &document.chart.tracks[0]);
+        let symbol = layout.symbols.iter().find(|symbol| symbol.start == 1920).unwrap();
+        assert_eq!(tab_lane_for_symbol(&document.chart.tracks[0], symbol), Some(0));
+        assert!(remove_editor_event(&mut document, symbol.source));
+        assert_eq!(document.chart.tracks[0].notes.len(), 2);
+    }
 
     /// Untuned vocal phrase notes occupy a visible lane for range selection and pitch editing. AI_CODE
     #[test]

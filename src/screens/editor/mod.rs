@@ -2602,11 +2602,50 @@ pub(crate) fn sheet_toolbar_display(
         &mut BackgroundColor,
         &mut Visibility,
         &mut Text,
+        &mut Node,
     )>,
 ) {
     let visible = !document.metadata_mode && document.text_entry.is_none() && document.inspector.is_none() && document.bulk_edit.is_none();
-    for (action, mut background, mut visibility, mut text) in &mut buttons {
+    for (action, mut background, mut visibility, mut text, mut node) in &mut buttons {
+        let slot = if document.view_mode == EditorViewMode::Tab {
+            match action {
+                SheetToolAction::Duration(value) => Some(match value {
+                    NoteValue::Whole => 0, NoteValue::Half => 1, NoteValue::Quarter => 2,
+                    NoteValue::Eighth => 3, NoteValue::Sixteenth => 4,
+                }),
+                SheetToolAction::Dots => Some(5), SheetToolAction::Tuplet => Some(6),
+                SheetToolAction::Rest => Some(7), SheetToolAction::Tie => Some(8),
+                SheetToolAction::Remove => Some(9), SheetToolAction::Piece => Some(10),
+                SheetToolAction::TabSnap => Some(11), SheetToolAction::ZoomIn => Some(12),
+                SheetToolAction::ZoomOut => Some(13), SheetToolAction::SelectRange => Some(14),
+                SheetToolAction::BulkEdit => Some(15), SheetToolAction::SheetDivisionDown => Some(16),
+                SheetToolAction::SheetDivisionUp => Some(17), SheetToolAction::PlayPause => Some(18),
+                SheetToolAction::StopPreview => Some(19), _ => None,
+            }
+        } else {
+            Some(match action {
+                SheetToolAction::Duration(value) => match value {
+                    NoteValue::Whole => 0, NoteValue::Half => 1, NoteValue::Quarter => 2,
+                    NoteValue::Eighth => 3, NoteValue::Sixteenth => 4,
+                },
+                SheetToolAction::Dots => 5, SheetToolAction::Tuplet => 6,
+                SheetToolAction::Rest => 7, SheetToolAction::Tie => 8, SheetToolAction::Remove => 9,
+                SheetToolAction::Voice => 10, SheetToolAction::Dynamic => 11,
+                SheetToolAction::Articulation => 12, SheetToolAction::Piece => 13, SheetToolAction::Slur => 14,
+                SheetToolAction::SelectRange => 15, SheetToolAction::BulkEdit => 16,
+                SheetToolAction::SheetDenser => 18, SheetToolAction::SheetSpacer => 19,
+                SheetToolAction::SheetDivisionDown => 20, SheetToolAction::SheetDivisionUp => 21,
+                SheetToolAction::PlayPause => 22, SheetToolAction::StopPreview => 23,
+                _ => 0,
+            })
+        };
+        if let Some(slot) = slot {
+            node.left = Val::Percent((slot % 12) as f32 * (100.0 / 12.0) + 0.25);
+            node.top = Val::Px(8.0 + (slot / 12) as f32 * 34.0);
+        }
         let action_visible = match action {
+            SheetToolAction::Duration(_) | SheetToolAction::Dots | SheetToolAction::Tuplet
+            | SheetToolAction::Rest | SheetToolAction::Tie => true,
             SheetToolAction::SelectRange | SheetToolAction::BulkEdit => true,
             SheetToolAction::Remove
             | SheetToolAction::PlayPause
