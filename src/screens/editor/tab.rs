@@ -506,9 +506,11 @@ pub(crate) fn tab_view_system(
     }
     let Ok(window) = windows.single() else { return };
     let resolution = document.chart.resolution.max(1);
-    let (top, bottom) = tab_viewport_bounds(window.height());
+    let reference_height = if document.chart.tracks.len() > 1 { 72.0 } else { 0.0 };
+    let (original_top, bottom) = tab_viewport_bounds(window.height());
+    let top = (original_top - reference_height).max(bottom + 80.0);
     let viewport_height = top - bottom;
-    let span = tab_visible_span(resolution, document.tab_beats_per_screen, window.height());
+    let span = tab_visible_span(resolution, document.tab_beats_per_screen, window.height() - reference_height);
     for event in wheel.read() {
         let direction = match event.y.total_cmp(&0.0) {
             std::cmp::Ordering::Greater => -1i64,
@@ -554,6 +556,17 @@ pub(crate) fn tab_view_system(
     };
     let mut next_labels = Vec::<(String, f32, f32, Color)>::new();
     let mut next_badges = Vec::<(String, f32, f32, bool)>::new();
+    let reference_rows = super::references::reference_rows(&document, view_start, span);
+    for (index, row) in reference_rows.iter().enumerate() {
+        let y = super::references::reference_row_y(top + 20.0, index, reference_rows.len());
+        let color = Color::srgb(0.55, 0.70, 0.76);
+        gizmos.line_2d(Vec2::new(left, y), Vec2::new(right, y), Color::srgb(0.24, 0.31, 0.33));
+        next_labels.push((row.name.clone(), left + 110.0, y + 9.0, color));
+        for tick in &row.onsets {
+            let x = left + (right - left) * (*tick - view_start) as f32 / span.max(1) as f32;
+            gizmos.line_2d(Vec2::new(x, y - 3.0), Vec2::new(x, y + 3.0), color);
+        }
+    }
     for lane in 0..lanes {
         let x = x_for_lane(lane);
         gizmos.line_2d(

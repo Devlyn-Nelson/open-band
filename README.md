@@ -126,6 +126,7 @@ Once a chart is open, its track list is shown:
 | Key | Action |
 | --- | --- |
 | `Page Up` / `Page Down` or `Up` / `Down` | Cycle the focused track (Page keys also work in score metadata) |
+| `Ctrl+Page Up` / `Ctrl+Page Down` | Cycle pages of other-track timing references without changing track focus |
 | `Left` / `Right` | Move the shared position by the active snap interval |
 | `V` | Toggle the document-wide sheet/tab preview mode |
 | `U` / `O` | Jump to the previous/next event on the focused track, including off-grid events |
@@ -160,6 +161,16 @@ while a text or inspector dialog is open; applying a draft records its changes, 
 canceling does not. Navigation and view settings are not undone. A new edit clears redo.
 Saving keeps history, and undoing or redoing back to the saved score clears the dirty
 indicator. Returning to the chart picker discards that document's history.
+
+Other tracks appear as timing-only reference rows above the focused sheet/tab view.
+Rows stay directly above the score's working area with a fixed gap rather than
+following the window header; pages with fewer references stay bottom-aligned.
+Rows show track names and note onsets, not pitch/fret detail, and cannot edit notes.
+The compact horizontal overview follows the same visible tick range as the focused
+view, including in vertical tab mode. Chords share one onset marker; rests are
+omitted. Three other tracks are shown per page; `Ctrl+PageUp`/`Ctrl+PageDown` cycles
+reference pages without changing the editable track, selection, or shared cursor.
+Single-track charts have no reference rows. Scrolling and zoom update the overview.
 
 `Space` or the `PLAY`/`PAUSE` toolbar control starts or pauses a metronome preview
 from the shared cursor. `STOP` returns to the start of that playback pass. Clicks

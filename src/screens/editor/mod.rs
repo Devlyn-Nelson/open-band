@@ -9,6 +9,7 @@ pub(crate) use sheet::sheet_view_system;
 mod tab;
 mod inspector;
 mod bulk;
+mod references;
 mod playback;
 pub(crate) use playback::editor_playback_system;
 pub(crate) use tab::{tab_fret_choice_input, tab_fret_dialog_system, tab_view_system};
@@ -55,6 +56,7 @@ pub(crate) struct EditorDocument {
     playback: playback::EditorPlayback,
     selection: Option<bulk::TabSelection>,
     selection_mode: bool,
+    reference_page: usize,
     selection_drag: bool,
     selection_move: Option<bulk::SelectionMove>,
     bulk_edit: Option<bulk::BulkDraft>,
@@ -1658,6 +1660,7 @@ fn list_editable_charts() -> Vec<EditorChartEntry> {
 /// AI_CODE
 fn new_chart_document() -> EditorDocument {
     EditorDocument {
+    reference_page: 0,
     selection: None,
         selection_mode: false,
         selection_drag: false,
@@ -1813,6 +1816,7 @@ fn load_chart_document(path: &Path) -> Result<EditorDocument, String> {
         false
     };
     Ok(EditorDocument {
+        reference_page: 0,
         selection: None,
         selection_mode: false,
         selection_drag: false,
@@ -3396,6 +3400,10 @@ pub(crate) fn editor_tracks_input(
         return;
     }
     if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
+        if !document.metadata_mode && (keyboard.just_pressed(KeyCode::PageUp) || keyboard.just_pressed(KeyCode::PageDown)) {
+            references::cycle_reference_page(&mut document, if keyboard.just_pressed(KeyCode::PageUp) { -1 } else { 1 });
+            return;
+        }
         if !document.metadata_mode && (keyboard.just_pressed(KeyCode::KeyC) || keyboard.just_pressed(KeyCode::KeyV)) {
             let result = if keyboard.just_pressed(KeyCode::KeyC) {
                 clipboard.copy(&mut document)

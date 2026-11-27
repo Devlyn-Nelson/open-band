@@ -43,14 +43,11 @@ The sheet view and gameplay overlay still need to consume and render this layout
     description (positions, symbol types) that both the editor's sheet view and the
     gameplay overlay (Part D) render.
 
-### 5. Multi-track editor view: track focus and sheet/tab toggle
+### 5. Multi-track editor view: track focus and sheet/tab toggle (implemented)
 
-Navigation state and controls are implemented: PageUp/PageDown cycles the focused track,
-the tick position and sheet/tab mode are shared across tracks, and the current text editor
-shows a focused-track event preview. Events can be inserted, edited, and removed in a
-JSON-based text editor, including existing vocal phrase notes. Full-size graphical sheet
-and tab views remain dependent on parts 6 and 7; the text editor is not a substitute
-for those views, so this part is still open.
+PageUp/PageDown cycles the focused track, with one full-size editable sheet/tab view.
+The tick position and sheet/tab mode are shared across tracks. Other tracks appear
+in a compact, non-interactive timing-reference strip above the focused view.
 
 - A chart can have any number of tracks, but sheet/tab view can only show one track's full
   detail readably at a time. First implementation (**Option A**): the view always shows
@@ -64,11 +61,23 @@ for those views, so this part is still open.
 - Sheet vs. tab is a **single global toggle**, not a per-track setting, applying to
   whichever track is currently focused, so switching between the two views is quick
   regardless of which track you're on.
-- **Future enhancement (Option C, not part of this first pass)**: render the other
-  tracks as thin, non-interactive reference lanes (note positions only, no pitch/fret
-  detail) above/below the focused staff, for timing context when composing against other
-  parts. A full synced multi-staff score view (every track fully rendered at once) is a
-  longer-term stretch goal, not currently planned.
+- **Reference lanes (Option C, implemented)**: other tracks appear as thin horizontal
+  timing-only rows above both sheet and tab views, using the focused view's exact
+  visible tick interval. Rows are anchored just above the focused score's working
+  area with a fixed 24px gap, not the window header; shorter pages stay bottom-aligned.
+  Each row shows track number/name and note-onset markers,
+  without pitch/fret detail or editing controls. Simultaneous notes share one marker;
+  rests are omitted and nested vocal notes participate. Three reference tracks are
+  shown per page in document order, excluding the focused track. Ctrl+PageUp/PageDown
+  cycles reference pages without changing focus, selection, cursor, or view mode.
+  Scrolling, zoom, track focus, and preview-follow update the reference interval with
+  the focused view. Reference rows remain a horizontal overview in vertical tab mode.
+  Paging is navigation-only and does not dirty the chart or add undo entries.
+  A full synced multi-staff score view remains a longer-term stretch goal.
+
+Regression coverage checks tick clipping, focused-track exclusion, chord/rest and
+nested-vocal handling, page wraparound, single-track charts, and keyboard isolation
+in both views. Manual visual QA remains recommended.
 
 ### 6. Sheet view (editor)
 

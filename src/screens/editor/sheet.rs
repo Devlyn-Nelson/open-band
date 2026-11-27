@@ -920,7 +920,22 @@ pub(crate) fn sheet_view_system(
         &document.chart,
         viewport.start.saturating_add(viewport.span),
     );
-    let labels_data = engraving_labels(track, &layout, viewport, percussion);
+    let mut labels_data = engraving_labels(track, &layout, viewport, percussion);
+    let reference_rows = super::references::reference_rows(&document, viewport.start, viewport.span);
+    let reference_top = super::references::reference_row_y(STAFF_Y + EDIT_HEIGHT, 0, reference_rows.len());
+    let reference_bottom = super::references::reference_row_y(STAFF_Y + EDIT_HEIGHT,
+        reference_rows.len().saturating_sub(1), reference_rows.len());
+    for (index, row) in reference_rows.iter().enumerate() {
+        let y = super::references::reference_row_y(STAFF_Y + EDIT_HEIGHT, index, reference_rows.len());
+        let color = Color::srgb(0.55, 0.70, 0.76);
+        gizmos.line_2d(Vec2::new(viewport.left, y), Vec2::new(viewport.right, y), Color::srgb(0.24, 0.31, 0.33));
+        labels_data.push(EngravingLabel { text: row.name.clone(), x: viewport.left + 110.0, y: y + 9.0, color });
+        for tick in &row.onsets {
+            if let Some(x) = viewport.x_at(*tick) {
+                gizmos.line_2d(Vec2::new(x, y - 3.0), Vec2::new(x, y + 3.0), color);
+            }
+        }
+    }
     reconcile_engraving_labels(&mut commands, &mut labels, &labels_data);
     let clef = layout.clef.unwrap_or(Clef::Treble);
     let staff_color = Color::srgb(0.55, 0.60, 0.63);
@@ -1505,6 +1520,9 @@ pub(crate) fn sheet_view_system(
     }
     if let Some(cursor) = window.cursor_position() {
         let position = Vec2::new(cursor.x - width / 2.0, window.height() / 2.0 - cursor.y);
+        if position.y >= reference_bottom - 6.0 && position.y <= reference_top + 18.0
+            && document.chart.tracks.len() > 1 && document.selection_move.is_none() && !document.selection_drag
+        { return; }
         if sheet_selection_input(&mut document, viewport, position,
             (selection_bottom, selection_top), settings.sheet_beat_divisions, &keyboard, &mouse)
         {
