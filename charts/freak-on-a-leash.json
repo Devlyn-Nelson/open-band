@@ -86,6 +86,61 @@
             "preferred_string": 2
           },
           "note": 38
+        },
+        {
+          "id": "event-000006",
+          "start": 7680,
+          "length": 8,
+          "performance": {
+            "preferred_string": 0
+          },
+          "note": 26
+        },
+        {
+          "id": "event-000007",
+          "start": 8160,
+          "length": 16,
+          "performance": {
+            "preferred_string": 1
+          },
+          "note": 32
+        },
+        {
+          "id": "event-000009",
+          "start": 8880,
+          "length": 8,
+          "performance": {
+            "preferred_string": 2
+          },
+          "note": 38,
+          "spelling": {
+            "step": "D",
+            "alter": 0,
+            "octave": 2
+          }
+        },
+        {
+          "id": "event-000008",
+          "start": 8400,
+          "length": 8,
+          "performance": {
+            "preferred_string": 1
+          },
+          "note": 32
+        },
+        {
+          "id": "event-000010",
+          "start": 9360,
+          "length": 4,
+          "performance": {
+            "preferred_string": 2
+          },
+          "note": 38,
+          "spelling": {
+            "step": "D",
+            "alter": 0,
+            "octave": 2
+          }
         }
       ],
       "ties": [
@@ -96,6 +151,14 @@
         {
           "from": "event-000004",
           "to": "event-000005"
+        },
+        {
+          "from": "event-000007",
+          "to": "event-000008"
+        },
+        {
+          "from": "event-000009",
+          "to": "event-000010"
         }
       ],
       "slurs": [],

@@ -910,7 +910,8 @@ pub(super) fn sheet_edit_spelled_pitch_at_tick(
     true
 }
 
-/// Tie the newest event to a matching preceding event using stable IDs, not insertion order.
+/// Tie the newest event to its predecessor and inherit its non-duration note properties.
+/// Keep placement identity, chord membership, and duration independent of the source.
 ///
 /// AI_CODE
 fn tie_inserted_event_to_previous(document: &mut EditorDocument) {
@@ -929,16 +930,75 @@ fn tie_inserted_event_to_previous(document: &mut EditorDocument) {
                 }
         })
         .max_by_key(|event| event.start);
-    let relation = predecessor.and_then(|event| Some(EventRelation {
-        from: event.id.clone()?,
-        to: inserted.id.clone()?,
-    }));
-    if let Some(relation) = relation {
+    let continuation = predecessor.and_then(|event| {
+        let relation = EventRelation {
+            from: event.id.clone()?,
+            to: inserted.id.clone()?,
+        };
+        let mut continuation = event.clone();
+        continuation.id = inserted.id.clone();
+        continuation.start = inserted.start;
+        continuation.length = inserted.length;
+        continuation.dots = inserted.dots;
+        continuation.tuplet = inserted.tuplet;
+        continuation.chord = inserted.chord.clone();
+        continuation.tied = inserted.tied;
+        Some((relation, continuation))
+    });
+    if let Some((relation, continuation)) = continuation {
         let track = &mut document.chart.tracks[document.track_focus];
+        *track.notes.last_mut().unwrap() = continuation;
         if !track.ties.contains(&relation) {
             track.ties.push(relation);
         }
     }
+}
+
+/// Tied continuations inherit authored properties while keeping their own placement and duration.
+/// AI_CODE
+#[test]
+fn placement_tie_inherits_note_properties() {
+    let mut document = new_chart_document();
+    let mut track = new_track(InstrumentKind::Strings);
+    let mut source: ChartEvent = serde_json::from_str(r#"{
+        "start":0,"length":4,"note":"E2",
+        "performance":{"preferred_string":2}
+    }"#).unwrap();
+    source.id = Some("source".into());
+    source.start = 0;
+    source.length = NoteValue::Quarter;
+    source.dots = 0;
+    source.tuplet = None;
+    source.dynamic = Some(DynamicLevel::Ff);
+    source.articulations = vec![Articulation::Tenuto];
+    source.chord = Some("source-chord".into());
+    source.tied = true;
+    source.staff = 1;
+    let pitch = source.note().unwrap();
+    let voice = source.voice;
+    track.notes = vec![source.clone()];
+    track.ties.clear();
+    document.chart.tracks.push(track);
+    let mut tools = SheetTools::default();
+    tools.tied = true;
+    tools.voice = voice;
+    tools.duration = NoteValue::Eighth;
+    tools.dots = 1;
+    tools.tuplet = Some(Tuplet { actual: 3, normal: 2 });
+    let start = source.duration_ticks(document.chart.resolution);
+    assert!(sheet_edit_spelled_pitch_at_tick(&mut document, start, pitch, None, &tools));
+    let inserted = &document.chart.tracks[0].notes[1];
+    let mut expected = source;
+    expected.id = inserted.id.clone();
+    expected.start = start;
+    expected.length = tools.duration;
+    expected.dots = tools.dots;
+    expected.tuplet = tools.tuplet;
+    expected.chord = None;
+    expected.tied = false;
+    assert_ne!(inserted.id.as_deref(), Some("source"));
+    assert_eq!(serde_json::to_value(inserted).unwrap(), serde_json::to_value(expected).unwrap());
+    assert_eq!(document.chart.tracks[0].ties.len(), 1);
 }
 
 /// Placement ties connect backwards only when pitch, onset, voice, and staff are compatible.

@@ -175,9 +175,14 @@ triplets, `F8` for rests, `F9` for automatic tie placement, `F10` for place/remo
 is enabled, placing a note connects it to a preceding note of the same pitch, voice,
 and staff whose duration ends exactly at the new note's start. Dots and tuplets count
 toward that duration. No match means no tie; the new note is not marked as the start
-of a future tie. Existing notes are unchanged by toggling the tool. Percussion uses
+of a future tie. A tied continuation copies the preceding note's pitch spelling,
+dynamics, articulations, and performance hints (including preferred string, keeping
+the same string/fret in tab). It keeps its own start, length, dots, tuplets, event ID,
+and chord membership. Existing notes are unchanged by toggling the tool. Percussion uses
 the same rule with matching kit pieces. The inspector's **Tie to next** field remains
-available for forward ties on existing notes. With the slur tool
+available for forward ties on existing notes. In tab view, tied continuations appear
+as half-size green circles without fret numbers along the continuing sustain line.
+With the slur tool
 active, click two existing pitched notes in order to link them by stable event IDs. The sheet
 draws beams (including half-length secondary beamlets for isolated sixteenths next
 to eighth notes), ties, slurs, tuplets, rests, clefs, key signatures, accidentals, dynamics,

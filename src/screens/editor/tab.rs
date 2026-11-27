@@ -41,6 +41,39 @@ type TabLabelQuery<'world, 'state> = Query<
 #[derive(Component)]
 pub(crate) struct TabNoteBadge(usize);
 
+/// Identify continuation symbols in explicit and legacy tie chains. AI_CODE
+fn tab_tie_continuation(layout: &crate::notation::NotationLayout, index: usize) -> bool {
+    layout.ties.iter().any(|chain| chain.iter().skip(1).any(|symbol| *symbol == index))
+}
+
+/// Tie starts retain fret labels; every subsequent symbol is a continuation. AI_CODE
+#[test]
+fn tab_tie_continuation_marks_only_chain_followers() {
+    let chart: Chart = serde_json::from_str(r#"{
+        "version":1,"title":"Tab ties","resolution":960,
+        "tempo_map":[{"start":0,"bpm":100}],
+        "time_signature_map":[{"start":0,"numerator":4,"denominator":4}],
+        "tracks":[{"name":"Bass","kind":"strings","notes":[
+            {"id":"a","start":0,"length":4,"note":40},
+            {"id":"b","start":960,"length":4,"note":40},
+            {"id":"c","start":1920,"length":4,"note":40},
+            {"id":"d","start":2880,"length":4,"note":40}
+        ],"ties":[{"from":"a","to":"b"},{"from":"b","to":"c"}]}]
+    }"#).unwrap();
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert!(!tab_tie_continuation(&layout, 0));
+    assert!(tab_tie_continuation(&layout, 1));
+    assert!(tab_tie_continuation(&layout, 2));
+    assert!(!tab_tie_continuation(&layout, 3));
+    let mut legacy = chart;
+    legacy.tracks[0].ties.clear();
+    legacy.tracks[0].notes[0].tied = true;
+    let layout = layout_track(&legacy, &legacy.tracks[0]);
+    assert!(!tab_tie_continuation(&layout, 0));
+    assert!(tab_tie_continuation(&layout, 1));
+    assert!(!tab_tie_continuation(&layout, 2));
+}
+
 type TabNoteBadgeQuery<'world, 'state> = Query<
     'world,
     'state,
@@ -494,7 +527,7 @@ pub(crate) fn tab_view_system(
         }
     };
     let mut next_labels = Vec::<(String, f32, f32, Color)>::new();
-    let mut next_badges = Vec::<(String, f32, f32)>::new();
+    let mut next_badges = Vec::<(String, f32, f32, bool)>::new();
     for lane in 0..lanes {
         let x = x_for_lane(lane);
         gizmos.line_2d(
@@ -548,7 +581,7 @@ pub(crate) fn tab_view_system(
             }
         }
     }
-    for symbol in &layout.symbols {
+    for (symbol_index, symbol) in layout.symbols.iter().enumerate() {
         let Some(y) = y_for_tick(symbol.start) else {
             continue;
         };
@@ -600,7 +633,8 @@ pub(crate) fn tab_view_system(
             }
             NotationSymbolKind::Rest => continue,
         };
-        next_badges.push((text, x, y));
+        let continuation = tab_tie_continuation(&layout, symbol_index);
+        next_badges.push((if continuation { String::new() } else { text }, x, y, continuation));
         if let Some(end_y) = tab_duration_end_y(symbol.start, symbol.duration, view_start, span, top, bottom) {
             for offset in -3..=3 {
                 gizmos.line_2d(
@@ -649,9 +683,13 @@ pub(crate) fn tab_view_system(
         .iter_mut()
         .map(|(entity, marker, _, _)| (marker.0, entity))
         .collect::<std::collections::HashMap<_, _>>();
-    for (index, (badge_text, x, y)) in next_badges.iter().enumerate() {
-        let badge_width = (badge_text.chars().count() as f32 * 11.0 + 16.0).max(36.0);
-        let badge_height = 36.0;
+    for (index, (badge_text, x, y, continuation)) in next_badges.iter().enumerate() {
+        let badge_width = if *continuation {
+            18.0
+        } else {
+            (badge_text.chars().count() as f32 * 11.0 + 16.0).max(36.0)
+        };
+        let badge_height = if *continuation { 18.0 } else { 36.0 };
         let left_px = window.width() / 2.0 + *x - badge_width / 2.0;
         let top_px = window.height() / 2.0 - *y - badge_height / 2.0;
         if let Some(entity) = existing_badges.get(&index)
