@@ -43,40 +43,15 @@ sudo apt install libasound2-dev libudev-dev
 
 Then run:
 
-```bash
-cargo run
-```
 
 To feed a WAV recording through the detector instead of a hardware input, set
-`BAND_HERO_RECORDING` to a recording path (fed through the first configured `Strings`
 slot, or a 4-string default if none is configured):
-
-```bash
-BAND_HERO_RECORDING=tests/recordings/open-gdeab.wav BAND_HERO_BASS_STRINGS=5 cargo run
-```
-
-The recording input uses the same onset and pitch detector as CPAL input. The supplied
-filename convention is covered by an ignored diagnostic test while detector accuracy is
-being tuned; run it with `cargo test supplied_bass_recordings_detect_expected_open_strings -- --ignored`.
-
-Recording test filenames use these conventions:
-
-Test WAV fixtures live in `tests/recordings/`, separate from WAV files created by the
-application in `recordings/`.
-
-- `open-<strings>-<suffix>.wav`: open strings, in the order named. A suffix may be a version number or `no-mute`.
-- `fret-<string>-<suffix>.wav`: the open string followed by one pluck at each fret from 1 through 24. The suffix is optional.
-
-The fret corpus test can be run with `cargo test supplied_bass_fret_recordings_detect_open_through_fret_24 -- --ignored`.
 
 The application opens on Home. Choose `Live Session` to start playing immediately with saved settings, or choose `Set Up` to configure devices and calibration. Input Setup can still be revisited at any time.
 
 ## Controls
 
 ### Device Selection
-
-Input Setup shows a dynamic list of instrument slots; any number of slots of any kind
-(`Strings`, `Percussion`, `Voice`) can be configured, and multiple slots of the same kind
 are supported (e.g. two `Strings` slots for guitar and bass).
 
 | Key | Action |
@@ -182,6 +157,8 @@ when a chart is saved; existing IDs, explicit rests, voice/staff assignments, re
 and performance hints are preserved. Performance hints remain separate from notation fields.
 The snap interval is shared by the document and its tick positions are calculated from
 resolution and the active time signature; tempo changes do not move the grid.
+Mouse-wheel scrolling in sheet mode moves the shared cursor by the current navigation
+snap interval: up moves left (earlier), down moves right (later), clamped at tick zero.
 Sheet mode shows a staff starting at the shared position, with visible measures expanding
 to fill the available window width while keeping beat spacing readable. Click a line or space
 to place a note on the configured beat-division grid; hold `Shift` for a sharp or
@@ -210,6 +187,12 @@ Explicit stable-ID ties and the legacy tied flag prevent beams across the tied p
 but each endpoint can still beam to neighboring notes on its other side.
 Accidentals are shown only on the first note of a tie chain, not repeated on tied
 continuations, including across barlines. Stored pitch and spelling remain unchanged.
+When no spelling is authored, chromatic pitches use flat equivalents in flat keys
+and sharp equivalents otherwise. Explicit spelling takes precedence over this fallback.
+Tied continuations inherit the first note's displayed spelling so every note in the
+tie stays at the same staff position, even if a continuation stores an enharmonic name.
+This affects display only; authored spellings and pitches are preserved.
+A key signature of `-2` means two flats, not double-flat accidentals.
 It also draws
 articulations, score markers, and aligned tablature from written pitches. Percussion symbols
 follow kit metadata, while vocal lyrics retain syllable and melisma markings. Removal has no
@@ -297,6 +280,8 @@ and notes. Additional spans create empty phrases. A span containing notes cannot
 be deleted through this editor. Lyric-verse phrase notes retain their existing event
 editing path. Removing chord or relation entries clears those relationships only.
 
+Saved `performance` objects omit unset (`null`) hints and disabled (`false`) flags;
+missing hint fields load as unset or false, preserving compatibility with older charts.
 Performance (`Ctrl+P`) offers attack, transition, palm mute, harmonic, vibrato,
 bend amount/release/curve points, and trill target fields. String tracks also show
 preferred string and fret choices consistent with tuning, capo, and written pitch.

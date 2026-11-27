@@ -477,11 +477,8 @@ fn replace_score_section(
                             return Err("Preferred string/fret must match the written pitch".into());
                         }
                     }
-                    let allowed = serde_json::to_value(serde_json::from_value::<PerformanceHints>(serde_json::json!({}))
-                        .map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
-                    if let Some(key) = fields.keys().find(|key| allowed.get(*key).is_none()) {
-                        return Err(format!("{key} is not a performance field"));
-                    }
+                    serde_json::from_value::<PerformanceHints>(serde_json::Value::Object(fields.clone()))
+                        .map_err(|error| error.to_string())?;
                 } else if !input.is_null() {
                     return Err("Performance must be an object or null".into());
                 }

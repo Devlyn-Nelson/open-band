@@ -386,7 +386,7 @@ pub(crate) enum NoteTransition {
 pub(crate) struct BendSpec {
     #[serde(default)]
     pub(crate) semitones: f32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "performance_flag_is_false")]
     pub(crate) release: bool,
     #[serde(default)]
     pub(crate) points: Vec<BendPoint>,
@@ -419,37 +419,65 @@ pub(crate) struct PitchMotion {
 ///
 /// AI_CODE
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PerformanceHints {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) preferred_string: Option<usize>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) attack: Option<NoteAttack>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) transition: Option<NoteTransition>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) bend: Option<BendSpec>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) motion: Option<PitchMotion>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) percussion_dynamics: Option<NoteDynamics>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) roll: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) droll: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) percussion_grace: Option<PercussionGrace>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) percussion_technique: Option<PercussionTechnique>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) sticking: Option<Sticking>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) hi_hat: Option<HiHatState>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) harmonic: Option<HarmonicKind>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "performance_flag_is_false")]
     pub(crate) palm_mute: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) vibrato: Option<VibratoKind>,
+}
+
+/// Omit disabled performance flags while keeping false as the loading default. AI_CODE
+fn performance_flag_is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Sparse performance JSON preserves missing-field defaults and non-default hint values. AI_CODE
+#[test]
+fn performance_hints_omit_defaults_and_round_trip() {
+    let defaults: PerformanceHints = serde_json::from_str("{}").unwrap();
+    assert_eq!(serde_json::to_value(&defaults).unwrap(), serde_json::json!({}));
+    assert!(defaults.preferred_string.is_none());
+    assert!(!defaults.palm_mute);
+    let hints: PerformanceHints = serde_json::from_str(
+        r#"{"preferred_string":0,"attack":"pluck","palm_mute":true,"vibrato":null}"#,
+    ).unwrap();
+    let compact = serde_json::to_value(&hints).unwrap();
+    assert_eq!(compact, serde_json::json!({"preferred_string":0,"attack":"pluck","palm_mute":true}));
+    assert_eq!(serde_json::from_value::<PerformanceHints>(compact).unwrap(), hints);
+    let event: ChartEvent = serde_json::from_str(
+        r#"{"start":0,"length":4,"note":60,"performance":{"preferred_string":0,"palm_mute":false,"attack":null}}"#,
+    ).unwrap();
+    let value = serde_json::to_value(&event).unwrap();
+    assert_eq!(value["performance"], serde_json::json!({"preferred_string":0}));
+    let reloaded: ChartEvent = serde_json::from_value(value).unwrap();
+    assert_eq!(reloaded.performance, event.performance);
 }
 
 /// Written pitch spelling retained alongside the sounding MIDI value so enharmonic names

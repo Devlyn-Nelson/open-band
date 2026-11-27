@@ -1,0 +1,1 @@
+currently if you try and make the beginning of freak on a leash, the note first and second tied note will get different spelling / performance hints which makes the tied notes show as different string/fret plucks. tied notes should copy better. also tied notes should not show the pluck in the tab view for the second note in a tied pair, the time period should extend.

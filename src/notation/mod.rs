@@ -550,7 +550,25 @@ pub(crate) fn layout_track(chart: &Chart, track: &ChartTrack) -> NotationLayout 
     let beams = beam_groups_without_ties(&notes, chart.resolution, &measures, &ties);
     let tuplets = tuplet_groups(&notes, chart.resolution);
     let chord_groups = chord_groups(&notes);
-    let symbols = notation_symbols(&events, track, chart.resolution);
+    let mut symbols = notation_symbols(&events, track, chart.resolution);
+    for chain in &ties {
+        let Some(first) = chain.first().and_then(|index| symbols.get(*index)) else {
+            continue;
+        };
+        let NotationSymbolKind::Pitched { pitch, spelling } = &first.kind else {
+            continue;
+        };
+        let pitch = *pitch;
+        let spelling = spelling.clone();
+        for index in chain.iter().skip(1) {
+            if let Some(symbol) = symbols.get_mut(*index)
+                && let NotationSymbolKind::Pitched { pitch: continuation, spelling: written } = &mut symbol.kind
+                && *continuation == pitch
+            {
+                *written = spelling.clone();
+            }
+        }
+    }
     let lyrics = lyric_layout(track, &events);
 
     let mut lanes = notes
@@ -903,6 +921,93 @@ pub(crate) struct LyricLayout {
     pub(crate) notes: Vec<usize>,
 }
 
+/// Choose flat names for unspelled chromatic pitches in flat keys without altering score data.
+///
+/// AI_CODE
+fn flat_key_spelling(pitch: u8, key: Option<KeySignature>) -> Option<PitchSpelling> {
+    if !key.is_some_and(|key| key.fifths < 0) {
+        return None;
+    }
+    let semitone = pitch % 12;
+    let step = match semitone {
+        1 => 'D',
+        3 => 'E',
+        6 => 'G',
+        8 => 'A',
+        10 => 'B',
+        _ => return None,
+    };
+    Some(PitchSpelling {
+        step,
+        alter: -1,
+        octave: (i16::from(pitch) / 12 - 1) as i8,
+    })
+}
+
+/// Unspecified spelling follows key direction, while authored spelling always takes precedence.
+///
+/// AI_CODE
+#[test]
+fn flat_keys_resolve_unspelled_pitches_as_flats() {
+    let mut chart: Chart = serde_json::from_str(r#"{
+        "version":1,"title":"Flat key","resolution":960,
+        "tempo_map":[{"start":0,"bpm":100}],
+        "time_signature_map":[{"start":0,"numerator":4,"denominator":4}],
+        "tracks":[{"name":"Bass","kind":"strings","tuning":{"strings":["A0","D1","G1","C2","F2"]},
+            "key_signature":{"fifths":-2,"mode":"major"},
+            "notes":[{"id":"a","start":0,"length":8,"note":32},
+                {"id":"b","start":480,"length":8,"note":32}],
+            "ties":[{"from":"a","to":"b"}]}]
+    }"#).unwrap();
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    for symbol in &layout.symbols {
+        assert!(matches!(&symbol.kind, NotationSymbolKind::Pitched {
+            pitch: 32, spelling: Some(spelling),
+        } if spelling.step == 'A' && spelling.alter == -1 && spelling.octave == 1));
+    }
+    assert!(matches!(&chart.tracks[0].notes[0].content, NoteContent::Pitched { note: 32, spelling: None }));
+    chart.tracks[0].notes[0].content = NoteContent::Pitched {
+        note: 32, spelling: Some(PitchSpelling { step: 'G', alter: 1, octave: 1 }),
+    };
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert!(matches!(&layout.symbols[0].kind, NotationSymbolKind::Pitched {
+        spelling: Some(spelling), ..
+    } if spelling.step == 'G' && spelling.alter == 1));
+    chart.tracks[0].key_signature.as_mut().unwrap().fifths = 2;
+    chart.tracks[0].ties.clear();
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert!(matches!(&layout.symbols[1].kind, NotationSymbolKind::Pitched { spelling: None, .. }));
+}
+
+/// Tied enharmonic continuations inherit the head's displayed spelling without rewriting events. AI_CODE
+#[test]
+fn tie_continuations_share_the_first_notes_spelling() {
+    let mut chart: Chart = serde_json::from_str(r#"{
+        "version":1,"title":"Enharmonic tie","resolution":960,
+        "tempo_map":[{"start":0,"bpm":100}],
+        "time_signature_map":[{"start":0,"numerator":4,"denominator":4}],
+        "tracks":[{"name":"Bass","kind":"voice",
+            "key_signature":{"fifths":-2,"mode":"major"},
+            "notes":[{"id":"a","start":0,"length":8,"note":32},
+                {"id":"b","start":480,"length":8,"note":32,"spelling":{"step":"G","alter":1,"octave":1}},
+                {"id":"c","start":960,"length":8,"note":32,"spelling":{"step":"G","alter":1,"octave":1}}],
+            "ties":[{"from":"a","to":"b"},{"from":"b","to":"c"}]}]
+    }"#).unwrap();
+    let before = serde_json::to_string(&chart).unwrap();
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    for symbol in &layout.symbols {
+        assert!(matches!(&symbol.kind, NotationSymbolKind::Pitched { pitch: 32, spelling: Some(spelling) }
+            if spelling.step == 'A' && spelling.alter == -1 && spelling.octave == 1));
+    }
+    assert_eq!(serde_json::to_string(&chart).unwrap(), before);
+    chart.tracks[0].ties.clear();
+    chart.tracks[0].notes[0].tied = true;
+    chart.tracks[0].notes[1].tied = true;
+    let layout = layout_track(&chart, &chart.tracks[0]);
+    assert!(matches!(&layout.symbols[2].kind, NotationSymbolKind::Pitched { spelling: Some(spelling), .. }
+        if spelling.step == 'A' && spelling.alter == -1));
+}
+
 /// Builds a framework-independent symbol for every authored event.
 ///
 /// AI_CODE
@@ -921,7 +1026,7 @@ fn notation_symbols(
                     spelling,
                 } => NotationSymbolKind::Pitched {
                     pitch: *pitch,
-                    spelling: spelling.clone(),
+                    spelling: spelling.clone().or_else(|| flat_key_spelling(*pitch, track.key_signature)),
                 },
                 NoteContent::Percussive { piece } => {
                     let kit_piece = track.kit.as_ref().and_then(|kit| {

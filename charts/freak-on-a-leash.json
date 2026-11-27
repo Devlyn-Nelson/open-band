@@ -47,21 +47,7 @@
           "dots": 1,
           "dynamic": "mf",
           "performance": {
-            "preferred_string": 0,
-            "attack": null,
-            "transition": null,
-            "bend": null,
-            "motion": null,
-            "percussion_dynamics": null,
-            "roll": null,
-            "droll": null,
-            "percussion_grace": null,
-            "percussion_technique": null,
-            "sticking": null,
-            "hi_hat": null,
-            "harmonic": null,
-            "palm_mute": false,
-            "vibrato": null
+            "preferred_string": 0
           },
           "note": 26
         },
@@ -70,132 +56,46 @@
           "start": 4320,
           "length": 16,
           "performance": {
-            "preferred_string": 1,
-            "attack": null,
-            "transition": null,
-            "bend": null,
-            "motion": null,
-            "percussion_dynamics": null,
-            "roll": null,
-            "droll": null,
-            "percussion_grace": null,
-            "percussion_technique": null,
-            "sticking": null,
-            "hi_hat": null,
-            "harmonic": null,
-            "palm_mute": false,
-            "vibrato": null
+            "preferred_string": 1
           },
           "note": 32
         },
         {
           "id": "event-000003",
-          "start": 11520,
+          "start": 4560,
           "length": 8,
           "performance": {
-            "preferred_string": 0,
-            "attack": null,
-            "transition": null,
-            "bend": null,
-            "motion": null,
-            "percussion_dynamics": null,
-            "roll": null,
-            "droll": null,
-            "percussion_grace": null,
-            "percussion_technique": null,
-            "sticking": null,
-            "hi_hat": null,
-            "harmonic": null,
-            "palm_mute": false,
-            "vibrato": null
+            "preferred_string": 1
           },
-          "note": 26
+          "note": 32
         },
         {
           "id": "event-000004",
-          "start": 12000,
-          "length": 16,
+          "start": 5040,
+          "length": 8,
           "performance": {
-            "preferred_string": 1,
-            "attack": null,
-            "transition": null,
-            "bend": null,
-            "motion": null,
-            "percussion_dynamics": null,
-            "roll": null,
-            "droll": null,
-            "percussion_grace": null,
-            "percussion_technique": null,
-            "sticking": null,
-            "hi_hat": null,
-            "harmonic": null,
-            "palm_mute": false,
-            "vibrato": null
+            "preferred_string": 2
           },
-          "note": 32
+          "note": 38
         },
         {
           "id": "event-000005",
-          "start": 7680,
-          "length": 8,
+          "start": 5520,
+          "length": 4,
           "performance": {
-            "preferred_string": 0,
-            "attack": null,
-            "transition": null,
-            "bend": null,
-            "motion": null,
-            "percussion_dynamics": null,
-            "roll": null,
-            "droll": null,
-            "percussion_grace": null,
-            "percussion_technique": null,
-            "sticking": null,
-            "hi_hat": null,
-            "harmonic": null,
-            "palm_mute": false,
-            "vibrato": null
+            "preferred_string": 2
           },
-          "note": 26
-        },
-        {
-          "id": "event-000006",
-          "start": 8160,
-          "length": 16,
-          "performance": {
-            "preferred_string": 1,
-            "attack": null,
-            "transition": null,
-            "bend": null,
-            "motion": null,
-            "percussion_dynamics": null,
-            "roll": null,
-            "droll": null,
-            "percussion_grace": null,
-            "percussion_technique": null,
-            "sticking": null,
-            "hi_hat": null,
-            "harmonic": null,
-            "palm_mute": false,
-            "vibrato": null
-          },
-          "note": 32
-        },
-        {
-          "id": "event-000009",
-          "start": 4560,
-          "length": 8,
-          "note": 32,
-          "spelling": {
-            "step": "G",
-            "alter": 1,
-            "octave": 1
-          }
+          "note": 38
         }
       ],
       "ties": [
         {
           "from": "event-000002",
-          "to": "event-000009"
+          "to": "event-000003"
+        },
+        {
+          "from": "event-000004",
+          "to": "event-000005"
         }
       ],
       "slurs": [],

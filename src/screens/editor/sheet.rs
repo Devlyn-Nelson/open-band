@@ -1,4 +1,5 @@
 use super::*;
+use bevy::input::mouse::MouseWheel;
 
 const STAFF_SPACING: f32 = 18.0;
 const STAFF_Y: f32 = -90.0;
@@ -804,6 +805,21 @@ fn draw_curve(gizmos: &mut Gizmos, start: Vec2, end: Vec2, height: f32, color: C
     }
 }
 
+/// Move the shared cursor by one navigation snap step without editing the score. AI_CODE
+fn scroll_sheet_cursor(document: &mut EditorDocument, wheel_y: f32) {
+    if !wheel_y.is_finite() || wheel_y == 0.0 {
+        return;
+    }
+    let step = document.snap_interval.ticks(document.chart.resolution).max(1);
+    let tick = if wheel_y > 0.0 {
+        document.current_tick.saturating_sub(step)
+    } else {
+        document.current_tick.saturating_add(step)
+    };
+    document.current_tick = snap_editor_tick(document, tick);
+    document.event_focus = 0;
+}
+
 /// Render and edit the focused track in a width-responsive sheet viewport.
 ///
 /// AI_CODE
@@ -815,6 +831,7 @@ pub(crate) fn sheet_view_system(
     settings: Res<PersistentSettings>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    mut wheel: MessageReader<MouseWheel>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     mut labels: SheetLabelQuery,
 ) {
@@ -823,8 +840,12 @@ pub(crate) fn sheet_view_system(
         || document.text_entry.is_some()
         || document.inspector.is_some()
     {
+        wheel.clear();
         clear_engraving_labels(&mut commands, &mut labels);
         return;
+    }
+    for event in wheel.read() {
+        scroll_sheet_cursor(&mut document, event.y);
     }
     let Ok(window) = windows.single() else {
         clear_engraving_labels(&mut commands, &mut labels);
@@ -1558,6 +1579,28 @@ pub(crate) fn sheet_view_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Wheel direction matches horizontal cursor navigation and never dirties the chart. AI_CODE
+    #[test]
+    fn sheet_wheel_moves_cursor_left_and_right() {
+        let mut document = super::super::new_chart_document();
+        document.dirty = false;
+        document.current_tick = 960;
+        document.event_focus = 3;
+        scroll_sheet_cursor(&mut document, 1.0);
+        assert_eq!(document.current_tick, 0);
+        assert_eq!(document.event_focus, 0);
+        scroll_sheet_cursor(&mut document, 1.0);
+        assert_eq!(document.current_tick, 0);
+        scroll_sheet_cursor(&mut document, -1.0);
+        assert_eq!(document.current_tick, 960);
+        document.snap_interval = NoteValue::Sixteenth;
+        scroll_sheet_cursor(&mut document, -1.0);
+        assert_eq!(document.current_tick, 1200);
+        scroll_sheet_cursor(&mut document, 0.0);
+        assert_eq!(document.current_tick, 1200);
+        assert!(!document.dirty);
+    }
 
     /// Accidentals appear once per tie chain, including flat spelling and barline continuations.
     ///
