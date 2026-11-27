@@ -47,7 +47,7 @@ The sheet view and gameplay overlay still need to consume and render this layout
 
 PageUp/PageDown cycles the focused track, with one full-size editable sheet/tab view.
 The tick position and sheet/tab mode are shared across tracks. Other tracks appear
-in a compact, non-interactive timing-reference strip above the focused view.
+in compact, non-interactive timing references beside or above the focused view.
 
 - A chart can have any number of tracks, but sheet/tab view can only show one track's full
   detail readably at a time. First implementation (**Option A**): the view always shows
@@ -62,7 +62,7 @@ in a compact, non-interactive timing-reference strip above the focused view.
   whichever track is currently focused, so switching between the two views is quick
   regardless of which track you're on.
 - **Reference lanes (Option C, implemented)**: other tracks appear as thin horizontal
-  timing-only rows above both sheet and tab views, using the focused view's exact
+  timing-only rows above sheet view, using the focused view's exact
   visible tick interval. Rows are anchored just above the focused score's working
   area with a fixed 24px gap, not the window header; shorter pages stay bottom-aligned.
   Each row shows track number/name and note-onset markers,
@@ -71,7 +71,10 @@ in a compact, non-interactive timing-reference strip above the focused view.
   shown per page in document order, excluding the focused track. Ctrl+PageUp/PageDown
   cycles reference pages without changing focus, selection, cursor, or view mode.
   Scrolling, zoom, track focus, and preview-follow update the reference interval with
-  the focused view. Reference rows remain a horizontal overview in vertical tab mode.
+  the focused view. In tab mode, editable lanes use the left half of the screen and
+  vertical timing-reference lanes use the right half, sharing the exact tick-to-height
+  mapping. Beat guides and the playhead cross both halves for direct alignment.
+  The reference half is non-interactive; it cannot start focused-track note edits.
   Paging is navigation-only and does not dirty the chart or add undo entries.
   A full synced multi-staff score view remains a longer-term stretch goal.
 
@@ -114,7 +117,10 @@ slur chains use the notation layout's stable-ID relationships; chord groups rece
 stems and independent voices/staves retain separate positions.
 
 Strings show aligned notation and pitch-derived tablature, using preferred-string hints only
-to choose a playable tab position. Percussion symbols use kit-piece metadata, distinguish
+to choose a playable tab position. Sheet tablature frets have filled green circular
+backings (widened for multi-character labels) and horizontal green duration bars with
+end caps, aligned to authored duration and clipped at the viewport edge. Technique
+letters remain readable alongside fret numbers. Percussion symbols use kit-piece metadata, distinguish
 lane-spanning pieces, and label shared pieces. Vocal lyrics show syllable boundaries and
 melisma spans. Manual visual QA across representative multi-staff, string, percussion, and
 vocal charts remains recommended.
@@ -125,6 +131,11 @@ The shared note-length palette, dot, triplet, rest, and tie toolbar controls are
 available in tab mode as well as sheet mode. Rest clicks insert directly without
 fret selection; explicit rests have visible, removable REST badges on the first lane.
 Duration, dots, tuplets, and backward tie placement reuse the shared insertion path.
+In tab tie mode, an endpoint click places a continuation inferred from the preceding
+note on that lane without opening a fret picker. The continuation inherits note
+properties and retains the active duration/dot/tuplet settings. This takes priority
+over endpoint resizing, which remains available with tie mode off. Missing predecessors
+and occupied continuation positions leave the score unchanged.
 
 The focused track has a vertical, top-to-bottom tab view with meter-aware bar/beat markers
 and unlabeled, progressively darker subdivision guides. `DIV -` / `DIV +` use the same

@@ -2444,6 +2444,7 @@ pub(crate) fn cleanup_editor(
     fret_choices: Query<Entity, With<TabFretChoiceButton>>,
     tab_labels: Query<Entity, With<tab::TabSymbolLabel>>,
     tab_note_badges: Query<Entity, With<tab::TabNoteBadge>>,
+    sheet_tab_badges: Query<Entity, With<sheet::SheetTabBadge>>,
 ) {
     for entity in &entities {
         commands.entity(entity).despawn();
@@ -2462,6 +2463,9 @@ pub(crate) fn cleanup_editor(
         commands.entity(entity).despawn();
     }
     for entity in &tab_note_badges {
+        commands.entity(entity).despawn();
+    }
+    for entity in &sheet_tab_badges {
         commands.entity(entity).despawn();
     }
     // /\\ AI_CODE /\\

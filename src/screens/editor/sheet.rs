@@ -164,7 +164,13 @@ struct EngravingLabel {
     x: f32,
     y: f32,
     color: Color,
+    tab_end: Option<u32>,
+    articulation_overlay: bool,
 }
+
+/// A persistent filled backing for a sheet tablature fret label. AI_CODE
+#[derive(Component)]
+pub(crate) struct SheetTabBadge(usize);
 
 /// Index for reconciling sheet annotations without respawning text entities every frame.
 ///
@@ -196,14 +202,12 @@ fn engraving_labels(
     let mut labels = Vec::new();
     let note_color = Color::srgb(0.93, 0.94, 0.88);
     let marker_color = Color::srgb(0.79, 0.83, 0.70);
-    let label = |text: String, x: f32, y: f32, color: Color| EngravingLabel { text, x, y, color };
+    let label = |text: String, x: f32, y: f32, color: Color| EngravingLabel { text, x, y, color, tab_end: None, articulation_overlay: false };
     let string_count = track
         .tuning
         .as_ref()
         .map_or(0, |tuning| tuning.strings.len());
-    let staff_y = |staff: u8, voice: u8| {
-        sheet_staff_y(staff, string_count) + (1.5 - f32::from(voice.min(4))) * 8.0
-    };
+    let staff_y = |staff: u8, _voice: u8| sheet_staff_y(staff, string_count);
 
     if let Some(x) = viewport.x_at(viewport.start) {
         if !percussion {
@@ -310,13 +314,25 @@ fn engraving_labels(
                         marker_color,
                     ));
                 }
-                for (index, articulation) in symbol.articulations.iter().enumerate() {
+                let mut above_index = 0;
+                for articulation in &symbol.articulations {
+                    let note_top = step_y(pitch_step(*pitch, spelling.as_ref()).0,
+                        layout.clef.unwrap_or(Clef::Treble)) + y - STAFF_Y;
+                    let articulation_y = if matches!(articulation, Articulation::Staccato | Articulation::Tenuto) {
+                        note_top - 14.0
+                    } else {
+                        let position = (staff_y(symbol.staff, symbol.voice) + STAFF_SPACING * 2.0 + 18.0)
+                            .max(note_top + 36.0) + above_index as f32 * 16.0;
+                        above_index += 1;
+                        position
+                    };
                     labels.push(label(
                         articulation_label(*articulation).into(),
-                        x + index as f32 * 10.0,
-                        y + 28.0,
+                        x,
+                        articulation_y,
                         marker_color,
                     ));
+                    labels.last_mut().unwrap().articulation_overlay = true;
                 }
                 if symbol.grace.is_some() {
                     labels.push(label("gr".into(), x - 8.0, y + 22.0, marker_color));
@@ -361,6 +377,7 @@ fn engraving_labels(
                             })
                             .unwrap_or_default();
                         labels.push(label(format!("{fret}{hint}"), x, tab_y, note_color));
+                        labels.last_mut().unwrap().tab_end = Some(symbol.start.saturating_add(symbol.duration));
                     }
                 }
             }
@@ -524,7 +541,7 @@ fn articulation_label(articulation: Articulation) -> &'static str {
     match articulation {
         Articulation::Staccato => ".",
         Articulation::Tenuto => "-",
-        Articulation::Marcato => ">",
+        Articulation::Marcato => "^",
         Articulation::Accent => ">",
         Articulation::Fermata => "fermata",
         Articulation::Grace => "gr",
@@ -791,6 +808,15 @@ fn secondary_beam_segments(notes: &[(NoteValue, Vec2)]) -> Vec<(Vec2, Vec2)> {
     segments
 }
 
+/// Whole rests hang from the fourth line; half rests sit on the middle line. AI_CODE
+fn rest_block_bounds(value: NoteValue) -> Option<(f32, f32)> {
+    match value {
+        NoteValue::Whole => Some((STAFF_SPACING - 6.0, STAFF_SPACING)),
+        NoteValue::Half => Some((0.0, 6.0)),
+        _ => None,
+    }
+}
+
 /// Draw a compact rest marker, distinguishing authored and inferred silence by color.
 ///
 /// AI_CODE
@@ -798,17 +824,15 @@ fn draw_rest(gizmos: &mut Gizmos, position: Vec2, value: NoteValue, color: Color
     let width = 6.0;
     match value {
         NoteValue::Whole | NoteValue::Half => {
-            let offset = if value == NoteValue::Whole { -3.0 } else { 3.0 };
-            gizmos.line_2d(
-                position + Vec2::new(-width, offset),
-                position + Vec2::new(width, offset),
-                color,
-            );
-            gizmos.line_2d(
-                position + Vec2::new(-width, offset - 3.0),
-                position + Vec2::new(width, offset - 3.0),
-                color,
-            );
+            let (bottom, top) = rest_block_bounds(value).unwrap();
+            for step in 0..=12 {
+                let offset = bottom + (top - bottom) * step as f32 / 12.0;
+                gizmos.line_2d(
+                    position + Vec2::new(-width, offset),
+                    position + Vec2::new(width, offset),
+                    color,
+                );
+            }
         }
         _ => {
             gizmos.line_2d(
@@ -878,7 +902,16 @@ pub(crate) fn sheet_view_system(
     mut wheel: MessageReader<MouseWheel>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     mut labels: SheetLabelQuery,
+    mut badges: Query<(Entity, &SheetTabBadge, &mut Node, &mut Text, &mut BackgroundColor, &mut TextColor, &mut GlobalZIndex), Without<SheetEngravingLabel>>,
 ) {
+    if document.view_mode != EditorViewMode::Sheet || document.metadata_mode
+        || document.text_entry.is_some() || document.inspector.is_some() || document.bulk_edit.is_some()
+        || windows.single().is_err()
+        || windows.single().is_ok_and(|window| window.width() <= STAFF_MARGIN * 2.0 || window.height() <= EDIT_HEIGHT * 2.0)
+        || document.chart.tracks.get(document.track_focus).is_none()
+    {
+        for (entity, _, _, _, _, _, _) in &badges { commands.entity(entity).despawn(); }
+    }
     if document.view_mode != EditorViewMode::Sheet
         || document.metadata_mode
         || document.text_entry.is_some()
@@ -935,14 +968,15 @@ pub(crate) fn sheet_view_system(
         let y = super::references::reference_row_y(STAFF_Y + EDIT_HEIGHT, index, reference_rows.len());
         let color = Color::srgb(0.55, 0.70, 0.76);
         gizmos.line_2d(Vec2::new(viewport.left, y), Vec2::new(viewport.right, y), Color::srgb(0.24, 0.31, 0.33));
-        labels_data.push(EngravingLabel { text: row.name.clone(), x: viewport.left + 110.0, y: y + 9.0, color });
+        labels_data.push(EngravingLabel { text: row.name.clone(), x: viewport.left + 110.0, y: y + 9.0, color, tab_end: None, articulation_overlay: false });
         for tick in &row.onsets {
             if let Some(x) = viewport.x_at(*tick) {
                 gizmos.line_2d(Vec2::new(x, y - 3.0), Vec2::new(x, y + 3.0), color);
             }
         }
     }
-    reconcile_engraving_labels(&mut commands, &mut labels, &labels_data);
+    let score_labels = labels_data.iter().filter(|label| label.tab_end.is_none() && !label.articulation_overlay).cloned().collect::<Vec<_>>();
+    reconcile_engraving_labels(&mut commands, &mut labels, &score_labels);
     let clef = layout.clef.unwrap_or(Clef::Treble);
     let staff_color = Color::srgb(0.55, 0.60, 0.63);
     let note_color = Color::srgb(0.93, 0.94, 0.88);
@@ -974,7 +1008,7 @@ pub(crate) fn sheet_view_system(
         .as_ref()
         .map_or(0, |tuning| tuning.strings.len());
     let staff_base_y = |staff: u8| sheet_staff_y(staff, string_count);
-    let note_y = |staff: u8, voice: u8| staff_base_y(staff) + (1.5 - f32::from(voice.min(4))) * 8.0;
+    let note_y = |staff: u8, _voice: u8| staff_base_y(staff);
     let line_y = |lane: usize| {
         STAFF_Y + (lane_count.saturating_sub(1) as f32 / 2.0 - lane as f32) * STAFF_SPACING
     };
@@ -1047,6 +1081,61 @@ pub(crate) fn sheet_view_system(
                 }
             }
         }
+    }
+    let existing_badges = badges.iter().map(|(entity, marker, _, _, _, _, _)| (marker.0, entity))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut active_badges = HashSet::new();
+    {
+        for (index, label) in labels_data.iter().enumerate() {
+            if label.tab_end.is_none() && !label.articulation_overlay { continue; }
+            let end_tick = label.tab_end.unwrap_or(viewport.start);
+            let end = viewport.x_at_clamped(end_tick);
+            let width = (label.text.chars().count() as f32 * 8.0 + 8.0).max(18.0);
+            for (part, (x, part_width, height, text)) in [
+                ((label.x + end) / 2.0, (end - label.x).max(1.0), 5.0, ""),
+                (end, 1.0, 10.0, ""),
+                (label.x, width, 18.0, label.text.as_str()),
+            ].into_iter().enumerate() {
+                if label.articulation_overlay && part != 2 { continue; }
+                let key = index * 3 + part;
+                let background = if label.articulation_overlay { Color::NONE } else { Color::srgb(0.16, 0.54, 0.44) };
+                let z_index = if label.articulation_overlay { 12 } else if part == 2 { 11 } else { 10 };
+                active_badges.insert(key);
+                let node = Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(window.width() / 2.0 + x - part_width / 2.0),
+                    top: Val::Px(window.height() / 2.0 - label.y - height / 2.0),
+                    width: Val::Px(part_width),
+                    height: Val::Px(height),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border_radius: if part == 2 { BorderRadius::MAX } else { BorderRadius::ZERO },
+                    ..default()
+                };
+                if let Some(entity) = existing_badges.get(&key)
+                    && let Ok((_, _, mut existing_node, mut existing_text, mut existing_background, mut existing_color, mut existing_z)) = badges.get_mut(*entity)
+                {
+                    *existing_node = node;
+                    existing_text.0 = text.into();
+                    existing_background.0 = background;
+                    existing_color.0 = label.color;
+                    existing_z.0 = z_index;
+                } else {
+                    commands.spawn((node,
+                        Pickable::IGNORE,
+                        GlobalZIndex(z_index),
+                        BackgroundColor(background),
+                        Text::new(text),
+                        TextFont { font_size: FontSize::Px(13.0), ..default() },
+                        TextColor(label.color),
+                        SheetTabBadge(key),
+                    ));
+                }
+            }
+        }
+    }
+    for (entity, marker, _, _, _, _, _) in &badges {
+        if !active_badges.contains(&marker.0) { commands.entity(entity).despawn(); }
     }
     let guide_top = STAFF_Y + STAFF_SPACING * 2.0 + 24.0;
     let guide_bottom = if percussion {
@@ -1693,6 +1782,80 @@ pub(crate) fn sheet_view_system(
 mod tests {
     use super::*;
 
+    /// Staccato and tenuto stay below up-stem notes; other marks stack above the staff. AI_CODE
+    #[test]
+    fn sheet_articulations_clear_staff_and_high_notes() {
+        let mut document = super::super::new_chart_document();
+        let mut track = super::super::new_track(InstrumentKind::Voice);
+        track.notes = serde_json::from_str(r#"[
+            {"start":0,"length":4,"note":60,"articulations":["staccato","accent","marcato"]},
+            {"start":960,"length":4,"note":96,"articulations":["tenuto","fermata"]},
+            {"start":1920,"length":4,"note":60,"staff":2,"articulations":["accent"]}
+        ]"#).unwrap();
+        document.chart.tracks.push(track);
+        let track = &document.chart.tracks[0];
+        let layout = layout_track(&document.chart, track);
+        let viewport = SheetViewport { left: -100.0, right: 300.0, start: 0, span: 3840 };
+        let labels = engraving_labels(track, &layout, viewport, false);
+        let marks = labels.iter().filter(|label| label.articulation_overlay).collect::<Vec<_>>();
+        assert_eq!(marks.len(), 6);
+        let low_note_y = step_y(pitch_step(60, None).0, layout.clef.unwrap());
+        assert_eq!(marks[0].y, low_note_y - 14.0);
+        assert_eq!(marks[0].text, ".");
+        assert_eq!(marks[0].x, marks[1].x);
+        assert!(marks[1].y > STAFF_Y + 2.0 * STAFF_SPACING);
+        assert_eq!(marks[1].text, ">");
+        assert_eq!(marks[2].text, "^");
+        assert_eq!(marks[2].y - marks[1].y, 16.0);
+        let high_note_y = step_y(pitch_step(96, None).0, layout.clef.unwrap());
+        assert_eq!(marks[3].text, "-");
+        assert_eq!(marks[3].y, high_note_y - 14.0);
+        assert!(marks[4].y >= high_note_y + 36.0);
+        assert!(marks[5].y > sheet_staff_y(2, 0) + 2.0 * STAFF_SPACING);
+        assert!(marks.iter().all(|label| label.tab_end.is_none()));
+    }
+
+    /// Sheet fret badges retain their string positions and authored duration endpoints. AI_CODE
+    #[test]
+    fn sheet_tab_badges_follow_frets_and_note_lengths() {
+        let mut document = super::super::new_chart_document();
+        super::super::ensure_editor_has_track(&mut document);
+        let track = &mut document.chart.tracks[0];
+        let open = track.tuning.as_ref().unwrap().open_midi().unwrap();
+        track.notes = serde_json::from_value(serde_json::json!([
+            {"start":0,"length":8,"dots":1,"note":open[0] + 5,
+             "performance":{"preferred_string":0,"transition":"hammer_on"}},
+            {"start":960,"length":2,"note":open[1] + 12,
+             "performance":{"preferred_string":1}}
+        ])).unwrap();
+        let layout = layout_track(&document.chart, &document.chart.tracks[0]);
+        let viewport = SheetViewport { left: -100.0, right: 100.0, start: 0, span: 1920 };
+        let labels = engraving_labels(&document.chart.tracks[0], &layout, viewport, false);
+        let badges = labels.iter().filter(|label| label.tab_end.is_some()).collect::<Vec<_>>();
+        assert_eq!(badges.len(), 2);
+        assert_eq!(badges[0].text, "5H");
+        assert_eq!(badges[0].x, viewport.x_at(0).unwrap());
+        assert_eq!(badges[0].y, sheet_tab_string_y(1, 0, open.len()));
+        assert_eq!(badges[0].tab_end, Some(720));
+        assert_eq!(badges[1].text, "12");
+        assert_eq!(badges[1].y, sheet_tab_string_y(1, 1, open.len()));
+        assert_eq!(badges[1].tab_end, Some(2880));
+        assert_eq!(viewport.x_at_clamped(badges[1].tab_end.unwrap()), viewport.right);
+    }
+
+    /// Bass F3 is centered on the fourth staff line and rectangular rests touch their lines. AI_CODE
+    #[test]
+    fn sheet_notes_and_rest_blocks_align_with_staff_lines() {
+        let (step, _) = pitch_step(53, None);
+        assert_eq!(step_y(step, Clef::Bass), STAFF_Y + STAFF_SPACING);
+        let (whole_bottom, whole_top) = rest_block_bounds(NoteValue::Whole).unwrap();
+        assert_eq!(whole_top, STAFF_SPACING);
+        assert!(whole_bottom < whole_top);
+        let (half_bottom, half_top) = rest_block_bounds(NoteValue::Half).unwrap();
+        assert_eq!(half_bottom, 0.0);
+        assert!(half_top > half_bottom);
+    }
+
     /// Only whole and half durations have hollow standard staff noteheads. AI_CODE
     #[test]
     fn staff_notehead_fill_matches_written_duration() {
@@ -1907,7 +2070,7 @@ mod tests {
         assert!(document.dirty);
     }
 
-    /// Tab lines remain below the lowest editable note, including voice offsets, on every staff.
+    /// Tab lines remain below the lowest editable note on every staff.
     ///
     /// AI_CODE
     #[test]
@@ -1915,7 +2078,7 @@ mod tests {
         for string_count in [4, 6, 7] {
             for staff in [1, 2] {
                 let base = sheet_staff_y(staff, string_count);
-                let lowest_note = base - EDIT_HEIGHT + (1.5 - 4.0) * 8.0;
+                let lowest_note = base - EDIT_HEIGHT;
                 let top_tab_line = sheet_tab_string_y(staff, string_count - 1, string_count);
                 assert!(lowest_note - top_tab_line >= STAFF_SPACING);
                 assert!(sheet_tab_string_y(staff, 0, string_count) <= top_tab_line);

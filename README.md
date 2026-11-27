@@ -162,12 +162,14 @@ canceling does not. Navigation and view settings are not undone. A new edit clea
 Saving keeps history, and undoing or redoing back to the saved score clears the dirty
 indicator. Returning to the chart picker discards that document's history.
 
-Other tracks appear as timing-only reference rows above the focused sheet/tab view.
-Rows stay directly above the score's working area with a fixed gap rather than
-following the window header; pages with fewer references stay bottom-aligned.
-Rows show track names and note onsets, not pitch/fret detail, and cannot edit notes.
-The compact horizontal overview follows the same visible tick range as the focused
-view, including in vertical tab mode. Chords share one onset marker; rests are
+Other tracks appear as timing-only references showing names and note onsets, not
+pitch/fret detail, and cannot edit notes. Sheet references stay directly above the
+score's working area with a fixed gap; shorter pages stay bottom-aligned.
+In tab view, focused editable lanes occupy the left half and vertical reference
+lanes occupy the right half. Both halves share the same tick-to-height mapping,
+beat guides, and playhead, so simultaneous notes line up across the divider.
+Clicking reference lanes cannot insert, remove, or select focused notes.
+Chords share one onset marker; rests are
 omitted. Three other tracks are shown per page; `Ctrl+PageUp`/`Ctrl+PageDown` cycles
 reference pages without changing the editable track, selection, or shared cursor.
 Single-track charts have no reference rows. Scrolling and zoom update the overview.
@@ -190,7 +192,11 @@ the shared `DOT`, `TRIPLET`, `REST`, and `TIE` toolbar controls. These settings 
 between sheet and tab and apply to newly placed notes. `REST` places an explicit
 rest directly at the snapped time without opening a fret dialog; rests appear as
 `REST` badges on the first lane and can be removed with the removal tool. `TIE`
-connects compatible preceding notes using the same rules as sheet placement.
+places an implied continuation when clicking where a preceding note ends on that
+string/lane (including the percussion SPAN rail), without a fret dialog. It inherits
+the preceding note's properties and uses the active length, dots, and triplet settings.
+Tie placement takes priority over endpoint resizing; turn `TIE` off to resize a
+duration by dragging its endpoint. Without a compatible predecessor, no note is placed.
 
 In either sheet or tab view, toggle `SELECT` and drag a time range. In tab view,
 Shift-drag also selects; in sheet view use Ctrl+Shift-drag so Shift-click remains
@@ -267,7 +273,19 @@ Mouse-wheel scrolling in sheet mode moves the shared cursor by the current navig
 snap interval: up moves left (earlier), down moves right (later), clamped at tick zero.
 Sheet mode shows a staff starting at the shared position, with visible measures expanding
 to fill the available window width while keeping beat spacing readable. Standard noteheads
-are hollow for whole/half notes and filled for quarter/eighth/sixteenth notes. Click a line or space
+are hollow for whole/half notes and filled for quarter/eighth/sixteenth notes.
+Noteheads are centered on their written lines/spaces for every voice. Whole rests
+hang below the fourth staff line; half rests sit above the middle line as solid blocks.
+Staccato dots and tenuto dashes sit just below the up-stem noteheads. Other articulation marks stack
+above the top staff line (or above high notes); marcato uses `^` while accent uses
+`>`. All articulation marks render in the foreground so staff/grid lines cannot
+cover them.
+The tablature beneath string staves uses filled green fret badges with light text
+above the staff/grid lines. Green duration bars sit above the grid but below the
+badges, keeping the fret numbers foremost. These overlays do not intercept pointer input.
+Bars end at the authored note endpoint (clipped
+to the visible score edge), and technique letters remain alongside the fret numbers.
+Click a line or space
 to place a note on the configured beat-division grid; hold `Shift` for a sharp or
 `Alt` for a flat. In remove mode (`F10` or `PLACE/REMOVE`), with `REST` off, click
 the visible notehead to remove that event. No accidental modifier is needed, and

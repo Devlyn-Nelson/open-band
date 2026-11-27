@@ -8,6 +8,11 @@ const TAB_REFERENCE_WINDOW_HEIGHT: f32 = 720.0;
 const TAB_REFERENCE_HEIGHT: f32 =
     TAB_REFERENCE_WINDOW_HEIGHT - TAB_TOP_SCREEN_MARGIN - TAB_BOTTOM_MARGIN;
 
+/// Keep editable strings left of the divider and timing-only references on the right. AI_CODE
+fn tab_horizontal_bounds(width: f32) -> (f32, f32, f32, f32) {
+    (-width / 2.0 + 100.0, -40.0, 40.0, width / 2.0 - 30.0)
+}
+
 /// Keep the tab start below editor controls while using the remaining vertical screen space.
 ///
 /// AI_CODE
@@ -232,6 +237,52 @@ fn tab_place_string(
             vibrato: None,
         });
     }
+    true
+}
+
+/// Consume tie placement before endpoint resizing, deriving the continuation from its lane predecessor. AI_CODE
+fn tab_place_tie(document: &mut EditorDocument, tools: &SheetTools, tick: u32, lane: usize) -> bool {
+    if !tools.tied || tools.rest || tools.remove { return false; }
+    document.tab_resize = None;
+    document.tab_fret_string = None;
+    document.tab_percussion_lane = None;
+    let Some(track) = document.chart.tracks.get(document.track_focus) else { return true };
+    let layout = layout_track(&document.chart, track);
+    let predecessor = layout.symbols.iter().filter(|symbol| {
+        !matches!(symbol.kind, NotationSymbolKind::Rest)
+            && symbol.voice == tools.voice
+            && symbol.start < tick
+            && symbol.start.checked_add(symbol.duration) == Some(tick)
+            && tab_lane_for_symbol(track, symbol) == Some(lane)
+    }).max_by_key(|symbol| symbol.start);
+    let Some(predecessor) = predecessor else {
+        document.status = "No preceding note ends here on this lane".into();
+        return true;
+    };
+    let source = predecessor.source;
+    let Some(mut continuation) = super::editor_source_event(track, source).cloned() else { return true };
+    if layout.symbols.iter().any(|symbol| symbol.start == tick
+        && symbol.voice == continuation.voice && symbol.staff == continuation.staff
+        && tab_lane_for_symbol(track, symbol) == Some(lane))
+    {
+        document.status = "A note or rest already occupies this position".into();
+        return true;
+    }
+    continuation.id = None;
+    continuation.start = tick;
+    continuation.length = tools.duration;
+    continuation.dots = tools.dots;
+    continuation.tuplet = tools.tuplet;
+    continuation.tied = false;
+    continuation.chord = None;
+    document.chart.tracks[document.track_focus].notes.push(continuation);
+    ensure_stable_event_ids(&mut document.chart);
+    let track = &mut document.chart.tracks[document.track_focus];
+    let from = super::editor_source_event(track, source).unwrap().id.clone().unwrap();
+    let to = track.notes.last().unwrap().id.clone().unwrap();
+    track.ties.push(EventRelation { from, to });
+    document.dirty = true;
+    document.status = "Tied continuation placed".into();
     true
 }
 
@@ -509,11 +560,9 @@ pub(crate) fn tab_view_system(
     }
     let Ok(window) = windows.single() else { return };
     let resolution = document.chart.resolution.max(1);
-    let reference_height = if document.chart.tracks.len() > 1 { 72.0 } else { 0.0 };
-    let (original_top, bottom) = tab_viewport_bounds(window.height());
-    let top = (original_top - reference_height).max(bottom + 80.0);
+    let (top, bottom) = tab_viewport_bounds(window.height());
     let viewport_height = top - bottom;
-    let span = tab_visible_span(resolution, document.tab_beats_per_screen, window.height() - reference_height);
+    let span = tab_visible_span(resolution, document.tab_beats_per_screen, window.height());
     for event in wheel.read() {
         let direction = match event.y.total_cmp(&0.0) {
             std::cmp::Ordering::Greater => -1i64,
@@ -548,8 +597,8 @@ pub(crate) fn tab_view_system(
             .as_ref()
             .map_or(0, |tuning| tuning.strings.len())
     };
-    let left = -window.width() / 2.0 + 100.0;
-    let right = window.width() / 2.0 - 50.0;
+    let (left, right, reference_left, reference_right) = tab_horizontal_bounds(window.width());
+    if right <= left || reference_right <= reference_left { return; }
     let x_for_lane = |lane: usize| {
         if lanes <= 1 {
             (left + right) / 2.0
@@ -560,14 +609,21 @@ pub(crate) fn tab_view_system(
     let mut next_labels = Vec::<(String, f32, f32, Color)>::new();
     let mut next_badges = Vec::<(String, f32, f32, bool)>::new();
     let reference_rows = super::references::reference_rows(&document, view_start, span);
+    gizmos.line_2d(Vec2::new(0.0, top + 32.0), Vec2::new(0.0, bottom), Color::srgb(0.35, 0.43, 0.45));
     for (index, row) in reference_rows.iter().enumerate() {
-        let y = super::references::reference_row_y(top + 20.0, index, reference_rows.len());
+        let column_width = (reference_right - reference_left) / reference_rows.len() as f32;
+        let x = reference_left + column_width * (index as f32 + 0.5);
         let color = Color::srgb(0.55, 0.70, 0.76);
-        gizmos.line_2d(Vec2::new(left, y), Vec2::new(right, y), Color::srgb(0.24, 0.31, 0.33));
-        next_labels.push((row.name.clone(), left + 110.0, y + 9.0, color));
+        gizmos.line_2d(Vec2::new(x, top), Vec2::new(x, bottom), Color::srgb(0.24, 0.31, 0.33));
+        let capacity = ((column_width - 8.0) / 11.0).floor().max(1.0) as usize;
+        let heading = row.name.chars().collect::<Vec<_>>().chunks(capacity)
+            .map(|chunk| chunk.iter().collect::<String>()).collect::<Vec<_>>().join("\n");
+        next_labels.push((heading, x, top + 48.0, color));
         for tick in &row.onsets {
-            let x = left + (right - left) * (*tick - view_start) as f32 / span.max(1) as f32;
-            gizmos.line_2d(Vec2::new(x, y - 3.0), Vec2::new(x, y + 3.0), color);
+            if let Some(y) = y_for_tick(*tick) {
+                gizmos.line_2d(Vec2::new(x - 7.0, y), Vec2::new(x + 7.0, y), color);
+                gizmos.circle_2d(Vec2::new(x, y), 3.0, color);
+            }
         }
     }
     for lane in 0..lanes {
@@ -612,7 +668,7 @@ pub(crate) fn tab_view_system(
         if let Some(y) = y_for_tick(guide.tick) {
             gizmos.line_2d(
                 Vec2::new(left - 30.0, y),
-                Vec2::new(right + 30.0, y),
+                Vec2::new(reference_right, y),
                 guide.color,
             );
             if guide.label {
@@ -630,7 +686,7 @@ pub(crate) fn tab_view_system(
         for offset in -1..=1 {
             gizmos.line_2d(
                 Vec2::new(left - 30.0, y + offset as f32),
-                Vec2::new(right + 30.0, y + offset as f32),
+                Vec2::new(reference_right, y + offset as f32),
                 Color::srgb(0.95, 0.73, 0.22),
             );
         }
@@ -814,6 +870,9 @@ pub(crate) fn tab_view_system(
         cursor.x - window.width() / 2.0,
         window.height() / 2.0 - cursor.y,
     );
+    if position.x > right + 30.0 && !document.selection_drag
+        && document.selection_move.is_none() && document.tab_resize.is_none()
+    { return; }
     if (position.y > top || position.y < bottom) && !document.selection_drag && document.selection_move.is_none() {
         return;
     }
@@ -889,6 +948,7 @@ pub(crate) fn tab_view_system(
             return;
         }
         if mouse.just_pressed(MouseButton::Left) {
+            if tab_place_tie(&mut document, &tools, snapped, usize::MAX) { return; }
             if let Some(symbol) = layout.symbols.iter().find(|symbol| {
                 matches!(
                     symbol.kind,
@@ -957,6 +1017,7 @@ pub(crate) fn tab_view_system(
         return;
     }
     if mouse.just_pressed(MouseButton::Left) {
+        if tab_place_tie(&mut document, &tools, snapped, lane) { return; }
         if let Some(symbol) = layout.symbols.iter().find(|symbol| {
             tab_lane_for_symbol(&track, symbol) == Some(lane)
                 && symbol.start.saturating_add(symbol.duration) > symbol.start
@@ -1012,6 +1073,76 @@ pub(crate) fn tab_view_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Focused lanes stay in the left half while reference ticks share the exact vertical axis. AI_CODE
+    #[test]
+    fn tab_references_use_right_half_and_shared_time_axis() {
+        for width in [640.0, 1280.0, 1920.0] {
+            let (left, right, reference_left, reference_right) = tab_horizontal_bounds(width);
+            assert!(left < right && right < 0.0);
+            assert!(reference_left > 0.0 && reference_left < reference_right);
+            assert!(right + 30.0 < reference_left);
+        }
+        let (top, bottom) = tab_viewport_bounds(900.0);
+        let span = tab_visible_span(960, 8, 900.0);
+        let note_y = tab_y(1920, 960, span, top, bottom).unwrap();
+        let reference_y = tab_y(1920, 960, span, top, bottom).unwrap();
+        assert_eq!(note_y, reference_y);
+    }
+
+    /// Tie endpoint clicks place implied notes without a fret dialog or a resize transaction. AI_CODE
+    #[test]
+    fn tab_tie_endpoint_places_implied_continuation() {
+        let mut document = new_chart_document();
+        ensure_editor_has_track(&mut document);
+        let mut tools = SheetTools::default();
+        assert!(tab_place_string(&mut document, &tools, 0, 0, 5));
+        let source = document.chart.tracks[0].notes[0].clone();
+        let end = source.duration_ticks(document.chart.resolution);
+        tools.tied = true;
+        tools.duration = NoteValue::Eighth;
+        tools.dots = 1;
+        tools.tuplet = Some(Tuplet { actual: 3, normal: 2 });
+        document.checkpoint();
+        assert!(tab_place_tie(&mut document, &tools, end, 0));
+        assert!(document.tab_resize.is_none());
+        assert!(document.tab_fret_string.is_none());
+        let track = &document.chart.tracks[0];
+        assert_eq!(track.notes.len(), 2);
+        let continuation = &track.notes[1];
+        assert_eq!(continuation.note(), source.note());
+        assert_eq!(continuation.performance, source.performance);
+        assert_eq!(continuation.start, end);
+        assert_eq!(continuation.length, NoteValue::Eighth);
+        assert_eq!(continuation.dots, 1);
+        assert_eq!(continuation.duration_ticks(document.chart.resolution), 480);
+        assert_ne!(continuation.id, source.id);
+        assert_eq!(track.ties.len(), 1);
+        assert_eq!(layout_track(&document.chart, track).ties.len(), 1);
+        assert!(tab_place_tie(&mut document, &tools, end, 0));
+        assert_eq!(document.chart.tracks[0].notes.len(), 2);
+        document.checkpoint();
+        document.restore_history(false);
+        assert_eq!(document.chart.tracks[0].notes.len(), 1);
+        assert!(document.chart.tracks[0].ties.is_empty());
+    }
+
+    /// Tie mode consumes invalid placements instead of opening a fret picker or resizing. AI_CODE
+    #[test]
+    fn tab_tie_requires_a_lane_predecessor() {
+        let mut document = new_chart_document();
+        ensure_editor_has_track(&mut document);
+        let mut tools = SheetTools::default();
+        tab_place_string(&mut document, &tools, 0, 0, 5);
+        document.dirty = false;
+        tools.tied = true;
+        assert!(tab_place_tie(&mut document, &tools, 960, 1));
+        assert!(tab_place_tie(&mut document, &tools, 480, 0));
+        assert_eq!(document.chart.tracks[0].notes.len(), 1);
+        assert!(!document.dirty);
+        tools.tied = false;
+        assert!(!tab_place_tie(&mut document, &tools, 960, 0));
+    }
 
     /// Tab insertion uses shared lengths, dots, tuplets, ties, and explicit rest tools. AI_CODE
     #[test]

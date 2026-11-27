@@ -234,7 +234,17 @@
         "mode": "major"
       },
       "capo": null,
-      "notes": [],
+      "notes": [
+        {
+          "id": "event-000006",
+          "start": 3840,
+          "length": 2,
+          "performance": {
+            "preferred_string": 4
+          },
+          "note": 74
+        }
+      ],
       "ties": [],
       "slurs": [],
       "phrases": [],
