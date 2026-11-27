@@ -164,10 +164,23 @@ fret/percussion mapping, keyboard dispatch, and invalid-commit retention. Manual
 - Edit Open Band `performance` hints separately from score notation, including preferred
   string/fret, attacks, transitions, percussion mapping, rolls, and drolls.
 
-### 8. Undo/redo
+### 8. Undo/redo (implemented)
 
-- Undo/redo stack covering note placement, removal, duration edits, and track/document
-  structural edits.
+Each open document retains up to 100 committed score changes. `Ctrl+Z` undoes;
+`Ctrl+Y` or `Ctrl+Shift+Z` redoes. History captures keyboard edits and sheet/tab
+pointer actions, including note placement/removal, duration changes, ties/slurs,
+notation/performance edits, track addition/removal/renaming/reordering/kind changes,
+and score metadata/structure changes. Changes within one editor update form one
+transaction; uncommitted dialog drafts and navigation do not create history entries.
+
+Restoring a snapshot also restores track/event selection and clears pending pointer
+operations, while retaining the current scroll position, sheet/tab mode, and zoom.
+Undo/redo is disabled while editing a dialog draft. New edits discard the redo branch.
+Saving retains history and records a clean save point, so returning to that exact
+score clears the dirty indicator. History is session-local and resets on opening a
+different document. Regression tests cover note/tie restoration, tab duration edits,
+structural edits, shortcut dispatch/modal safety, depth limits, redo invalidation,
+and save-point tracking. Manual visual QA remains recommended.
 
 ### 9. Playback aids
 

@@ -236,6 +236,14 @@ pub(crate) fn run() {
                 .run_if(resource_exists::<EditorDocument>)
                 .after(editor_tracks_input),
         )
+        .add_systems(
+            PreUpdate,
+            editor_history_checkpoint.run_if(in_state(AppState::Editor)),
+        )
+        .add_systems(
+            PostUpdate,
+            editor_history_checkpoint.run_if(in_state(AppState::Editor)),
+        )
         .add_systems(OnExit(AppState::Editor), cleanup_editor)
         .run();
     // /\ AI_CODE /\

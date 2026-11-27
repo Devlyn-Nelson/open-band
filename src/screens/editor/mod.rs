@@ -48,6 +48,7 @@ pub(crate) struct EditorLibraries {
 /// AI_CODE
 pub(crate) struct EditorDocument {
     pub(crate) chart: Chart,
+    history: EditorHistory,
     pub(crate) path: Option<PathBuf>,
     pub(crate) dirty: bool,
     pub(crate) track_focus: usize,
@@ -68,6 +69,238 @@ pub(crate) struct EditorDocument {
     pub(crate) tab_percussion_lane: Option<usize>,
     pub(crate) tab_resize: Option<TabDurationResize>,
     pub(crate) status: String,
+}
+
+/// A bounded, document-local history of committed score changes. AI_CODE
+#[derive(Default)]
+struct EditorHistory {
+    undo: Vec<EditorSnapshot>,
+    redo: Vec<EditorSnapshot>,
+    current: Option<EditorSnapshot>,
+    saved: Option<serde_json::Value>,
+}
+
+/// Score state and selection restored together without reverting viewport preferences. AI_CODE
+struct EditorSnapshot {
+    chart: serde_json::Value,
+    track_focus: usize,
+    event_focus: usize,
+}
+
+impl EditorDocument {
+    /// Record one committed update, ignoring navigation and uncommitted drafts. AI_CODE
+    fn checkpoint(&mut self) {
+        let chart = serde_json::to_value(&self.chart).expect("editor chart serializes");
+        if self.history.current.is_none() && !self.dirty {
+            self.history.saved = Some(chart.clone());
+        }
+        if let Some(current) = &mut self.history.current {
+            if current.chart == chart {
+                current.track_focus = self.track_focus;
+                current.event_focus = self.event_focus;
+                return;
+            }
+        }
+        let snapshot = EditorSnapshot {
+            chart,
+            track_focus: self.track_focus,
+            event_focus: self.event_focus,
+        };
+        if let Some(previous) = self.history.current.replace(snapshot) {
+            self.history.undo.push(previous);
+            if self.history.undo.len() > 100 {
+                self.history.undo.remove(0);
+            }
+            self.history.redo.clear();
+            self.dirty = self.history.saved.as_ref() != self.history.current.as_ref().map(|state| &state.chart);
+        }
+    }
+
+    /// Restore a complete score transaction and cancel stale pointer interactions. AI_CODE
+    fn restore_history(&mut self, redo: bool) {
+        self.checkpoint();
+        let snapshot = if redo { self.history.redo.pop() } else { self.history.undo.pop() };
+        let Some(snapshot) = snapshot else {
+            self.status = if redo { "Nothing to redo" } else { "Nothing to undo" }.into();
+            return;
+        };
+        let previous = self.history.current.replace(snapshot).unwrap();
+        if redo { self.history.undo.push(previous); } else { self.history.redo.push(previous); }
+        let current = self.history.current.as_ref().unwrap();
+        self.chart = serde_json::from_value(current.chart.clone()).expect("history chart deserializes");
+        self.track_focus = current.track_focus.min(self.chart.tracks.len().saturating_sub(1));
+        self.event_focus = current.event_focus;
+        self.dirty = self.history.saved.as_ref() != Some(&current.chart);
+        self.tab_resize = None;
+        self.tab_fret_string = None;
+        self.tab_percussion_lane = None;
+        self.status = if redo { "Redone" } else { "Undone" }.into();
+    }
+}
+
+/// Capture changes from keyboard systems and UI observers at frame boundaries. AI_CODE
+pub(crate) fn editor_history_checkpoint(document: Option<ResMut<EditorDocument>>) {
+    if let Some(mut document) = document {
+        document.checkpoint();
+    }
+}
+
+/// History restores score edits, retains navigation, and invalidates abandoned redo branches. AI_CODE
+#[test]
+fn editor_history_round_trips_score_changes() {
+    let mut document = new_chart_document();
+    document.chart.tracks.push(new_track(InstrumentKind::Voice));
+    document.dirty = false;
+    document.checkpoint();
+    let original = serde_json::to_value(&document.chart).unwrap();
+    assert!(sheet_edit_spelled_pitch_at_tick(&mut document, 0, 60, None, &SheetTools::default()));
+    document.checkpoint();
+    let placed = serde_json::to_value(&document.chart).unwrap();
+    document.current_tick = 1920;
+    document.restore_history(false);
+    assert_eq!(serde_json::to_value(&document.chart).unwrap(), original);
+    assert!(!document.dirty);
+    assert_eq!(document.current_tick, 1920);
+    document.restore_history(true);
+    assert_eq!(serde_json::to_value(&document.chart).unwrap(), placed);
+    assert!(document.dirty);
+    document.restore_history(false);
+    document.chart.title = "New branch".into();
+    document.checkpoint();
+    assert!(document.history.redo.is_empty());
+    document.restore_history(true);
+    assert_eq!(document.chart.title, "New branch");
+}
+
+/// Removing notes and tracks restores their complete relationships and score metadata. AI_CODE
+#[test]
+fn editor_history_restores_relations_and_structure() {
+    let mut document = new_chart_document();
+    document.chart.tracks.push(new_track(InstrumentKind::Voice));
+    let mut tools = SheetTools::default();
+    tools.tied = true;
+    assert!(sheet_edit_spelled_pitch_at_tick(&mut document, 0, 60, None, &tools));
+    assert!(sheet_edit_spelled_pitch_at_tick(&mut document, 960, 60, None, &tools));
+    document.checkpoint();
+    let tied = serde_json::to_value(&document.chart).unwrap();
+    assert!(remove_editor_event(&mut document, EventSource::Track(1)));
+    document.checkpoint();
+    assert!(document.chart.tracks[0].ties.is_empty());
+    document.restore_history(false);
+    assert_eq!(serde_json::to_value(&document.chart).unwrap(), tied);
+    document.chart.tracks.push(new_track(InstrumentKind::Percussion));
+    document.track_focus = 1;
+    document.checkpoint();
+    let added = serde_json::to_value(&document.chart).unwrap();
+    document.chart.tracks[1].name = "Renamed drums".into();
+    document.chart.tracks.swap(0, 1);
+    document.track_focus = 0;
+    document.chart.title = "Renamed score".into();
+    document.chart.tempo_map[0].bpm = 90.0;
+    document.checkpoint();
+    let reordered = serde_json::to_value(&document.chart).unwrap();
+    assert!(remove_focused_track(&mut document));
+    document.checkpoint();
+    document.restore_history(false);
+    assert_eq!(serde_json::to_value(&document.chart).unwrap(), reordered);
+    assert_eq!(document.track_focus, 0);
+    document.restore_history(false);
+    assert_eq!(serde_json::to_value(&document.chart).unwrap(), added);
+    assert_eq!(document.track_focus, 1);
+    document.restore_history(false);
+    assert_eq!(serde_json::to_value(&document.chart).unwrap(), tied);
+    document.restore_history(true);
+    assert_eq!(serde_json::to_value(&document.chart).unwrap(), added);
+}
+
+/// Saving preserves history and makes the saved score clean when reached from either direction. AI_CODE
+#[test]
+fn editor_history_preserves_save_point() {
+    let mut document = new_chart_document();
+    ensure_editor_has_track(&mut document);
+    document.checkpoint();
+    document.chart.title = "Saved revision".into();
+    let path = std::env::temp_dir().join(format!("open-band-history-{}.json", std::process::id()));
+    document.path = Some(path.clone());
+    save_editor_document(&mut document);
+    assert!(!document.dirty);
+    document.checkpoint();
+    assert!(!document.dirty);
+    document.chart.title = "Unsaved revision".into();
+    document.checkpoint();
+    document.restore_history(false);
+    assert!(!document.dirty);
+    assert_eq!(document.chart.title, "Saved revision");
+    document.restore_history(false);
+    assert!(document.dirty);
+    document.restore_history(true);
+    assert!(!document.dirty);
+    assert_eq!(document.path.as_ref(), Some(&path));
+    std::fs::remove_file(path).unwrap();
+}
+
+/// History is bounded and navigation alone never creates a transaction or discards redo. AI_CODE
+#[test]
+fn editor_history_limits_depth_and_ignores_navigation() {
+    let mut document = new_chart_document();
+    document.checkpoint();
+    for revision in 0..120 {
+        document.chart.title = format!("Revision {revision}");
+        document.checkpoint();
+    }
+    assert_eq!(document.history.undo.len(), 100);
+    document.restore_history(false);
+    let count = document.history.undo.len();
+    document.current_tick = 960;
+    document.view_mode = EditorViewMode::Tab;
+    document.checkpoint();
+    assert_eq!(document.history.undo.len(), count);
+    assert_eq!(document.history.redo.len(), 1);
+    for _ in 0..120 {
+        document.restore_history(false);
+    }
+    assert_eq!(document.chart.title, "Revision 19");
+    assert_eq!(document.history.redo.len(), 100);
+}
+
+/// Frame capture includes keyboard edits while undo shortcuts leave modal drafts untouched. AI_CODE
+#[test]
+fn editor_history_keyboard_shortcuts_and_modal_safety() {
+    let mut document = new_chart_document();
+    ensure_editor_has_track(&mut document);
+    let mut app = App::new();
+    app.add_message::<KeyboardInput>()
+        .insert_resource(ButtonInput::<KeyCode>::default())
+        .insert_resource(document)
+        .insert_resource(EditorLibraries { tunings: Vec::new(), kits: Vec::new() })
+        .add_systems(PreUpdate, editor_history_checkpoint)
+        .add_systems(Update, editor_tracks_input)
+        .add_systems(PostUpdate, editor_history_checkpoint);
+    for (keys, expected_tracks) in [
+        (vec![KeyCode::KeyN], 2),
+        (vec![KeyCode::ControlLeft, KeyCode::KeyZ], 1),
+        (vec![KeyCode::ControlRight, KeyCode::KeyY], 2),
+        (vec![KeyCode::ControlLeft, KeyCode::KeyZ], 1),
+        (vec![KeyCode::ControlLeft, KeyCode::ShiftLeft, KeyCode::KeyZ], 2),
+    ] {
+        let mut input = ButtonInput::<KeyCode>::default();
+        for key in keys { input.press(key); }
+        app.insert_resource(input);
+        app.update();
+        assert_eq!(app.world().resource::<EditorDocument>().chart.tracks.len(), expected_tracks);
+    }
+    app.world_mut().resource_mut::<EditorDocument>().text_entry = Some(EditorTextEntry {
+        target: EditorTextTarget::TrackName,
+        buffer: "Draft".into(),
+    });
+    let mut input = ButtonInput::<KeyCode>::default();
+    input.press(KeyCode::ControlLeft);
+    input.press(KeyCode::KeyZ);
+    app.insert_resource(input);
+    app.update();
+    let document = app.world().resource::<EditorDocument>();
+    assert_eq!(document.chart.tracks.len(), 2);
+    assert_eq!(document.text_entry.as_ref().unwrap().buffer, "Draft");
 }
 
 /// In-progress tab note-duration drag, retained across pointer frames.
@@ -1405,6 +1638,7 @@ fn list_editable_charts() -> Vec<EditorChartEntry> {
 /// AI_CODE
 fn new_chart_document() -> EditorDocument {
     EditorDocument {
+    history: EditorHistory::default(),
         chart: Chart {
             version: 1,
             title: "New Chart".into(),
@@ -1553,6 +1787,7 @@ fn load_chart_document(path: &Path) -> Result<EditorDocument, String> {
         false
     };
     Ok(EditorDocument {
+        history: EditorHistory::default(),
         chart,
         path: Some(path.to_path_buf()),
         dirty: assigned_ids || added_track,
@@ -1881,6 +2116,7 @@ fn save_editor_document(document: &mut EditorDocument) {
     {
         Ok(()) => {
             document.path = Some(path);
+            document.history.saved = Some(serde_json::to_value(&document.chart).expect("saved chart serializes"));
             document.dirty = false;
             document.status = if warnings.is_empty() {
                 "Saved".into()
@@ -3089,6 +3325,13 @@ pub(crate) fn editor_tracks_input(
         return;
     }
     if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
+        if keyboard.just_pressed(KeyCode::KeyZ) || keyboard.just_pressed(KeyCode::KeyY) {
+            let redo = keyboard.just_pressed(KeyCode::KeyY)
+                || keyboard.pressed(KeyCode::ShiftLeft)
+                || keyboard.pressed(KeyCode::ShiftRight);
+            document.restore_history(redo);
+            return;
+        }
         let target = if keyboard.just_pressed(KeyCode::KeyM) {
             Some(EditorTextTarget::ScoreNavigation)
         } else if keyboard.just_pressed(KeyCode::KeyL) {

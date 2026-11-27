@@ -135,6 +135,8 @@ Once a chart is open, its track list is shown:
 | `Ctrl+P` | Edit the selected event's performance hints and instrument mapping separately |
 | `Ctrl+L` | Edit the focused track's ties, slurs, chord groups, and phrase spans |
 | `Ctrl+M` | Edit score navigation markers, tempo text, and expressive spans |
+| `Ctrl+Z` | Undo the last committed score edit |
+| `Ctrl+Y` / `Ctrl+Shift+Z` | Redo an undone score edit |
 | `Delete` | Remove the selected event and its tie/slur relationships |
 | `N` | Add a new track (defaults to `Strings`) |
 | `X` | Remove the focused track |
@@ -146,6 +148,13 @@ Once a chart is open, its track list is shown:
 | `Tab` | Cycle the shared snap interval (whole, half, quarter, eighth, sixteenth) |
 | `S` | Save the chart (writes to its original file, or `charts/<slugified-title>.json` for a new chart) |
 | `Esc` | Back to the chart picker |
+
+Undo/redo retains the last 100 committed score edits for the open document, including
+note placement/removal, duration changes, track edits, and score metadata. It is inactive
+while a text or inspector dialog is open; applying a draft records its changes, while
+canceling does not. Navigation and view settings are not undone. A new edit clears redo.
+Saving keeps history, and undoing or redoing back to the saved score clears the dirty
+indicator. Returning to the chart picker discards that document's history.
 
 In score metadata, `Up` / `Down` selects a field, `Left` / `Right` adjusts numeric and
 track metadata, and `Enter` edits text fields or inserts the selected score marker or

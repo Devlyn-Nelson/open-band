@@ -356,6 +356,27 @@ fn resize_tab_event(
     true
 }
 
+/// Tab duration changes undo and redo with their notation and automatic tie flag intact. AI_CODE
+#[test]
+fn editor_history_restores_tab_duration_edits() {
+    let mut document = new_chart_document();
+    ensure_editor_has_track(&mut document);
+    let tools = SheetTools::default();
+    assert!(tab_place_string(&mut document, &tools, 0, 0, 3));
+    document.checkpoint();
+    let original = serde_json::to_value(&document.chart).unwrap();
+    let resolution = document.chart.resolution;
+    assert!(resize_tab_event(&mut document, EventSource::Track(0), resolution * 2, 0, resolution));
+    document.checkpoint();
+    let resized = serde_json::to_value(&document.chart).unwrap();
+    assert_ne!(resized, original);
+    assert!(document.chart.tracks[0].notes[0].tied);
+    document.restore_history(false);
+    assert_eq!(serde_json::to_value(&document.chart).unwrap(), original);
+    document.restore_history(true);
+    assert_eq!(serde_json::to_value(&document.chart).unwrap(), resized);
+}
+
 /// Apply fret-grid clicks, show each choice's resulting pitch, and close the dialog after use.
 ///
 /// AI_CODE
