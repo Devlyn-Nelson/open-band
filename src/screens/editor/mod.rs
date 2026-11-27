@@ -357,6 +357,8 @@ pub(crate) struct SheetTools {
     pub(crate) piece_index: usize,
     pub(crate) slur: bool,
     pub(crate) slur_anchor: Option<String>,
+    pub(crate) slide: bool,
+    pub(crate) slide_anchor: Option<(usize, String)>,
 }
 
 /// A control in the sheet editor's clickable notation palette.
@@ -375,6 +377,7 @@ pub(crate) enum SheetToolAction {
     Articulation,
     Piece,
     Slur,
+    Slide,
     TabSnap,
     ZoomIn,
     ZoomOut,
@@ -421,6 +424,8 @@ impl Default for SheetTools {
             piece_index: 0,
             slur: false,
             slur_anchor: None,
+            slide: false,
+            slide_anchor: None,
         }
     }
 }
@@ -1447,6 +1452,75 @@ pub(super) fn sheet_edit_slur(
     true
 }
 
+/// Two clicks mark only the destination transition and preserve notes and unrelated hints. AI_CODE
+#[test]
+fn slide_tool_authors_destination_transition_and_undo() {
+    let mut document = new_chart_document();
+    document.chart.tracks.push(new_track(InstrumentKind::Voice));
+    document.chart.tracks[0].notes = serde_json::from_str(r#"[
+        {"id":"a","start":0,"length":4,"note":60},
+        {"id":"b","start":960,"length":4,"note":64,"performance":{"palm_mute":true}}
+    ]"#).unwrap();
+    document.dirty = false;
+    document.checkpoint();
+    let before = serde_json::to_value(&document.chart).unwrap();
+    let mut tools = SheetTools::default();
+    tools.slide = true;
+    assert!(editor_slide_click(&mut document, EventSource::Track(0), &mut tools));
+    assert!(!document.dirty);
+    assert!(tools.slide_anchor.is_some());
+    assert!(!editor_slide_click(&mut document, EventSource::Track(0), &mut tools));
+    assert!(tools.slide_anchor.is_some());
+    assert!(editor_slide_click(&mut document, EventSource::Track(1), &mut tools));
+    assert!(!tools.slide);
+    assert!(tools.slide_anchor.is_none());
+    let track = &document.chart.tracks[0];
+    assert_eq!(track.notes.len(), 2);
+    assert!(track.slurs.is_empty());
+    assert!(track.notes[0].performance.is_none());
+    let hints = track.notes[1].performance.as_ref().unwrap();
+    assert_eq!(hints.transition, Some(NoteTransition::Slide));
+    assert!(hints.palm_mute);
+    document.checkpoint();
+    assert_eq!(document.history.undo.len(), 1);
+    document.restore_history(false);
+    assert_eq!(serde_json::to_value(&document.chart).unwrap(), before);
+}
+
+/// Select two existing pitched notes to mark the destination's incoming slide. AI_CODE
+pub(super) fn editor_slide_click(document: &mut EditorDocument, source: EventSource, tools: &mut SheetTools) -> bool {
+    let Some(track) = document.chart.tracks.get(document.track_focus) else { return false };
+    let Some(target) = editor_source_event(track, source).filter(|event| event.note().is_some()) else {
+        document.status = "Choose an existing pitched note for the slide".into();
+        return false;
+    };
+    if let Some((track_index, id)) = &tools.slide_anchor {
+        let anchor = (*track_index == document.track_focus).then(|| all_track_events(track)
+            .find(|event| event.id.as_ref() == Some(id))).flatten();
+        if let Some(anchor) = anchor {
+            if target.start <= anchor.start {
+                document.status = "Choose a later destination note for the slide".into();
+                return false;
+            }
+            let event = editor_source_event_mut(&mut document.chart.tracks[document.track_focus], source).unwrap();
+            let hints = event.performance.get_or_insert_with(|| serde_json::from_str("{}").unwrap());
+            if hints.transition != Some(NoteTransition::Slide) {
+                hints.transition = Some(NoteTransition::Slide);
+                document.dirty = true;
+            }
+            tools.slide_anchor = None;
+            tools.slide = false;
+            document.status = "Slide added to destination note".into();
+            return true;
+        }
+    }
+    ensure_stable_event_ids(&mut document.chart);
+    let id = editor_source_event(&document.chart.tracks[document.track_focus], source).unwrap().id.clone().unwrap();
+    tools.slide_anchor = Some((document.track_focus, id));
+    document.status = "Slide start selected; choose a later destination note".into();
+    true
+}
+
 #[test]
 /// Slur selection links two authored notes by stable event ID.
 ///
@@ -2360,6 +2434,7 @@ pub(crate) fn setup_editor(mut commands: Commands) {
         ("ARTIC", SheetToolAction::Articulation),
         ("PIECE", SheetToolAction::Piece),
         ("SLUR", SheetToolAction::Slur),
+        ("SLIDE", SheetToolAction::Slide),
         ("SNAP", SheetToolAction::TabSnap),
         ("ZOOM +", SheetToolAction::ZoomIn),
         ("ZOOM -", SheetToolAction::ZoomOut),
@@ -2548,8 +2623,21 @@ pub(crate) fn sheet_toolbar_input(
             }
         }
         SheetToolAction::Slur => {
+            tools.slide = false;
+            tools.slide_anchor = None;
             tools.slur = !tools.slur;
             tools.slur_anchor = None;
+        }
+        SheetToolAction::Slide => {
+            tools.slide = !tools.slide;
+            tools.slide_anchor = None;
+            tools.slur = false;
+            tools.slur_anchor = None;
+            document.selection_mode = false;
+            document.selection = None;
+            document.selection_drag = false;
+            document.tab_resize = None;
+            document.tab_fret_string = None;
         }
         SheetToolAction::TabSnap if document.view_mode == EditorViewMode::Tab => {
             document.snap_interval = cycle_snap_interval(document.snap_interval, 1);
@@ -2624,7 +2712,7 @@ pub(crate) fn sheet_toolbar_display(
                 SheetToolAction::ZoomOut => Some(13), SheetToolAction::SelectRange => Some(14),
                 SheetToolAction::BulkEdit => Some(15), SheetToolAction::SheetDivisionDown => Some(16),
                 SheetToolAction::SheetDivisionUp => Some(17), SheetToolAction::PlayPause => Some(18),
-                SheetToolAction::StopPreview => Some(19), _ => None,
+                SheetToolAction::StopPreview => Some(19), SheetToolAction::Slide => Some(20), _ => None,
             }
         } else {
             Some(match action {
@@ -2636,6 +2724,7 @@ pub(crate) fn sheet_toolbar_display(
                 SheetToolAction::Rest => 7, SheetToolAction::Tie => 8, SheetToolAction::Remove => 9,
                 SheetToolAction::Voice => 10, SheetToolAction::Dynamic => 11,
                 SheetToolAction::Articulation => 12, SheetToolAction::Piece => 13, SheetToolAction::Slur => 14,
+                SheetToolAction::Slide => 17,
                 SheetToolAction::SelectRange => 15, SheetToolAction::BulkEdit => 16,
                 SheetToolAction::SheetDenser => 18, SheetToolAction::SheetSpacer => 19,
                 SheetToolAction::SheetDivisionDown => 20, SheetToolAction::SheetDivisionUp => 21,
@@ -2648,6 +2737,7 @@ pub(crate) fn sheet_toolbar_display(
             node.top = Val::Px(8.0 + (slot / 12) as f32 * 34.0);
         }
         let action_visible = match action {
+            SheetToolAction::Slide => true,
             SheetToolAction::Duration(_) | SheetToolAction::Dots | SheetToolAction::Tuplet
             | SheetToolAction::Rest | SheetToolAction::Tie => true,
             SheetToolAction::SelectRange | SheetToolAction::BulkEdit => true,
@@ -2678,6 +2768,7 @@ pub(crate) fn sheet_toolbar_display(
             Visibility::Hidden
         };
         let active = match action {
+            SheetToolAction::Slide => tools.slide,
             SheetToolAction::SelectRange => document.selection_mode,
             SheetToolAction::BulkEdit => !bulk::selected_sources(&document).is_empty(),
             SheetToolAction::PlayPause => document.playback.playing,
@@ -3313,6 +3404,7 @@ fn score_metadata_text_fields_edit_the_score_document() {
 
 /// AI_CODE
 pub(crate) fn editor_tracks_input(
+    mut tools: Option<ResMut<SheetTools>>,
     mut clipboard: Local<bulk::EditorClipboard>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut keyboard_events: MessageReader<KeyboardInput>,
@@ -3430,6 +3522,15 @@ pub(crate) fn editor_tracks_input(
         return;
     }
     keyboard_events.clear();
+    if keyboard.just_pressed(KeyCode::Escape)
+        && let Some(tools) = tools.as_deref_mut()
+        && tools.slide
+    {
+        tools.slide = false;
+        tools.slide_anchor = None;
+        document.status = "Slide canceled".into();
+        return;
+    }
     if document.selection_move.is_some() {
         if keyboard.just_pressed(KeyCode::Escape) { bulk::cancel_move(&mut document); }
         return;

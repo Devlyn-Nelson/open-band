@@ -160,6 +160,15 @@ shared percussion lanes, lane-spanning pieces, and overlapping notes remains rec
 
 ### 7.1. Score relationships and navigation editing (implemented)
 
+The SLIDE toolbar tool in sheet/tab uses two existing pitched notes: select the
+source then a later destination. It sets the destination's slide performance hint,
+preserving all other note data. The destination fret shows `/`; no slur is created.
+The staff connects visible notehead centres with a straight line trimmed to leave
+a small gap at each head. Destination slide hints resolve to the preceding pitched
+note on the same voice/staff, preferring a matching preferred-string hint.
+Escape or toggling the tool cancels the pending pair, and successful
+authoring exits the tool and is undoable.
+
 Section-specific editors are available in sheet/tab and metadata views:
 `Ctrl+E` opens a keyboard field menu for focused-event notation (including enharmonic spelling, custom tuplets,
 grace notes, articulations, and dynamics) without changing pitch, onset, or hints;

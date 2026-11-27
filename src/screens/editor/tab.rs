@@ -767,6 +767,10 @@ pub(crate) fn tab_view_system(
         {
             gizmos.circle_2d(Vec2::new(x, ghost_y), if continuation { 13.0 } else { 23.0 }, Color::srgb(0.35, 0.9, 0.95));
         }
+        let slide = super::editor_source_event(&track, symbol.source)
+            .and_then(|event| event.performance.as_ref())
+            .is_some_and(|hints| hints.transition == Some(NoteTransition::Slide));
+        let text = if slide { format!("{text}/") } else { text };
         next_badges.push((if continuation { String::new() } else { text }, x, y, continuation));
         if let Some(end_y) = tab_duration_end_y(symbol.start, symbol.duration, view_start, span, top, bottom) {
             for offset in -3..=3 {
@@ -880,6 +884,26 @@ pub(crate) fn tab_view_system(
         ((top - position.y.clamp(bottom, top)) / viewport_height * span as f32) as u32,
     );
     let snapped = super::sheet::snap_sheet_tick(&document.chart, tick, settings.sheet_beat_divisions);
+    if tools.slide {
+        if keyboard.just_pressed(KeyCode::Escape) {
+            tools.slide = false;
+            tools.slide_anchor = None;
+        } else {
+            let lane = if lanes <= 1 { 0 } else {
+                ((position.x - left) / (right - left) * (lanes - 1) as f32).round() as usize
+            };
+            if lane < lanes && (position.x - x_for_lane(lane)).abs() <= 25.0
+                && let Some((source, y)) = tab_hover_event(&track, &layout.symbols, lane, position.y,
+                    (view_start, span, top, bottom))
+            {
+                gizmos.circle_2d(Vec2::new(x_for_lane(lane), y), 24.0, Color::srgb(0.36, 0.83, 0.68));
+                if mouse.just_pressed(MouseButton::Left) {
+                    super::editor_slide_click(&mut document, source, &mut tools);
+                }
+            }
+        }
+        return;
+    }
     if document.selection_move.is_some() {
         super::bulk::update_move(&mut document, snapped,
             mouse.just_released(MouseButton::Left) || !mouse.pressed(MouseButton::Left));

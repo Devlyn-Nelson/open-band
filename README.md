@@ -311,6 +311,18 @@ and chord membership. Existing notes are unchanged by toggling the tool. Percuss
 the same rule with matching kit pieces. The inspector's **Tie to next** field remains
 available for forward ties on existing notes. In tab view, tied continuations appear
 as half-size green circles without fret numbers along the continuing sustain line.
+The `SLIDE` toolbar tool is available in both sheet and tab views. Enable it, click
+an existing pitched source note, then click a later destination note. The destination
+receives the `slide` performance transition without inserting notes or changing pitch,
+timing, or other guidance. A `/` appears beside its fret in both tablature displays.
+The tool exits after a successful pair; Escape or toggling SLIDE off cancels the
+pending pair. Slides use destination-note hints rather than slur relationships.
+The staff draws a straight slide line along the notehead centreline, with a small
+gap at both ends. Its source is the preceding pitched note on the same voice/staff,
+preferring the same preferred string when available. Both noteheads must be visible
+to draw the connector. The transition can also be edited or cleared in the Ctrl+P
+performance inspector.
+
 With the slur tool
 active, click two existing pitched notes in order to link them by stable event IDs. The sheet
 draws beams (including half-length secondary beamlets for isolated sixteenths next

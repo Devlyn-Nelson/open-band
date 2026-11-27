@@ -908,6 +908,37 @@ fn draw_rest(gizmos: &mut Gizmos, position: Vec2, value: NoteValue, color: Color
     }
 }
 
+/// Resolve incoming slide hints to preceding notes, preferring the destination's string. AI_CODE
+fn sheet_slide_pairs(track: &ChartTrack, layout: &NotationLayout) -> Vec<(EventSource, EventSource)> {
+    let mut pairs = Vec::new();
+    for destination in &layout.symbols {
+        let Some(event) = super::editor_source_event(track, destination.source) else { continue };
+        let Some(hints) = event.performance.as_ref().filter(|hints| hints.transition == Some(NoteTransition::Slide)) else { continue };
+        if event.note().is_none() { continue; }
+        let candidates = || layout.symbols.iter().filter(|symbol| {
+            symbol.start < destination.start && symbol.staff == destination.staff
+                && symbol.voice == destination.voice && matches!(symbol.kind, NotationSymbolKind::Pitched { .. })
+        });
+        let same_string = hints.preferred_string.and_then(|string| candidates().filter(|symbol| {
+            super::editor_source_event(track, symbol.source).and_then(|event| event.performance.as_ref())
+                .is_some_and(|hints| hints.preferred_string == Some(string))
+        }).max_by_key(|symbol| symbol.start));
+        if let Some(source) = same_string.or_else(|| candidates().max_by_key(|symbol| symbol.start)) {
+            pairs.push((source.source, destination.source));
+        }
+    }
+    pairs
+}
+
+/// Trim a centre-to-centre slide to leave a three-pixel gap around five-pixel noteheads. AI_CODE
+fn sheet_slide_segment(start: Vec2, end: Vec2) -> Option<(Vec2, Vec2)> {
+    let vector = end - start;
+    let distance = vector.length();
+    if !distance.is_finite() || distance <= 16.0 || end.x <= start.x { return None; }
+    let inset = vector / distance * 8.0;
+    Some((start + inset, end - inset))
+}
+
 /// Draw a compact arched relationship between two notation positions.
 ///
 /// AI_CODE
@@ -1309,6 +1340,20 @@ pub(crate) fn sheet_view_system(
             );
         }
     }
+    for (from, to) in sheet_slide_pairs(track, &layout) {
+        let center = |source| {
+            let (index, symbol) = layout.symbols.iter().enumerate().find(|(_, symbol)| symbol.source == source)?;
+            let NotationSymbolKind::Pitched { pitch, spelling } = &symbol.kind else { return None };
+            Some(Vec2::new(viewport.x_at(symbol.start)? + chord_head_offset(index),
+                step_y(pitch_step(*pitch, spelling.as_ref()).0, clef)
+                    + note_y(symbol.staff, symbol.voice) - STAFF_Y))
+        };
+        if let (Some(start), Some(end)) = (center(from), center(to))
+            && let Some((start, end)) = sheet_slide_segment(start, end)
+        {
+            gizmos.line_2d(start, end, note_color);
+        }
+    }
     let mut noteheads = Vec::new();
     for (symbol_index, symbol) in layout.symbols.iter().enumerate() {
         let Some(x) = viewport
@@ -1687,6 +1732,18 @@ pub(crate) fn sheet_view_system(
     }
     if let Some(cursor) = window.cursor_position() {
         let position = Vec2::new(cursor.x - width / 2.0, window.height() / 2.0 - cursor.y);
+        if tools.slide {
+            if keyboard.just_pressed(KeyCode::Escape) {
+                tools.slide = false;
+                tools.slide_anchor = None;
+            } else if let Some((source, center)) = sheet_note_hit(position, &noteheads) {
+                gizmos.circle_2d(center, 9.0, cursor_color);
+                if mouse.just_pressed(MouseButton::Left) {
+                    super::editor_slide_click(&mut document, source, &mut tools);
+                }
+            }
+            return;
+        }
         if position.y >= reference_bottom - 6.0 && position.y <= reference_top + 18.0
             && document.chart.tracks.len() > 1 && document.selection_move.is_none() && !document.selection_drag
         { return; }
@@ -1842,6 +1899,32 @@ pub(crate) fn sheet_view_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Slide strokes follow the notehead centreline and stop clear of each head. AI_CODE
+    #[test]
+    fn sheet_slide_lines_follow_centres_with_endpoint_gaps() {
+        for end in [Vec2::new(80.0, 30.0), Vec2::new(80.0, -30.0), Vec2::new(80.0, 0.0)] {
+            let start = Vec2::ZERO;
+            let (from, to) = sheet_slide_segment(start, end).unwrap();
+            assert!((from.distance(start) - 8.0).abs() < 0.001);
+            assert!((to.distance(end) - 8.0).abs() < 0.001);
+            assert!((from.perp_dot(end)).abs() < 0.001);
+            assert!(((end - to).perp_dot(end)).abs() < 0.001);
+        }
+        assert!(sheet_slide_segment(Vec2::ZERO, Vec2::new(10.0, 0.0)).is_none());
+        let mut document = super::super::new_chart_document();
+        let mut track = super::super::new_track(InstrumentKind::Voice);
+        track.notes = serde_json::from_str(r#"[
+            {"start":0,"length":4,"note":60,"performance":{"preferred_string":0}},
+            {"start":480,"length":4,"note":67,"voice":2},
+            {"start":480,"length":4,"note":65,"performance":{"preferred_string":1}},
+            {"start":960,"length":4,"note":64,"performance":{"preferred_string":0,"transition":"slide"}}
+        ]"#).unwrap();
+        document.chart.tracks.push(track);
+        let track = &document.chart.tracks[0];
+        assert_eq!(sheet_slide_pairs(track, &layout_track(&document.chart, track)),
+            vec![(EventSource::Track(0), EventSource::Track(3))]);
+    }
 
     /// Explicit and legacy tie continuations hide fret labels while retaining sustain endpoints. AI_CODE
     #[test]
