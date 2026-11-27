@@ -280,6 +280,8 @@ Staccato dots and tenuto dashes sit just below the up-stem noteheads. Other arti
 above the top staff line (or above high notes); marcato uses `^` while accent uses
 `>`. All articulation marks render in the foreground so staff/grid lines cannot
 cover them.
+Natural accidentals use a drawn natural sign, and fermatas use an arch over a dot,
+rather than text abbreviations. Both render above grid lines without requiring a music font.
 The tablature beneath string staves uses filled green fret badges with light text
 above the staff/grid lines. Green duration bars sit above the grid but below the
 badges, keeping the fret numbers foremost. These overlays do not intercept pointer input.

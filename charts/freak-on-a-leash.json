@@ -180,6 +180,15 @@
             "preferred_string": 2
           },
           "note": 38
+        },
+        {
+          "id": "event-000010",
+          "start": 6480,
+          "length": 8,
+          "performance": {
+            "preferred_string": 2
+          },
+          "note": 38
         }
       ],
       "ties": [
@@ -206,6 +215,10 @@
         {
           "from": "paste-event-000009",
           "to": "paste-event-000010"
+        },
+        {
+          "from": "event-000005",
+          "to": "event-000010"
         }
       ],
       "slurs": [],
@@ -218,12 +231,13 @@
       "kind": "strings",
       "tuning": {
         "strings": [
-          "E2",
-          "A2",
-          "D3",
-          "G3",
-          "B3",
-          "E4"
+          "A1",
+          "D2",
+          "G2",
+          "C3",
+          "F3",
+          "A3",
+          "D4"
         ]
       },
       "kit": null,
@@ -239,13 +253,53 @@
           "id": "event-000006",
           "start": 3840,
           "length": 2,
+          "dots": 1,
           "performance": {
             "preferred_string": 4
           },
-          "note": 74
+          "note": 62
+        },
+        {
+          "id": "event-000007",
+          "start": 6720,
+          "length": 16,
+          "chord": "chord-event-000007",
+          "performance": {
+            "preferred_string": 4
+          },
+          "note": 62
+        },
+        {
+          "id": "event-000008",
+          "start": 6720,
+          "length": 16,
+          "chord": "chord-event-000007",
+          "performance": {
+            "preferred_string": 5
+          },
+          "note": 69
+        },
+        {
+          "id": "event-000009",
+          "start": 6960,
+          "length": 8,
+          "dots": 1,
+          "performance": {
+            "preferred_string": 5
+          },
+          "note": 69
         }
       ],
-      "ties": [],
+      "ties": [
+        {
+          "from": "event-000006",
+          "to": "event-000007"
+        },
+        {
+          "from": "event-000008",
+          "to": "event-000009"
+        }
+      ],
       "slurs": [],
       "phrases": [],
       "star_power_phrases": [],

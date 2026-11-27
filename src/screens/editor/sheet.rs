@@ -166,11 +166,48 @@ struct EngravingLabel {
     color: Color,
     tab_end: Option<u32>,
     articulation_overlay: bool,
+    symbol: Option<SheetSymbol>,
+}
+
+/// Font-independent notation glyphs rendered above staff and grid lines. AI_CODE
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SheetSymbol {
+    Natural,
+    Fermata,
+}
+
+/// Build filled glyph strokes in centered sheet coordinates. AI_CODE
+fn symbol_strokes(symbol: SheetSymbol) -> Vec<(Vec2, Vec2)> {
+    let mut strokes = Vec::new();
+    match symbol {
+        SheetSymbol::Natural => {
+            strokes.push((Vec2::new(-3.0, 3.0), Vec2::new(1.5, 18.0)));
+            strokes.push((Vec2::new(3.0, -3.0), Vec2::new(1.5, 18.0)));
+            for column in -3..=3 {
+                let offset = column as f32 * 0.4;
+                for beam in [-3.0, 3.0] {
+                    strokes.push((Vec2::new(column as f32, beam + offset), Vec2::new(1.0, 2.0)));
+                }
+            }
+        }
+        SheetSymbol::Fermata => {
+            for sample in 0..=32 {
+                let angle = sample as f32 * std::f32::consts::PI / 32.0;
+                strokes.push((Vec2::new(8.0 * angle.cos(), -3.0 + 8.0 * angle.sin()), Vec2::splat(1.8)));
+            }
+            for row in -2..=2 {
+                let offset = row as f32 * 0.5;
+                let width = 2.0 * (2.25 - offset * offset).sqrt();
+                strokes.push((Vec2::new(0.0, -2.0 + offset), Vec2::new(width, 0.5)));
+            }
+        }
+    }
+    strokes
 }
 
 /// A persistent filled backing for a sheet tablature fret label. AI_CODE
 #[derive(Component)]
-pub(crate) struct SheetTabBadge(usize);
+pub(crate) struct SheetTabBadge((usize, usize));
 
 /// Index for reconciling sheet annotations without respawning text entities every frame.
 ///
@@ -202,7 +239,7 @@ fn engraving_labels(
     let mut labels = Vec::new();
     let note_color = Color::srgb(0.93, 0.94, 0.88);
     let marker_color = Color::srgb(0.79, 0.83, 0.70);
-    let label = |text: String, x: f32, y: f32, color: Color| EngravingLabel { text, x, y, color, tab_end: None, articulation_overlay: false };
+    let label = |text: String, x: f32, y: f32, color: Color| EngravingLabel { text, x, y, color, tab_end: None, articulation_overlay: false, symbol: None };
     let string_count = track
         .tuning
         .as_ref()
@@ -305,6 +342,9 @@ fn engraving_labels(
                             - STAFF_Y,
                         note_color,
                     ));
+                    if accidental == 0 {
+                        labels.last_mut().unwrap().symbol = Some(SheetSymbol::Natural);
+                    }
                 }
                 if let Some(dynamic) = symbol.dynamic {
                     labels.push(label(
@@ -333,6 +373,9 @@ fn engraving_labels(
                         marker_color,
                     ));
                     labels.last_mut().unwrap().articulation_overlay = true;
+                    if *articulation == Articulation::Fermata {
+                        labels.last_mut().unwrap().symbol = Some(SheetSymbol::Fermata);
+                    }
                 }
                 if symbol.grace.is_some() {
                     labels.push(label("gr".into(), x - 8.0, y + 22.0, marker_color));
@@ -968,14 +1011,14 @@ pub(crate) fn sheet_view_system(
         let y = super::references::reference_row_y(STAFF_Y + EDIT_HEIGHT, index, reference_rows.len());
         let color = Color::srgb(0.55, 0.70, 0.76);
         gizmos.line_2d(Vec2::new(viewport.left, y), Vec2::new(viewport.right, y), Color::srgb(0.24, 0.31, 0.33));
-        labels_data.push(EngravingLabel { text: row.name.clone(), x: viewport.left + 110.0, y: y + 9.0, color, tab_end: None, articulation_overlay: false });
+        labels_data.push(EngravingLabel { text: row.name.clone(), x: viewport.left + 110.0, y: y + 9.0, color, tab_end: None, articulation_overlay: false, symbol: None });
         for tick in &row.onsets {
             if let Some(x) = viewport.x_at(*tick) {
                 gizmos.line_2d(Vec2::new(x, y - 3.0), Vec2::new(x, y + 3.0), color);
             }
         }
     }
-    let score_labels = labels_data.iter().filter(|label| label.tab_end.is_none() && !label.articulation_overlay).cloned().collect::<Vec<_>>();
+    let score_labels = labels_data.iter().filter(|label| label.tab_end.is_none() && !label.articulation_overlay && label.symbol.is_none()).cloned().collect::<Vec<_>>();
     reconcile_engraving_labels(&mut commands, &mut labels, &score_labels);
     let clef = layout.clef.unwrap_or(Clef::Treble);
     let staff_color = Color::srgb(0.55, 0.60, 0.63);
@@ -1087,29 +1130,38 @@ pub(crate) fn sheet_view_system(
     let mut active_badges = HashSet::new();
     {
         for (index, label) in labels_data.iter().enumerate() {
-            if label.tab_end.is_none() && !label.articulation_overlay { continue; }
+            if label.tab_end.is_none() && !label.articulation_overlay && label.symbol.is_none() { continue; }
             let end_tick = label.tab_end.unwrap_or(viewport.start);
             let end = viewport.x_at_clamped(end_tick);
             let width = (label.text.chars().count() as f32 * 8.0 + 8.0).max(18.0);
-            for (part, (x, part_width, height, text)) in [
-                ((label.x + end) / 2.0, (end - label.x).max(1.0), 5.0, ""),
-                (end, 1.0, 10.0, ""),
-                (label.x, width, 18.0, label.text.as_str()),
-            ].into_iter().enumerate() {
-                if label.articulation_overlay && part != 2 { continue; }
-                let key = index * 3 + part;
-                let background = if label.articulation_overlay { Color::NONE } else { Color::srgb(0.16, 0.54, 0.44) };
-                let z_index = if label.articulation_overlay { 12 } else if part == 2 { 11 } else { 10 };
+            let parts = if let Some(symbol) = label.symbol {
+                symbol_strokes(symbol).into_iter().map(|(offset, size)|
+                    (label.x + offset.x, label.y + offset.y, size.x, size.y, ""))
+                    .collect::<Vec<_>>()
+            } else {
+                vec![
+                    ((label.x + end) / 2.0, label.y, (end - label.x).max(1.0), 5.0, ""),
+                    (end, label.y, 1.0, 10.0, ""),
+                    (label.x, label.y, width, 18.0, label.text.as_str()),
+                ]
+            };
+            for (part, (x, y, part_width, height, text)) in parts.into_iter().enumerate() {
+                if label.articulation_overlay && label.symbol.is_none() && part != 2 { continue; }
+                let key = (index, part);
+                let background = if label.symbol.is_some() { label.color }
+                    else if label.articulation_overlay { Color::NONE }
+                    else { Color::srgb(0.16, 0.54, 0.44) };
+                let z_index = if label.articulation_overlay || label.symbol.is_some() { 12 } else if part == 2 { 11 } else { 10 };
                 active_badges.insert(key);
                 let node = Node {
                     position_type: PositionType::Absolute,
                     left: Val::Px(window.width() / 2.0 + x - part_width / 2.0),
-                    top: Val::Px(window.height() / 2.0 - label.y - height / 2.0),
+                    top: Val::Px(window.height() / 2.0 - y - height / 2.0),
                     width: Val::Px(part_width),
                     height: Val::Px(height),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
-                    border_radius: if part == 2 { BorderRadius::MAX } else { BorderRadius::ZERO },
+                    border_radius: if part == 2 && label.symbol.is_none() { BorderRadius::MAX } else { BorderRadius::ZERO },
                     ..default()
                 };
                 if let Some(entity) = existing_badges.get(&key)
@@ -1781,6 +1833,37 @@ pub(crate) fn sheet_view_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Naturals and fermatas select font-independent foreground shapes with valid stroke geometry. AI_CODE
+    #[test]
+    fn sheet_natural_and_fermata_use_notation_symbols() {
+        let mut document = super::super::new_chart_document();
+        let mut track = super::super::new_track(InstrumentKind::Voice);
+        track.key_signature = Some(KeySignature { fifths: 1, mode: KeyMode::Major });
+        track.notes = serde_json::from_str(r#"[
+            {"start":0,"length":4,"note":"F4","articulations":["fermata"]}
+        ]"#).unwrap();
+        document.chart.tracks.push(track);
+        let track = &document.chart.tracks[0];
+        let layout = layout_track(&document.chart, track);
+        let viewport = SheetViewport { left: -100.0, right: 100.0, start: 0, span: 3840 };
+        let labels = engraving_labels(track, &layout, viewport, false);
+        let natural = labels.iter().find(|label| label.symbol == Some(SheetSymbol::Natural)).unwrap();
+        let fermata = labels.iter().find(|label| label.symbol == Some(SheetSymbol::Fermata)).unwrap();
+        assert_eq!(natural.x, viewport.left - 15.0);
+        assert_eq!(natural.y, step_y(pitch_step(65, None).0, layout.clef.unwrap()));
+        assert!(fermata.articulation_overlay);
+        assert!(fermata.y > STAFF_Y + 2.0 * STAFF_SPACING);
+        for symbol in [SheetSymbol::Natural, SheetSymbol::Fermata] {
+            let strokes = symbol_strokes(symbol);
+            assert!(!strokes.is_empty());
+            assert!(strokes.iter().all(|(offset, size)| offset.is_finite()
+                && size.is_finite() && size.x > 0.0 && size.y > 0.0));
+        }
+        let fermata = symbol_strokes(SheetSymbol::Fermata);
+        assert!(fermata.iter().any(|(offset, _)| offset.y > 4.0));
+        assert!(fermata.iter().any(|(offset, _)| offset.x == 0.0 && offset.y < 0.0));
+    }
 
     /// Staccato and tenuto stay below up-stem notes; other marks stack above the staff. AI_CODE
     #[test]
