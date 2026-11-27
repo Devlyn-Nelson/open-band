@@ -137,7 +137,9 @@ Once a chart is open, its track list is shown:
 | `Ctrl+M` | Edit score navigation markers, tempo text, and expressive spans |
 | `Ctrl+Z` | Undo the last committed score edit |
 | `Ctrl+Y` / `Ctrl+Shift+Z` | Redo an undone score edit |
-| `Delete` | Remove the selected event and its tie/slur relationships |
+| `Shift+Left` / `Shift+Right` | Extend a sheet/tab time-range selection by one snap step |
+| `Ctrl+B` | Open the bulk-edit draft for selected notes in sheet or tab view |
+| `Delete` | Remove all range-selected notes, or the focused event if no notes are selected, with tie/slur cleanup |
 | `N` | Add a new track (defaults to `Strings`) |
 | `X` | Remove the focused track |
 | `K` | Cycle the focused track's kind (`Strings` -> `Percussion` -> `Voice`) |
@@ -169,6 +171,52 @@ metronome. Preview does not modify the score or its undo history. This is click-
 audio only, not synthesized instrument-note playback, and uses the default audio
 output. Click dispatch is frame-driven; after a long stalled frame, missed beats are
 coalesced instead of sounding in a burst.
+
+In either sheet or tab view, toggle `SELECT` and drag a time range. In tab view,
+Shift-drag also selects; in sheet view use Ctrl+Shift-drag so Shift-click remains
+available for placing sharps. Sheet ranges run horizontally; tab ranges run vertically.
+Both snapped endpoints are included; selection covers every note onset in that range
+on the focused track, including stacked notes and vocal phrase notes, but not rests.
+Vocal tab notes appear on one pitch-name lane, without requiring a string tuning.
+Shift-click extends the current range; `Shift+Left`/`Shift+Right` extends it using the
+shared cursor and snap interval. Selected sheet noteheads and tab badges have amber
+outlines. The selected range persists when switching between sheet and tab. `Esc` clears
+selection before leaving the editor, and changing tracks clears the range.
+
+`BULK EDIT` or `Ctrl+B` opens a transactional field menu. Up/Down selects fields,
+Left/Right adjusts values, and Enter activates a choice or Apply. Esc cancels.
+Strings offer **Move string (preserve pitch)**, **Set string/fret**, **Transpose**,
+and **Set pitch**. Move string calculates each note's fret from its existing pitch;
+Set string/fret assigns the chosen string and fret to every selected note and changes
+their pitches accordingly. Transpose preserves pitch intervals; Set pitch assigns
+one MIDI pitch. Vocal tracks offer transpose/set-pitch, and percussion offers pieces
+from the focused track's kit, including shared-lane and lane-spanning pieces.
+
+The entire batch validates before mutation. An unplayable string mapping, out-of-range
+pitch, or incomplete tie-chain pitch/piece change leaves every note untouched and the
+draft open. Select the entire tie chain when changing its pitch/piece. Rhythm, IDs,
+relationships, and unrelated performance hints remain intact; stale preferred-string
+hints are cleared if a pitch change makes them unplayable. Each batch is one undo
+step. Applied score changes and undo/redo clear the range to avoid stale selections.
+Copy/paste is not included yet.
+
+Press `Delete` to remove every note in the active selection in either view. This
+clears the range and removes ties/slurs referencing deleted notes, leaving rests and
+unselected notes untouched. The entire deletion is one undo step. Without selected
+notes, Delete retains its single-focused-event behavior; dialog and metadata Delete
+controls are unchanged.
+
+To move a selection, click inside its range without holding Shift or Ctrl and drag
+along the time axis: horizontally in sheet view or vertically in tab view. This
+also works while `SELECT` is active. The range and cyan note outlines preview the
+snapped destination; notes commit together when the mouse is released. Escape
+cancels a pending move without changing the score. Shift-drag retains its range
+extension behavior. Movement changes time only, preserving pitch, string/piece,
+duration, relative timing, and event IDs; use Bulk Edit for pitch/string changes.
+Moves clamp at tick zero and reject incomplete tie chains, overlapping unselected
+notes of the same pitch/piece (or rests) in the same voice/staff, timeline overflow,
+and vocal notes moved outside their owning phrase. Rejected moves restore the
+original selection. Successful moves are one undo step and clear the range.
 
 In score metadata, `Up` / `Down` selects a field, `Left` / `Right` adjusts numeric and
 track metadata, and `Enter` edits text fields or inserts the selected score marker or

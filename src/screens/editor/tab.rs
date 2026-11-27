@@ -270,6 +270,7 @@ fn tab_lane_for_symbol(track: &ChartTrack, symbol: &NotationSymbol) -> Option<us
             ..
         } => Some(usize::MAX),
         NotationSymbolKind::Percussion { lane, .. } => *lane,
+        NotationSymbolKind::Pitched { .. } if track.kind == InstrumentKind::Voice => Some(0),
         NotationSymbolKind::Pitched { pitch, .. } => {
             let tuning = track.tuning.as_ref()?;
             let open_notes = tuning.open_midi().ok()?;
@@ -389,7 +390,7 @@ pub(crate) fn tab_fret_dialog_system(
         document.tab_fret_string = None;
     }
     if document.view_mode != EditorViewMode::Tab || document.metadata_mode
-        || document.inspector.is_some() || document.text_entry.is_some()
+        || document.inspector.is_some() || document.text_entry.is_some() || document.bulk_edit.is_some()
     {
         document.tab_fret_string = None;
     }
@@ -440,7 +441,7 @@ pub(crate) fn tab_fret_choice_input(
     choices: Query<&TabFretChoice>,
 ) {
     if document.view_mode != EditorViewMode::Tab || document.metadata_mode
-        || document.inspector.is_some() || document.text_entry.is_some()
+        || document.inspector.is_some() || document.text_entry.is_some() || document.bulk_edit.is_some()
     {
         return;
     }
@@ -485,6 +486,7 @@ pub(crate) fn tab_view_system(
         || document.metadata_mode
         || document.text_entry.is_some()
         || document.inspector.is_some()
+        || document.bulk_edit.is_some()
         || document.tab_fret_string.is_some()
     {
         document.tab_resize = None;
@@ -533,6 +535,8 @@ pub(crate) fn tab_view_system(
     let percussion = track.kind == InstrumentKind::Percussion;
     let lanes = if percussion {
         track.kit.as_ref().map_or(0, |kit| kit.lanes)
+    } else if track.kind == InstrumentKind::Voice {
+        1
     } else {
         track
             .tuning
@@ -559,6 +563,8 @@ pub(crate) fn tab_view_system(
         );
         let name = if percussion {
             format!("L{}", lane + 1)
+        } else if track.kind == InstrumentKind::Voice {
+            "VOICE".into()
         } else {
             track
                 .tuning
@@ -613,6 +619,20 @@ pub(crate) fn tab_view_system(
             );
         }
     }
+    let selected = super::bulk::selected_sources(&document);
+    if let Some(selection) = document.selection.filter(|selection| selection.track == document.track_focus) {
+        let start = selection.anchor.min(selection.end).max(view_start);
+        let end = selection.anchor.max(selection.end).min(view_start.saturating_add(span).saturating_sub(1));
+        if start <= end {
+            let start_y = y_for_tick(start).unwrap_or(top);
+            let end_y = y_for_tick(end).unwrap_or(bottom);
+            gizmos.rect_2d(
+                Vec2::new((left + right) / 2.0, (start_y + end_y) / 2.0),
+                Vec2::new(right - left + 60.0, (start_y - end_y).max(4.0)),
+                Color::srgb(0.95, 0.73, 0.22),
+            );
+        }
+    }
     for (symbol_index, symbol) in layout.symbols.iter().enumerate() {
         let Some(y) = y_for_tick(symbol.start) else {
             continue;
@@ -634,6 +654,7 @@ pub(crate) fn tab_view_system(
             x_for_lane(lane)
         };
         let text = match &symbol.kind {
+            NotationSymbolKind::Pitched { pitch, .. } if track.kind == InstrumentKind::Voice => note_name(*pitch).to_owned(),
             NotationSymbolKind::Pitched { pitch, .. } => {
                 let Some(lane) = lane else { continue };
                 track
@@ -666,6 +687,14 @@ pub(crate) fn tab_view_system(
             NotationSymbolKind::Rest => continue,
         };
         let continuation = tab_tie_continuation(&layout, symbol_index);
+        if selected.contains(&symbol.source) {
+            gizmos.circle_2d(Vec2::new(x, y), if continuation { 13.0 } else { 23.0 }, Color::srgb(0.95, 0.73, 0.22));
+        }
+        if let Some(tick) = super::bulk::move_preview_tick(&document, symbol.source, symbol.start)
+            && let Some(ghost_y) = y_for_tick(tick)
+        {
+            gizmos.circle_2d(Vec2::new(x, ghost_y), if continuation { 13.0 } else { 23.0 }, Color::srgb(0.35, 0.9, 0.95));
+        }
         next_badges.push((if continuation { String::new() } else { text }, x, y, continuation));
         if let Some(end_y) = tab_duration_end_y(symbol.start, symbol.duration, view_start, span, top, bottom) {
             for offset in -3..=3 {
@@ -769,13 +798,34 @@ pub(crate) fn tab_view_system(
         cursor.x - window.width() / 2.0,
         window.height() / 2.0 - cursor.y,
     );
-    if position.y > top || position.y < bottom {
+    if (position.y > top || position.y < bottom) && !document.selection_drag && document.selection_move.is_none() {
         return;
     }
     let tick = document.current_tick.saturating_add(
         ((top - position.y.clamp(bottom, top)) / viewport_height * span as f32) as u32,
     );
     let snapped = super::sheet::snap_sheet_tick(&document.chart, tick, settings.sheet_beat_divisions);
+    if document.selection_move.is_some() {
+        super::bulk::update_move(&mut document, snapped,
+            mouse.just_released(MouseButton::Left) || !mouse.pressed(MouseButton::Left));
+        return;
+    }
+    if document.selection_drag {
+        super::bulk::update_range(&mut document, snapped,
+            mouse.just_released(MouseButton::Left) || !mouse.pressed(MouseButton::Left));
+        return;
+    }
+    let shift = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+    if !shift && mouse.just_pressed(MouseButton::Left)
+        && position.x >= left - 78.0 && position.x <= right + 30.0
+        && super::bulk::begin_move(&mut document, snapped)
+    { return; }
+    if mouse.just_pressed(MouseButton::Left) && (shift || document.selection_mode)
+        && position.x >= left - 78.0 && position.x <= right + 30.0
+    {
+        super::bulk::begin_range(&mut document, snapped, shift);
+        return;
+    }
     if mouse.just_released(MouseButton::Left)
         && let Some(resize) = document.tab_resize.take()
     {
@@ -926,6 +976,9 @@ pub(crate) fn tab_view_system(
             document.tab_percussion_lane = None;
             document.current_tick = snapped;
             super::sheet_edit_percussion_at_tick(&mut document, snapped, lane, &tools);
+        } else if track.kind == InstrumentKind::Voice {
+            document.current_tick = snapped;
+            document.event_focus = 0;
         } else {
             document.tab_fret_string = Some(lane);
             document.tab_fret_tick = snapped;
@@ -937,6 +990,17 @@ pub(crate) fn tab_view_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Untuned vocal phrase notes occupy a visible lane for range selection and pitch editing. AI_CODE
+    #[test]
+    fn bulk_vocal_tab_symbols_have_a_visible_lane() {
+        let mut document = new_chart_document();
+        let mut track = new_track(InstrumentKind::Voice);
+        track.phrases = serde_json::from_str(r#"[{"start":0,"duration_ticks":960,"text":"la","notes":[{"start":0,"length":4,"note":60}]}]"#).unwrap();
+        document.chart.tracks.push(track);
+        let layout = layout_track(&document.chart, &document.chart.tracks[0]);
+        assert_eq!(tab_lane_for_symbol(&document.chart.tracks[0], &layout.symbols[0]), Some(0));
+    }
 
     /// Duration bars end at the authored tick or clip at the viewport boundary.
     ///

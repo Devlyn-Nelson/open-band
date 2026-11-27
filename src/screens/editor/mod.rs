@@ -8,6 +8,7 @@ mod sheet;
 pub(crate) use sheet::sheet_view_system;
 mod tab;
 mod inspector;
+mod bulk;
 mod playback;
 pub(crate) use playback::editor_playback_system;
 pub(crate) use tab::{tab_fret_choice_input, tab_fret_dialog_system, tab_view_system};
@@ -52,6 +53,11 @@ pub(crate) struct EditorDocument {
     pub(crate) chart: Chart,
     history: EditorHistory,
     playback: playback::EditorPlayback,
+    selection: Option<bulk::TabSelection>,
+    selection_mode: bool,
+    selection_drag: bool,
+    selection_move: Option<bulk::SelectionMove>,
+    bulk_edit: Option<bulk::BulkDraft>,
     pub(crate) path: Option<PathBuf>,
     pub(crate) dirty: bool,
     pub(crate) track_focus: usize,
@@ -110,6 +116,9 @@ impl EditorDocument {
             event_focus: self.event_focus,
         };
         if let Some(previous) = self.history.current.replace(snapshot) {
+            self.selection = None;
+            self.selection_drag = false;
+            self.selection_move = None;
             self.history.undo.push(previous);
             if self.history.undo.len() > 100 {
                 self.history.undo.remove(0);
@@ -137,6 +146,10 @@ impl EditorDocument {
         self.tab_resize = None;
         self.tab_fret_string = None;
         self.tab_percussion_lane = None;
+        self.selection = None;
+        self.selection_drag = false;
+        self.bulk_edit = None;
+        self.selection_move = None;
         self.status = if redo { "Redone" } else { "Undone" }.into();
     }
 }
@@ -369,6 +382,8 @@ pub(crate) enum SheetToolAction {
     SheetDivisionUp,
     PlayPause,
     StopPreview,
+    SelectRange,
+    BulkEdit,
 }
 
 /// A fret button in the tab editor's note-choice dialog.
@@ -1643,6 +1658,11 @@ fn list_editable_charts() -> Vec<EditorChartEntry> {
 /// AI_CODE
 fn new_chart_document() -> EditorDocument {
     EditorDocument {
+    selection: None,
+        selection_mode: false,
+        selection_drag: false,
+        selection_move: None,
+        bulk_edit: None,
     history: EditorHistory::default(),
         playback: playback::EditorPlayback::default(),
         chart: Chart {
@@ -1793,6 +1813,11 @@ fn load_chart_document(path: &Path) -> Result<EditorDocument, String> {
         false
     };
     Ok(EditorDocument {
+        selection: None,
+        selection_mode: false,
+        selection_drag: false,
+        selection_move: None,
+        bulk_edit: None,
         history: EditorHistory::default(),
         playback: playback::EditorPlayback::default(),
         chart,
@@ -2153,6 +2178,8 @@ pub(crate) fn snap_editor_tick(document: &EditorDocument, tick: u32) -> u32 {
 ///
 /// AI_CODE
 fn cycle_editor_track(document: &mut EditorDocument, delta: i32) {
+    document.selection = None;
+    document.selection_drag = false;
     let count = document.chart.tracks.len();
     if count > 0 {
         document.track_focus =
@@ -2338,10 +2365,17 @@ pub(crate) fn setup_editor(mut commands: Commands) {
         ("DIV +", SheetToolAction::SheetDivisionUp),
         ("PLAY", SheetToolAction::PlayPause),
         ("STOP", SheetToolAction::StopPreview),
+        ("SELECT", SheetToolAction::SelectRange),
+        ("BULK EDIT", SheetToolAction::BulkEdit),
     ];
     for (index, (label, action)) in toolbar.into_iter().enumerate() {
-        let column = index % 12;
-        let row = index / 12;
+        let (column, row) = match action {
+            SheetToolAction::SelectRange => (3, 1),
+            SheetToolAction::BulkEdit => (4, 1),
+            SheetToolAction::TabSnap => (0, 0),
+            SheetToolAction::ZoomIn => (1, 0),
+            _ => (index % 12, index / 12),
+        };
         commands.spawn((
             Button::default(),
             Node {
@@ -2443,13 +2477,20 @@ pub(crate) fn sheet_toolbar_input(
     mut settings: ResMut<PersistentSettings>,
     actions: Query<&SheetToolAction>,
 ) {
-    if document.metadata_mode || document.text_entry.is_some() || document.inspector.is_some() {
+    if document.metadata_mode || document.text_entry.is_some() || document.inspector.is_some() || document.bulk_edit.is_some() || document.selection_move.is_some() {
         return;
     }
     let Ok(action) = actions.get(activate.entity) else {
         return;
     };
     match action {
+        SheetToolAction::SelectRange => {
+            document.selection_mode = !document.selection_mode;
+            document.tab_resize = None;
+        }
+        SheetToolAction::BulkEdit => {
+            if let Err(error) = bulk::open(&mut document) { document.status = error; }
+        }
         SheetToolAction::PlayPause => document.toggle_preview(),
         SheetToolAction::StopPreview => document.stop_preview(),
         SheetToolAction::Duration(value) => tools.duration = *value,
@@ -2559,9 +2600,10 @@ pub(crate) fn sheet_toolbar_display(
         &mut Text,
     )>,
 ) {
-    let visible = !document.metadata_mode && document.text_entry.is_none() && document.inspector.is_none();
+    let visible = !document.metadata_mode && document.text_entry.is_none() && document.inspector.is_none() && document.bulk_edit.is_none();
     for (action, mut background, mut visibility, mut text) in &mut buttons {
         let action_visible = match action {
+            SheetToolAction::SelectRange | SheetToolAction::BulkEdit => true,
             SheetToolAction::Remove
             | SheetToolAction::PlayPause
             | SheetToolAction::StopPreview
@@ -2589,6 +2631,8 @@ pub(crate) fn sheet_toolbar_display(
             Visibility::Hidden
         };
         let active = match action {
+            SheetToolAction::SelectRange => document.selection_mode,
+            SheetToolAction::BulkEdit => !bulk::selected_sources(&document).is_empty(),
             SheetToolAction::PlayPause => document.playback.playing,
             SheetToolAction::StopPreview => false,
             SheetToolAction::Duration(value) => tools.duration == *value,
@@ -3338,11 +3382,23 @@ pub(crate) fn editor_tracks_input(
         return;
     }
     keyboard_events.clear();
+    if document.selection_move.is_some() {
+        if keyboard.just_pressed(KeyCode::Escape) { bulk::cancel_move(&mut document); }
+        return;
+    }
+    if document.bulk_edit.is_some() {
+        bulk::input(&mut document, &keyboard);
+        return;
+    }
     if document.inspector.is_some() {
         inspector::input(&mut document, &keyboard);
         return;
     }
     if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
+        if keyboard.just_pressed(KeyCode::KeyB) && !document.metadata_mode {
+            if let Err(error) = bulk::open(&mut document) { document.status = error; }
+            return;
+        }
         if keyboard.just_pressed(KeyCode::KeyZ) || keyboard.just_pressed(KeyCode::KeyY) {
             let redo = keyboard.just_pressed(KeyCode::KeyY)
                 || keyboard.pressed(KeyCode::ShiftLeft)
@@ -3372,6 +3428,19 @@ pub(crate) fn editor_tracks_input(
             }
             return;
         }
+    }
+    if !document.metadata_mode
+        && (keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight))
+        && (keyboard.just_pressed(KeyCode::ArrowLeft) || keyboard.just_pressed(KeyCode::ArrowRight))
+    {
+        bulk::extend_selection(&mut document, if keyboard.just_pressed(KeyCode::ArrowLeft) { -1 } else { 1 });
+        return;
+    }
+    if keyboard.just_pressed(KeyCode::Escape) && (document.selection.is_some() || document.selection_mode) {
+        document.selection = None;
+        document.selection_mode = false;
+        document.selection_drag = false;
+        return;
     }
     if keyboard.just_pressed(KeyCode::Escape) {
         if document.metadata_mode {
@@ -3602,11 +3671,15 @@ pub(crate) fn editor_tracks_input(
             buffer,
         });
     }
-    if keyboard.just_pressed(KeyCode::Delete)
-        && let Some(source) = focused_event_source(&document)
-        && remove_editor_event(&mut document, source)
-    {
-        document.status = "Event removed".into();
+    if keyboard.just_pressed(KeyCode::Delete) {
+        if bulk::delete_selected(&mut document) {
+            return;
+        }
+        if let Some(source) = focused_event_source(&document)
+            && remove_editor_event(&mut document, source)
+        {
+            document.status = "Event removed".into();
+        }
     }
     if keyboard.just_pressed(KeyCode::KeyN) {
         document
@@ -3794,6 +3867,10 @@ pub(crate) fn editor_tracks_display(
     let Ok(mut text) = text.single_mut() else {
         return;
     };
+    if document.bulk_edit.is_some() {
+        *text = bulk::display(&document);
+        return;
+    }
     if document.inspector.is_some() {
         *text = inspector::display(&document);
         if let Some(entry) = &document.text_entry {
@@ -3857,7 +3934,7 @@ pub(crate) fn editor_tracks_display(
             document.current_tick,
             document.tab_beats_per_screen,
             document.snap_interval,
-            document.status,
+            format!("{} notes selected  |  {}", bulk::selected_sources(&document).len(), document.status),
         ));
         return;
     }
@@ -3894,7 +3971,7 @@ pub(crate) fn editor_tracks_display(
             tools.voice,
             tools.dynamic,
             tools.articulation,
-            document.status,
+            format!("{} notes selected  |  {}", bulk::selected_sources(&document).len(), document.status),
         ));
         return;
     }

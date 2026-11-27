@@ -202,15 +202,57 @@ Regressions cover tempo and meter transitions, seeking/paging, pause/stop, chart
 behavior, keyboard/modal routing, and decoding non-silent click audio. Manual audio
 and visual QA remains recommended.
 
-### 10. Multi-select and bulk edit
+### 10. Multi-select and bulk edit (implemented)
 
-- Multi-select notes across a tick/beat range in tab view.
-- **Bulk reassignment**: with a selection active, reassign all selected notes to a new
-  string/fret (or pitch/piece) in a single action. This is needed as a core capability, not
-  a stretch item — Part E's guitar/bass import produces musically arbitrary
-  lane-to-open-string placements that are only practical to correct with bulk
-  reassignment, so this should land before or alongside Part E.
-- Copy/paste within or across tracks of the same kind (stretch, can follow later).
+Sheet and tab views share snapped, inclusive onset-range selection across the focused
+track. Use the `SELECT` toggle and drag in either view, Shift-drag in tab, or
+Ctrl+Shift-drag in sheet (preserving Shift-click sharp placement). Holding Shift
+extends the existing range. Shift+Left/Right extends the range using the shared
+cursor and snap interval. Amber outlines identify selected sheet noteheads/tab
+badges and the visible range. Selection persists across sheet/tab switching. Chords and
+nested vocal phrase notes participate; authored/inferred rests do not. Escape clears
+selection before leaving the editor, and track changes clear selection.
+Vocal tab notes use one pitch-name lane, so untuned voice tracks remain visible.
+
+`BULK EDIT` or `Ctrl+B` opens a transactional keyboard field menu using the existing
+Up/Down, Left/Right, Enter, and Escape conventions. String operations include moving
+all selected notes to one string while preserving their written pitches, assigning
+one string/fret (with tuning/capo-derived pitches), transposing by semitones, and
+assigning a MIDI pitch. Vocal notes support transpose/set-pitch, and percussion uses
+the actual kit's pieces, including shared-lane and lane-spanning pieces.
+
+Every batch validates on a cloned track before commit. Unplayable strings/frets,
+MIDI overflow, unknown kit pieces, and pitch/piece changes that break ties at the
+selection boundary reject the complete operation and retain the draft. Select the
+entire tie chain for pitch/piece changes. Authored rhythm, event IDs, relationships,
+and unrelated guidance remain intact; invalidated string hints are cleared after
+pitch edits. Apply is one undoable transaction, and cancel leaves the chart untouched.
+Selection does not dirty the document or create history; score mutations and
+undo/redo clear selection to avoid stale targets.
+
+Regressions cover atomic rollback, capo/fret mapping, tie-chain preservation,
+chord/phrase ranges, kit mapping, round-trip fidelity, draft cancellation, pointer
+gestures in both orientations, sheet accidental-modifier isolation, keyboard dispatch
+in both views, and undo/redo. Manual visual QA remains recommended.
+
+- Copy/paste within or across tracks of the same kind remains a deferred stretch item.
+
+Delete removes all range-selected notes in either view, including nested vocal notes,
+and cleans referencing ties/slurs. Rests and unselected notes are preserved. The range
+is cleared and the complete deletion is one undoable transaction. With no selected
+notes, the existing focused-event deletion remains available. Dialog/metadata Delete
+behavior is unchanged. Keyboard regressions cover both views and full undo/redo.
+
+Selected ranges can also be dragged along the time axis in either view. An
+unmodified press inside a selected range starts a move, including with SELECT active;
+Shift-modified gestures continue to extend selections. The snapped range and cyan
+note ghosts preview the destination without mutating the score. Release commits
+one undoable translation; Escape cancels. Pitch, duration, relative spacing, mapping,
+and IDs are preserved. Moves clamp at tick zero and reject partial tie chains,
+same-voice/staff destination overlaps with matching pitches/pieces or explicit rests,
+overflow, and vocal notes moved outside their owning phrase. Tests cover preview,
+cancel, commit/undo/redo, bounds, collisions, ties, phrase containment, and sheet
+pointer dispatch. Movement is time-only; pitch/string/piece edits use Bulk Edit.
 
 ### 11. Testing
 

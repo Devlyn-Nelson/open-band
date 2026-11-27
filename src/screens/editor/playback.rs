@@ -140,7 +140,7 @@ pub(crate) fn editor_playback_system(
     mut clicks: Local<Option<(Handle<bevy::audio::AudioSource>, Handle<bevy::audio::AudioSource>)>>,
 ) {
     let Some(mut document) = document else { return };
-    let blocked = document.text_entry.is_some() || document.inspector.is_some()
+    let blocked = document.text_entry.is_some() || document.inspector.is_some() || document.bulk_edit.is_some()
         || document.tab_fret_string.is_some() || document.tab_percussion_lane.is_some();
     if blocked {
         if document.playback.playing {

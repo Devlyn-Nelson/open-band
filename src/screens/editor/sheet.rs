@@ -629,6 +629,44 @@ impl SheetViewport {
     }
 }
 
+/// Route sheet range gestures before pitch editing while preserving Shift's accidental shortcut. AI_CODE
+fn sheet_selection_input(
+    document: &mut EditorDocument,
+    viewport: SheetViewport,
+    position: Vec2,
+    bounds: (f32, f32),
+    divisions: u8,
+    keyboard: &ButtonInput<KeyCode>,
+    mouse: &ButtonInput<MouseButton>,
+) -> bool {
+    let shift = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+    let control = keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
+    let selection_gesture = document.selection_mode || (control && shift);
+    if !document.selection_drag && document.selection_move.is_none()
+        && !((selection_gesture || document.selection.is_some()) && mouse.just_pressed(MouseButton::Left)
+        && position.y >= bounds.0 && position.y <= bounds.1)
+    {
+        return false;
+    }
+    let x = if document.selection_drag || document.selection_move.is_some() {
+        position.x.clamp(viewport.left, viewport.right - 1.0)
+    } else { position.x };
+    let Some(tick) = viewport.tick_at(x) else { return false };
+    let snapped = snap_sheet_tick(&document.chart, tick, divisions);
+    if document.selection_move.is_some() {
+        super::bulk::update_move(document, snapped,
+            mouse.just_released(MouseButton::Left) || !mouse.pressed(MouseButton::Left));
+    } else if document.selection_drag {
+        super::bulk::update_range(document, snapped,
+            mouse.just_released(MouseButton::Left) || !mouse.pressed(MouseButton::Left));
+    } else {
+        if !shift && !control && super::bulk::begin_move(document, snapped) { return true; }
+        if !selection_gesture { return false; }
+        super::bulk::begin_range(document, snapped, shift);
+    }
+    true
+}
+
 /// Return the diatonic index of the middle staff line for the given clef.
 ///
 /// AI_CODE
@@ -839,6 +877,7 @@ pub(crate) fn sheet_view_system(
         || document.metadata_mode
         || document.text_entry.is_some()
         || document.inspector.is_some()
+        || document.bulk_edit.is_some()
     {
         wheel.clear();
         clear_engraving_labels(&mut commands, &mut labels);
@@ -1431,7 +1470,48 @@ pub(crate) fn sheet_view_system(
         cursor_color,
     );
 
-    if keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight) {
+    let control = keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
+    let selected = super::bulk::selected_sources(&document);
+    let selection_bottom = noteheads.iter().map(|(_, position)| position.y - 20.0)
+        .fold(staff_base_y(staff_count) - EDIT_HEIGHT, f32::min);
+    let selection_top = noteheads.iter().map(|(_, position)| position.y + 20.0)
+        .fold(STAFF_Y + EDIT_HEIGHT, f32::max);
+    if let Some(selection) = document.selection.filter(|selection| selection.track == document.track_focus) {
+        let start = selection.anchor.min(selection.end);
+        let end = selection.anchor.max(selection.end);
+        if end >= viewport.start && start < viewport.start.saturating_add(viewport.span) {
+            let left = viewport.x_at_clamped(start);
+            let right = viewport.x_at_clamped(end);
+            gizmos.rect_2d(
+                Vec2::new((left + right) / 2.0, (selection_top + selection_bottom) / 2.0),
+                Vec2::new((right - left).max(4.0), selection_top - selection_bottom),
+                Color::srgb(0.95, 0.73, 0.22),
+            );
+        }
+    }
+    for (source, position) in &noteheads {
+        if selected.contains(source) {
+            gizmos.circle_2d(*position, 10.0, Color::srgb(0.95, 0.73, 0.22));
+        }
+    }
+    let piece_count = track.kit.as_ref().map_or(0, |kit| kit.pieces.len());
+    for (source, position) in &noteheads {
+        if let Some(event) = super::editor_source_event(track, *source)
+            && let Some(tick) = super::bulk::move_preview_tick(&document, *source, event.start)
+            && let Some(x) = viewport.x_at(tick)
+        {
+            gizmos.circle_2d(Vec2::new(x, position.y), 10.0, Color::srgb(0.35, 0.9, 0.95));
+        }
+    }
+    if let Some(cursor) = window.cursor_position() {
+        let position = Vec2::new(cursor.x - width / 2.0, window.height() / 2.0 - cursor.y);
+        if sheet_selection_input(&mut document, viewport, position,
+            (selection_bottom, selection_top), settings.sheet_beat_divisions, &keyboard, &mouse)
+        {
+            return;
+        }
+    }
+    if control {
         return;
     }
     for (key, value) in [
@@ -1483,10 +1563,8 @@ pub(crate) fn sheet_view_system(
         };
     }
     if keyboard.just_pressed(KeyCode::KeyP) && percussion {
-        if let Some(kit) = track.kit.as_ref()
-            && !kit.pieces.is_empty()
-        {
-            tools.piece_index = (tools.piece_index + 1) % kit.pieces.len();
+        if piece_count > 0 {
+            tools.piece_index = (tools.piece_index + 1) % piece_count;
         }
     }
     if keyboard.just_pressed(KeyCode::KeyA) {
@@ -1579,6 +1657,74 @@ pub(crate) fn sheet_view_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Horizontal sheet gestures snap range endpoints and clamp releases outside the viewport. AI_CODE
+    #[test]
+    fn sheet_bulk_selection_drag_and_modifier_routing() {
+        let mut document = super::super::new_chart_document();
+        document.chart.tracks.push(super::super::new_track(InstrumentKind::Voice));
+        document.chart.tracks[0].notes = serde_json::from_str(r#"[
+            {"start":0,"length":4,"note":60},
+            {"start":960,"length":4,"note":64}
+        ]"#).unwrap();
+        document.dirty = false;
+        let before = serde_json::to_value(&document.chart).unwrap();
+        let viewport = SheetViewport { left: -100.0, right: 100.0, start: 0, span: 1920 };
+        let bounds = (-200.0, 0.0);
+        let mut keyboard = ButtonInput::default();
+        keyboard.press(KeyCode::ShiftLeft);
+        let mut mouse = ButtonInput::default();
+        mouse.press(MouseButton::Left);
+        assert!(!sheet_selection_input(&mut document, viewport, Vec2::new(0.0, -90.0), bounds, 4, &keyboard, &mouse));
+        assert!(document.selection.is_none());
+        keyboard.press(KeyCode::ControlLeft);
+        assert!(sheet_selection_input(&mut document, viewport, Vec2::new(0.0, -90.0), bounds, 4, &keyboard, &mouse));
+        assert!(document.selection_drag);
+        let mouse = ButtonInput::default();
+        assert!(sheet_selection_input(&mut document, viewport, Vec2::new(-200.0, -300.0), bounds, 4, &keyboard, &mouse));
+        assert!(!document.selection_drag);
+        assert_eq!(super::super::bulk::selected_sources(&document).len(), 2);
+        assert_eq!(document.selection.unwrap().end, 0);
+        document.selection = None;
+        document.selection_mode = true;
+        let keyboard = ButtonInput::default();
+        let mut mouse = ButtonInput::default();
+        mouse.press(MouseButton::Left);
+        assert!(!sheet_selection_input(&mut document, viewport, Vec2::new(0.0, 100.0), bounds, 4, &keyboard, &mouse));
+        assert!(sheet_selection_input(&mut document, viewport, Vec2::new(-100.0, -90.0), bounds, 4, &keyboard, &mouse));
+        let mouse = ButtonInput::default();
+        assert!(sheet_selection_input(&mut document, viewport, Vec2::new(200.0, -90.0), bounds, 4, &keyboard, &mouse));
+        assert_eq!(document.selection.unwrap().end, 1920);
+        assert_eq!(serde_json::to_value(&document.chart).unwrap(), before);
+        assert!(!document.dirty);
+    }
+
+    /// An unmodified drag inside the range moves notes instead of placing new ones. AI_CODE
+    #[test]
+    fn sheet_bulk_move_pointer_commits_on_release() {
+        let mut document = super::super::new_chart_document();
+        document.chart.tracks.push(super::super::new_track(InstrumentKind::Voice));
+        document.chart.tracks[0].notes = serde_json::from_str(r#"[
+            {"start":0,"length":8,"note":60},
+            {"start":480,"length":8,"note":64}
+        ]"#).unwrap();
+        document.selection = Some(super::super::bulk::TabSelection { track: 0, anchor: 0, end: 480 });
+        let viewport = SheetViewport { left: -100.0, right: 100.0, start: 0, span: 1920 };
+        let keyboard = ButtonInput::default();
+        let mut mouse = ButtonInput::default();
+        mouse.press(MouseButton::Left);
+        assert!(sheet_selection_input(&mut document, viewport, Vec2::new(-100.0, -90.0), (-200.0, 0.0), 4, &keyboard, &mouse));
+        assert!(document.selection_move.is_some());
+        mouse.clear();
+        assert!(sheet_selection_input(&mut document, viewport, Vec2::new(0.0, -90.0), (-200.0, 0.0), 4, &keyboard, &mouse));
+        assert_eq!(document.chart.tracks[0].notes[0].start, 0);
+        mouse.release(MouseButton::Left);
+        assert!(sheet_selection_input(&mut document, viewport, Vec2::new(0.0, -90.0), (-200.0, 0.0), 4, &keyboard, &mouse));
+        assert!(document.selection_move.is_none());
+        assert_eq!(document.chart.tracks[0].notes[0].start, 960);
+        assert_eq!(document.chart.tracks[0].notes[1].start, 1440);
+        assert_eq!(document.chart.tracks[0].notes.len(), 2);
+    }
 
     /// Wheel direction matches horizontal cursor navigation and never dirties the chart. AI_CODE
     #[test]
