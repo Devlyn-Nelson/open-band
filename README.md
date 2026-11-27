@@ -259,7 +259,8 @@ resolution and the active time signature; tempo changes do not move the grid.
 Mouse-wheel scrolling in sheet mode moves the shared cursor by the current navigation
 snap interval: up moves left (earlier), down moves right (later), clamped at tick zero.
 Sheet mode shows a staff starting at the shared position, with visible measures expanding
-to fill the available window width while keeping beat spacing readable. Click a line or space
+to fill the available window width while keeping beat spacing readable. Standard noteheads
+are hollow for whole/half notes and filled for quarter/eighth/sixteenth notes. Click a line or space
 to place a note on the configured beat-division grid; hold `Shift` for a sharp or
 `Alt` for a flat. In remove mode (`F10` or `PLACE/REMOVE`), with `REST` off, click
 the visible notehead to remove that event. No accidental modifier is needed, and

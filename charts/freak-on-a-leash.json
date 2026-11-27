@@ -212,6 +212,34 @@
       "phrases": [],
       "star_power_phrases": [],
       "lyric_verses": []
+    },
+    {
+      "name": "Lead Guitar",
+      "kind": "strings",
+      "tuning": {
+        "strings": [
+          "E2",
+          "A2",
+          "D3",
+          "G3",
+          "B3",
+          "E4"
+        ]
+      },
+      "kit": null,
+      "vocal_range": null,
+      "clef": "treble",
+      "key_signature": {
+        "fifths": -2,
+        "mode": "major"
+      },
+      "capo": null,
+      "notes": [],
+      "ties": [],
+      "slurs": [],
+      "phrases": [],
+      "star_power_phrases": [],
+      "lyric_verses": []
     }
   ]
 }

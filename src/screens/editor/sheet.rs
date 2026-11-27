@@ -4,6 +4,12 @@ use bevy::input::mouse::MouseWheel;
 const STAFF_SPACING: f32 = 18.0;
 const STAFF_Y: f32 = -90.0;
 const STAFF_MARGIN: f32 = 48.0;
+
+/// Quarter notes and shorter use solid noteheads; whole and half notes remain hollow. AI_CODE
+fn filled_notehead(value: NoteValue) -> bool {
+    matches!(value, NoteValue::Quarter | NoteValue::Eighth | NoteValue::Sixteenth)
+}
+
 /// AI_CODE
 fn key_signature_steps(clef: Clef, fifths: i8) -> Vec<i32> {
     let sharp_steps: &[i32] = match clef {
@@ -1219,6 +1225,17 @@ pub(crate) fn sheet_view_system(
             }
             _ => {
                 gizmos.circle_2d(Vec2::new(x, y), 5.0, note_color);
+                if filled_notehead(symbol.value) {
+                    for step in -9..=9 {
+                        let offset = step as f32 * 0.5;
+                        let half_width = (25.0 - offset * offset).sqrt();
+                        gizmos.line_2d(
+                            Vec2::new(x - half_width, y + offset),
+                            Vec2::new(x + half_width, y + offset),
+                            note_color,
+                        );
+                    }
+                }
             }
         }
         if symbol.value != NoteValue::Whole {
@@ -1675,6 +1692,17 @@ pub(crate) fn sheet_view_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only whole and half durations have hollow standard staff noteheads. AI_CODE
+    #[test]
+    fn staff_notehead_fill_matches_written_duration() {
+        for value in [NoteValue::Whole, NoteValue::Half] {
+            assert!(!filled_notehead(value));
+        }
+        for value in [NoteValue::Quarter, NoteValue::Eighth, NoteValue::Sixteenth] {
+            assert!(filled_notehead(value));
+        }
+    }
 
     /// Horizontal sheet gestures snap range endpoints and clamp releases outside the viewport. AI_CODE
     #[test]
