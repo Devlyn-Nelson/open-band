@@ -19,6 +19,7 @@
 - `src/screens/editor/mod.rs`: in-app chart editor (chart browse/create/load, track list add/remove/rename/reorder, tuning/kit cycling, save).
 - `src/screens/editor/sheet.rs`: graphical sheet staff, notation controls, and pointer-to-score interaction.
 - `src/screens/editor/inspector.rs`: keyboard field menus for event notation and performance/guidance, transactional drafts, and scalar field input.
+- `src/screens/editor/playback.rs`: editor preview transport, tempo/meter-aware metronome timing, and generated click audio assets.
 - `src/notation/mod.rs`: framework-agnostic sheet-music layout (measures, ties, beaming, rest inference, clef selection); consumed by the chart editor's future sheet view and the future live gameplay notation overlay.
 - `charts/`: built-in chart data loaded at compile time.
 - `tunings/`: named string tunings loaded at runtime for Input Setup and the chart editor (embedded fallback if missing).

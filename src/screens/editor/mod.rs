@@ -8,6 +8,8 @@ mod sheet;
 pub(crate) use sheet::sheet_view_system;
 mod tab;
 mod inspector;
+mod playback;
+pub(crate) use playback::editor_playback_system;
 pub(crate) use tab::{tab_fret_choice_input, tab_fret_dialog_system, tab_view_system};
 
 #[derive(Component)]
@@ -49,6 +51,7 @@ pub(crate) struct EditorLibraries {
 pub(crate) struct EditorDocument {
     pub(crate) chart: Chart,
     history: EditorHistory,
+    playback: playback::EditorPlayback,
     pub(crate) path: Option<PathBuf>,
     pub(crate) dirty: bool,
     pub(crate) track_focus: usize,
@@ -364,6 +367,8 @@ pub(crate) enum SheetToolAction {
     SheetSpacer,
     SheetDivisionDown,
     SheetDivisionUp,
+    PlayPause,
+    StopPreview,
 }
 
 /// A fret button in the tab editor's note-choice dialog.
@@ -1639,6 +1644,7 @@ fn list_editable_charts() -> Vec<EditorChartEntry> {
 fn new_chart_document() -> EditorDocument {
     EditorDocument {
     history: EditorHistory::default(),
+        playback: playback::EditorPlayback::default(),
         chart: Chart {
             version: 1,
             title: "New Chart".into(),
@@ -1788,6 +1794,7 @@ fn load_chart_document(path: &Path) -> Result<EditorDocument, String> {
     };
     Ok(EditorDocument {
         history: EditorHistory::default(),
+        playback: playback::EditorPlayback::default(),
         chart,
         path: Some(path.to_path_buf()),
         dirty: assigned_ids || added_track,
@@ -2329,17 +2336,19 @@ pub(crate) fn setup_editor(mut commands: Commands) {
         ("- BARS", SheetToolAction::SheetSpacer),
         ("DIV -", SheetToolAction::SheetDivisionDown),
         ("DIV +", SheetToolAction::SheetDivisionUp),
+        ("PLAY", SheetToolAction::PlayPause),
+        ("STOP", SheetToolAction::StopPreview),
     ];
     for (index, (label, action)) in toolbar.into_iter().enumerate() {
-        let column = index % 11;
-        let row = index / 11;
+        let column = index % 12;
+        let row = index / 12;
         commands.spawn((
             Button::default(),
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(8.0 + row as f32 * 34.0),
-                left: Val::Percent(column as f32 * (100.0 / 11.0) + 0.25),
-                width: Val::Percent(100.0 / 11.0 - 0.5),
+                left: Val::Percent(column as f32 * (100.0 / 12.0) + 0.25),
+                width: Val::Percent(100.0 / 12.0 - 0.5),
                 height: Val::Px(28.0),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
@@ -2441,6 +2450,8 @@ pub(crate) fn sheet_toolbar_input(
         return;
     };
     match action {
+        SheetToolAction::PlayPause => document.toggle_preview(),
+        SheetToolAction::StopPreview => document.stop_preview(),
         SheetToolAction::Duration(value) => tools.duration = *value,
         SheetToolAction::Dots => tools.dots = (tools.dots + 1) % 4,
         SheetToolAction::Tuplet => {
@@ -2552,6 +2563,8 @@ pub(crate) fn sheet_toolbar_display(
     for (action, mut background, mut visibility, mut text) in &mut buttons {
         let action_visible = match action {
             SheetToolAction::Remove
+            | SheetToolAction::PlayPause
+            | SheetToolAction::StopPreview
             | SheetToolAction::SheetDivisionDown
             | SheetToolAction::SheetDivisionUp => true,
             SheetToolAction::TabSnap | SheetToolAction::ZoomIn | SheetToolAction::ZoomOut => {
@@ -2576,6 +2589,8 @@ pub(crate) fn sheet_toolbar_display(
             Visibility::Hidden
         };
         let active = match action {
+            SheetToolAction::PlayPause => document.playback.playing,
+            SheetToolAction::StopPreview => false,
             SheetToolAction::Duration(value) => tools.duration == *value,
             SheetToolAction::Dots => tools.dots > 0,
             SheetToolAction::Tuplet => tools.tuplet.is_some(),
@@ -2593,6 +2608,9 @@ pub(crate) fn sheet_toolbar_display(
             SheetToolAction::SheetDivisionDown | SheetToolAction::SheetDivisionUp => false,
         };
         match action {
+            SheetToolAction::PlayPause => {
+                *text = Text::new(if document.playback.playing { "PAUSE" } else { "PLAY" });
+            }
             SheetToolAction::TabSnap => {
                 *text = Text::new(format!("SNAP {:?}", document.snap_interval));
             }

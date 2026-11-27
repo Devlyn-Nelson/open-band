@@ -1,1 +1,0 @@
-tied notes should not show the pluck in the tab view for the second note in a tied pair, the time period should extend.

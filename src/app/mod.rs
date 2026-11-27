@@ -225,7 +225,14 @@ pub(crate) fn run() {
             Update,
             (tab_fret_dialog_system, tab_view_system)
                 .run_if(in_state(AppState::Editor))
-                .run_if(resource_exists::<EditorDocument>),
+                .run_if(resource_exists::<EditorDocument>)
+                .after(editor_playback_system),
+        )
+        .add_systems(
+            Update,
+            editor_playback_system
+                .run_if(in_state(AppState::Editor))
+                .after(editor_tracks_input),
         )
         // /\\ AI_CODE /\\
         // /\\ AI_CODE /\\

@@ -148,6 +148,7 @@ Once a chart is open, its track list is shown:
 | `Tab` | Cycle the shared snap interval (whole, half, quarter, eighth, sixteenth) |
 | `S` | Save the chart (writes to its original file, or `charts/<slugified-title>.json` for a new chart) |
 | `Esc` | Back to the chart picker |
+| `Space` | Play/pause the tempo-aware metronome preview at the shared cursor |
 
 Undo/redo retains the last 100 committed score edits for the open document, including
 note placement/removal, duration changes, track edits, and score metadata. It is inactive
@@ -155,6 +156,19 @@ while a text or inspector dialog is open; applying a draft records its changes, 
 canceling does not. Navigation and view settings are not undone. A new edit clears redo.
 Saving keeps history, and undoing or redoing back to the saved score clears the dirty
 indicator. Returning to the chart picker discards that document's history.
+
+`Space` or the `PLAY`/`PAUSE` toolbar control starts or pauses a metronome preview
+from the shared cursor. `STOP` returns to the start of that playback pass. Clicks
+follow the tempo map, including changes within measures; the time-signature
+denominator sets beat spacing and each measure starts with a higher-pitched accent.
+The amber tab playhead advances with playback and pages the view as needed. Scrolling
+or moving the shared cursor while playing seeks the preview to that position.
+Pausing leaves the cursor at the reached tick; opening an edit dialog pauses playback.
+Playback stops at the last authored event, while an empty chart allows an ongoing
+metronome. Preview does not modify the score or its undo history. This is click-track
+audio only, not synthesized instrument-note playback, and uses the default audio
+output. Click dispatch is frame-driven; after a long stalled frame, missed beats are
+coalesced instead of sounding in a burst.
 
 In score metadata, `Up` / `Down` selects a field, `Left` / `Right` adjusts numeric and
 track metadata, and `Enter` edits text fields or inserts the selected score marker or

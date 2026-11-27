@@ -182,11 +182,25 @@ different document. Regression tests cover note/tie restoration, tab duration ed
 structural edits, shortcut dispatch/modal safety, depth limits, redo invalidation,
 and save-point tracking. Manual visual QA remains recommended.
 
-### 9. Playback aids
+### 9. Playback aids (implemented)
 
-- Metronome/click track playback aligned to the `tempo_map`/`time_signature_map` (correctly
-  speeding up/slowing down through tempo changes rather than assuming one fixed `bpm`).
-- A playhead that follows the current scroll/cursor position in tab view for audio preview.
+`Space` and the `PLAY`/`PAUSE` toolbar control preview a metronome from the shared
+cursor. `STOP` returns to the position where the current pass began. The clock uses
+the chart's segmented tempo-map conversion, so tempo changes alter speed without
+changing tick positions. Meter denominators determine click spacing; each measure
+starts with a higher-pitched accent and meter changes reset the accent grid.
+
+Tab view draws an amber moving playhead and pages the viewport to keep it visible.
+Manual scrolling/cursor movement seeks the running preview. Pausing retains the
+reached tick, edit dialogs pause playback, and preview stops at the last authored
+event (empty charts support an ongoing metronome). Playback state is separate from
+score/history state. Clicks are generated WAV assets played through Bevy's default
+audio output; this is a timing preview, not instrument-note synthesis. Dispatch is
+frame-driven and missed clicks after a stalled frame are coalesced rather than burst.
+
+Regressions cover tempo and meter transitions, seeking/paging, pause/stop, chart-end
+behavior, keyboard/modal routing, and decoding non-silent click audio. Manual audio
+and visual QA remains recommended.
 
 ### 10. Multi-select and bulk edit
 

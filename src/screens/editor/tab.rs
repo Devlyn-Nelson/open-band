@@ -517,6 +517,7 @@ pub(crate) fn tab_view_system(
         document.current_tick = (i64::from(document.current_tick) + direction * step)
             .clamp(0, i64::from(u32::MAX)) as u32;
     }
+    document.follow_preview(span);
             let view_start = document.current_tick;
             let y_for_tick = |tick| tab_y(tick, view_start, span, top, bottom);
     if keyboard.just_pressed(KeyCode::Equal) || keyboard.just_pressed(KeyCode::NumpadAdd) {
@@ -600,6 +601,16 @@ pub(crate) fn tab_view_system(
                     Color::srgb(0.92, 0.94, 0.88),
                 ));
             }
+        }
+    }
+    let playhead_tick = if document.playback.playing { document.playback.tick } else { document.current_tick };
+    if let Some(y) = y_for_tick(playhead_tick) {
+        for offset in -1..=1 {
+            gizmos.line_2d(
+                Vec2::new(left - 30.0, y + offset as f32),
+                Vec2::new(right + 30.0, y + offset as f32),
+                Color::srgb(0.95, 0.73, 0.22),
+            );
         }
     }
     for (symbol_index, symbol) in layout.symbols.iter().enumerate() {
